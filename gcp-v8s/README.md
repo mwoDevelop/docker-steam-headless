@@ -104,6 +104,7 @@ Skrypty:
 - `list-instances.sh` – lista instancji i endpointów
 - `destroy-instance.sh <instance-id> [release-ip]` – usuwa instancję
 - `sync-duckdns.sh` – synchronizuje rekordy DuckDNS dla wszystkich instancji
+- `deploy-gamers.sh --profile <L4|T4|...> --gamers <0..5>` – deploy + autoskalowanie `gamer1..gamer5` + status
 
 Przykład (L4 + sharing, 2 instancje):
 
@@ -113,6 +114,14 @@ cd gcp-v8s
 ./deploy-instance.sh gamer1
 ./deploy-instance.sh gamer2
 ./list-instances.sh
+```
+
+Wrapper dla zarządzania liczbą instancji graczy:
+
+```bash
+./deploy-gamers.sh --profile T4 --gamers 3
+./deploy-gamers.sh --profile T4 --gamers 1
+./deploy-gamers.sh --profile T4 --gamers 0
 ```
 
 ## DuckDNS dla instancji

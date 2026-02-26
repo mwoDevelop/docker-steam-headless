@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'USAGE'
+Usage:
+  ./pull-upstream [--remote upstream] [--branch <name>]
+
+Description:
+  Fetches from upstream and merges upstream branch into current local branch.
+  If histories are unrelated, it retries merge with --allow-unrelated-histories.
+
+Examples:
+  ./pull-upstream
+  ./pull-upstream --remote upstream --branch master
+USAGE
+}
+
+REMOTE="upstream"
+BRANCH=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --remote)
+      [[ $# -ge 2 ]] || { echo "Missing value for --remote" >&2; exit 1; }
+      REMOTE="$2"
+      shift 2
+      ;;
+    --branch)
+      [[ $# -ge 2 ]] || { echo "Missing value for --branch" >&2; exit 1; }
+      BRANCH="$2"
+      shift 2
+      ;;
+    help|-h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown argument: $1" >&2
+      usage >&2
+      exit 1
+      ;;
+  esac
+done
+
+if [[ -n "$(git status --porcelain)" ]]; then
+  echo "Working tree is not clean. Commit/stash changes first." >&2
+  exit 1
+fi
+
+CURRENT_BRANCH="$(git branch --show-current)"
+if [[ -z "$CURRENT_BRANCH" ]]; then
+  echo "Detached HEAD is not supported. Checkout a branch first." >&2
+  exit 1
+fi
+
+if ! git remote get-url "$REMOTE" >/dev/null 2>&1; then
+  echo "Remote '$REMOTE' does not exist." >&2
+  exit 1
+fi
+
+echo "[pull-upstream] Fetching $REMOTE..."
+git fetch "$REMOTE" --prune
+
+if [[ -z "$BRANCH" ]]; then
+  BRANCH="$(git symbolic-ref --quiet --short "refs/remotes/${REMOTE}/HEAD" 2>/dev/null | sed "s#^${REMOTE}/##")"
+fi
+[[ -n "$BRANCH" ]] || BRANCH="master"
+
+UPSTREAM_REF="${REMOTE}/${BRANCH}"
+if ! git show-ref --verify --quiet "refs/remotes/${UPSTREAM_REF}"; then
+  echo "Remote branch '${UPSTREAM_REF}' does not exist." >&2
+  exit 1
+fi
+
+BACKUP_BRANCH="backup/pre-upstream-pull-$(date +%Y%m%d-%H%M%S)"
+git branch "$BACKUP_BRANCH"
+echo "[pull-upstream] Backup branch created: ${BACKUP_BRANCH}"
+
+echo "[pull-upstream] Merging ${UPSTREAM_REF} into ${CURRENT_BRANCH}..."
+if git merge-base HEAD "$UPSTREAM_REF" >/dev/null 2>&1; then
+  git merge --no-edit "$UPSTREAM_REF"
+else
+  git merge --no-edit --allow-unrelated-histories "$UPSTREAM_REF"
+fi
+
+echo "[pull-upstream] Done."
