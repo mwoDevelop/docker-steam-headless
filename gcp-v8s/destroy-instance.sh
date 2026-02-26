@@ -70,12 +70,17 @@ gcloud container clusters get-credentials "$GKE_CLUSTER" --location "$GKE_LOCATI
 kubectl delete namespace "$NAMESPACE" --ignore-not-found
 
 if [[ "$RELEASE_IP" == "release-ip" ]]; then
-  gcloud compute addresses delete "$LB_ADDRESS_NAME" --region "$LB_REGION" --quiet || true
+  if gcloud compute addresses describe "$LB_ADDRESS_NAME" --region "$LB_REGION" --project "$GCP_PROJECT" >/dev/null 2>&1; then
+    gcloud compute addresses delete "$LB_ADDRESS_NAME" --region "$LB_REGION" --project "$GCP_PROJECT" --quiet || true
+    RELEASED_IP_MSG="Deleted static IP: ${LB_ADDRESS_NAME} (${LB_REGION})"
+  else
+    RELEASED_IP_MSG="Static IP not found (already deleted): ${LB_ADDRESS_NAME} (${LB_REGION})"
+  fi
 fi
 
 echo "Deleted instance namespace: ${NAMESPACE}"
 if [[ "$RELEASE_IP" == "release-ip" ]]; then
-  echo "Deleted static IP: ${LB_ADDRESS_NAME} (${LB_REGION})"
+  echo "${RELEASED_IP_MSG}"
 else
   echo "Static IP kept: ${LB_ADDRESS_NAME} (${LB_REGION})"
 fi

@@ -105,6 +105,56 @@ printf '%s\n' "$ACTIVE_PROFILE" > "$ACTIVE_PROFILE_STATE_FILE"
 : "${NVIDIA_DRIVER_VERSION:=}"
 
 log() { printf '%s [gcp-v8s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
+normalize_gpu_sharing_strategy() {
+  local value="${1:-}"
+  value="${value^^}"
+  value="${value//-/_}"
+  printf '%s' "$value"
+}
+
+gpu_pool_diff_reason() {
+  local expected_sharing expected_max_shared
+  local current_machine current_type current_count current_sharing current_max_shared
+  local current_min_nodes current_max_nodes current_disk_size current_disk_type
+  local reasons=()
+
+  expected_sharing="$(normalize_gpu_sharing_strategy "$GPU_SHARING_STRATEGY")"
+  expected_max_shared="${GPU_MAX_SHARED_CLIENTS_PER_GPU:-}"
+
+  current_machine="$(gcloud container node-pools describe "$GPU_POOL_NAME" --cluster "$GKE_CLUSTER" --location "$GKE_LOCATION" --format='value(config.machineType)' 2>/dev/null || true)"
+  current_type="$(gcloud container node-pools describe "$GPU_POOL_NAME" --cluster "$GKE_CLUSTER" --location "$GKE_LOCATION" --format='value(config.accelerators[0].acceleratorType)' 2>/dev/null || true)"
+  current_count="$(gcloud container node-pools describe "$GPU_POOL_NAME" --cluster "$GKE_CLUSTER" --location "$GKE_LOCATION" --format='value(config.accelerators[0].acceleratorCount)' 2>/dev/null || true)"
+  current_sharing="$(gcloud container node-pools describe "$GPU_POOL_NAME" --cluster "$GKE_CLUSTER" --location "$GKE_LOCATION" --format='value(config.accelerators[0].gpuSharingConfig.gpuSharingStrategy)' 2>/dev/null || true)"
+  current_max_shared="$(gcloud container node-pools describe "$GPU_POOL_NAME" --cluster "$GKE_CLUSTER" --location "$GKE_LOCATION" --format='value(config.accelerators[0].gpuSharingConfig.maxSharedClientsPerGpu)' 2>/dev/null || true)"
+  current_min_nodes="$(gcloud container node-pools describe "$GPU_POOL_NAME" --cluster "$GKE_CLUSTER" --location "$GKE_LOCATION" --format='value(autoscaling.minNodeCount)' 2>/dev/null || true)"
+  current_max_nodes="$(gcloud container node-pools describe "$GPU_POOL_NAME" --cluster "$GKE_CLUSTER" --location "$GKE_LOCATION" --format='value(autoscaling.maxNodeCount)' 2>/dev/null || true)"
+  current_disk_size="$(gcloud container node-pools describe "$GPU_POOL_NAME" --cluster "$GKE_CLUSTER" --location "$GKE_LOCATION" --format='value(config.diskSizeGb)' 2>/dev/null || true)"
+  current_disk_type="$(gcloud container node-pools describe "$GPU_POOL_NAME" --cluster "$GKE_CLUSTER" --location "$GKE_LOCATION" --format='value(config.diskType)' 2>/dev/null || true)"
+
+  [[ "$current_machine" == "$GPU_MACHINE" ]] || reasons+=("machineType=${current_machine:-<none>}!=${GPU_MACHINE}")
+  [[ "$current_type" == "$GPU_TYPE" ]] || reasons+=("gpuType=${current_type:-<none>}!=${GPU_TYPE}")
+  [[ "$current_count" == "$GPU_COUNT" ]] || reasons+=("gpuCount=${current_count:-<none>}!=${GPU_COUNT}")
+  [[ "$current_min_nodes" == "$GPU_MIN_NODES" ]] || reasons+=("minNodes=${current_min_nodes:-<none>}!=${GPU_MIN_NODES}")
+  [[ "$current_max_nodes" == "$GPU_MAX_NODES" ]] || reasons+=("maxNodes=${current_max_nodes:-<none>}!=${GPU_MAX_NODES}")
+  [[ "$current_disk_size" == "$GPU_DISK_SIZE_GB" ]] || reasons+=("diskSize=${current_disk_size:-<none>}!=${GPU_DISK_SIZE_GB}")
+  [[ "$current_disk_type" == "$GPU_DISK_TYPE" ]] || reasons+=("diskType=${current_disk_type:-<none>}!=${GPU_DISK_TYPE}")
+
+  if [[ -n "$expected_sharing" ]]; then
+    [[ "$current_sharing" == "$expected_sharing" ]] || reasons+=("sharing=${current_sharing:-<none>}!=${expected_sharing}")
+    if [[ -n "$expected_max_shared" ]]; then
+      [[ "$current_max_shared" == "$expected_max_shared" ]] || reasons+=("maxShared=${current_max_shared:-<none>}!=${expected_max_shared}")
+    fi
+  else
+    [[ -z "$current_sharing" ]] || reasons+=("sharing=${current_sharing}!=<none>")
+  fi
+
+  if [[ "${#reasons[@]}" -eq 0 ]]; then
+    return 1
+  fi
+  printf '%s' "${reasons[*]}"
+  return 0
+}
+
 region_from_location() {
   local location="$1"
   if [[ "$location" =~ ^[a-z]+-[a-z0-9]+[0-9]-[a-z]$ ]]; then
@@ -196,7 +246,17 @@ else
       --quiet
     create_gpu_pool
   else
-    log "GPU node pool already exists"
+    GPU_POOL_DIFF="$(gpu_pool_diff_reason || true)"
+    if [[ -n "$GPU_POOL_DIFF" ]]; then
+      log "GPU node pool config drift detected (${GPU_POOL_DIFF}), recreating"
+      gcloud container node-pools delete "$GPU_POOL_NAME" \
+        --cluster "$GKE_CLUSTER" \
+        --location "$GKE_LOCATION" \
+        --quiet
+      create_gpu_pool
+    else
+      log "GPU node pool already exists and matches requested profile"
+    fi
   fi
 fi
 
