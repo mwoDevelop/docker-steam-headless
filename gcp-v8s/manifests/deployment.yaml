@@ -1,0 +1,96 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: steam-headless
+  namespace: steam-headless
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: steam-headless
+  template:
+    metadata:
+      labels:
+        app: steam-headless
+    spec:
+      terminationGracePeriodSeconds: 30
+      nodeSelector:
+        cloud.google.com/gke-accelerator: nvidia-tesla-t4
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Equal
+          value: present
+          effect: NoSchedule
+      containers:
+        - name: steam-headless
+          image: josh5/steam-headless:latest
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/bash", "-lc"]
+          args:
+            - touch /tmp/.desktop-apps-updated; exec /entrypoint.sh
+          securityContext:
+            privileged: true
+            allowPrivilegeEscalation: true
+          envFrom:
+            - secretRef:
+                name: steam-headless-env
+          resources:
+            requests:
+              cpu: "2"
+              memory: "8Gi"
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "4"
+              memory: "12Gi"
+              nvidia.com/gpu: "1"
+          ports:
+            - name: novnc
+              containerPort: 8083
+              protocol: TCP
+            - name: sun-ui
+              containerPort: 47990
+              protocol: TCP
+            - name: sun-ctrl
+              containerPort: 47989
+              protocol: TCP
+            - name: sun-stream
+              containerPort: 48010
+              protocol: TCP
+            - name: sun-udp-1
+              containerPort: 47998
+              protocol: UDP
+            - name: sun-udp-2
+              containerPort: 47999
+              protocol: UDP
+            - name: sun-udp-3
+              containerPort: 48000
+              protocol: UDP
+            - name: sun-udp-4
+              containerPort: 48002
+              protocol: UDP
+          volumeMounts:
+            - name: steam-home
+              mountPath: /home/default
+            - name: games
+              mountPath: /mnt/games
+            - name: x11
+              mountPath: /tmp/.X11-unix
+            - name: pulse
+              mountPath: /tmp/pulse
+            - name: shm
+              mountPath: /dev/shm
+      volumes:
+        - name: steam-home
+          emptyDir: {}
+        - name: games
+          emptyDir: {}
+        - name: x11
+          emptyDir: {}
+        - name: pulse
+          emptyDir: {}
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 4Gi
