@@ -63,11 +63,30 @@ cd /opt/container-services/steam-headless
 
 COMPOSE_BASE=/opt/container-services/steam-headless/docker-compose.nvidia.privileged.yml
 COMPOSE_GCE=/opt/container-services/steam-headless/docker-compose.nvidia.privileged.gce.yml
+COMPOSE_OVERRIDE=/opt/container-services/steam-headless/docker-compose.nvidia.privileged.override.yml
 curl -fsSL \
   https://raw.githubusercontent.com/Steam-Headless/docker-steam-headless/master/docs/compose-files/docker-compose.nvidia.privileged.yml \
   -o "$COMPOSE_BASE"
 cp -f "$COMPOSE_BASE" "$COMPOSE_GCE"
 sed -i 's#/dev/input/:/dev/input/:ro#/dev/input/:/dev/input/:rw#' "$COMPOSE_GCE" || true
+if [ ! -f "$COMPOSE_OVERRIDE" ]; then
+  cat > "$COMPOSE_OVERRIDE" <<'EOF'
+---
+version: "3.8"
+
+services:
+  steam-headless:
+    environment:
+      - DISPLAY_SIZEW=${DISPLAY_SIZEW}
+      - DISPLAY_SIZEH=${DISPLAY_SIZEH}
+      - DISPLAY_REFRESH=${DISPLAY_REFRESH}
+      - DISPLAY_CDEPTH=${DISPLAY_CDEPTH}
+EOF
+fi
+COMPOSE_FILES=(-f "$COMPOSE_GCE")
+if [ -f "$COMPOSE_OVERRIDE" ]; then
+  COMPOSE_FILES+=(-f "$COMPOSE_OVERRIDE")
+fi
 
 ENVF=/opt/container-services/steam-headless/.env
 if [ ! -f "$ENVF" ]; then
@@ -149,7 +168,7 @@ else
   grep -q '^NVIDIA_DRIVER_VERSION=' "$ENVF" || echo "NVIDIA_DRIVER_VERSION=" >> "$ENVF"
 fi
 
-docker compose -f "$COMPOSE_GCE" up -d
+docker compose "${COMPOSE_FILES[@]}" up -d
 
 for _ in $(seq 1 60); do
   if ss -lntup | grep -qE ':8083\s|:47990\s'; then
@@ -175,7 +194,7 @@ sed -i -E \
   fi
 } >> "$CFG_HOST"
 
-docker compose -f "$COMPOSE_GCE" restart || true
+docker compose "${COMPOSE_FILES[@]}" restart || true
 
 ss -lntup | egrep '(8083|47989|47990|48010)' || true
 log "noVNC: http://${EXT_IP:-$(hostname -I | awk '{print $1}')}:8083/"

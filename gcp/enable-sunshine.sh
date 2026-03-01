@@ -20,12 +20,17 @@ grep -q ^SUNSHINE_PASS= "$ENV" && sed -i -E "s/^(SUNSHINE_PASS)=.*/\1=${SUNPASS}
 cd /opt/container-services/steam-headless
 COMPOSE_GCE=/opt/container-services/steam-headless/docker-compose.nvidia.privileged.gce.yml
 COMPOSE_BASE=/opt/container-services/steam-headless/docker-compose.nvidia.privileged.yml
+COMPOSE_OVERRIDE=/opt/container-services/steam-headless/docker-compose.nvidia.privileged.override.yml
 COMPOSE="$COMPOSE_GCE"
 if [[ ! -f "$COMPOSE" ]]; then
   COMPOSE="$COMPOSE_BASE"
 fi
+COMPOSE_ARGS=(-f "$COMPOSE")
+if [[ -f "$COMPOSE_OVERRIDE" ]]; then
+  COMPOSE_ARGS+=(-f "$COMPOSE_OVERRIDE")
+fi
 # Ensure running
-sudo docker compose -f "$COMPOSE" up -d || true
+sudo docker compose "${COMPOSE_ARGS[@]}" up -d || true
 sleep 2
 CFG=/opt/container-data/steam-headless/home/.config/sunshine/sunshine.conf
 if [[ -f "$CFG" ]]; then
@@ -36,7 +41,7 @@ if [[ -f "$CFG" ]]; then
   echo "origin_pin_allowed = wan" >> "$CFG"
 fi
 # Restart container to pick up config
-sudo docker compose -f "$COMPOSE" restart || true
+sudo docker compose "${COMPOSE_ARGS[@]}" restart || true
 sleep 2
 sudo ss -lntup | egrep "(47990|47989|48010|8083)" || true
 # Print pass

@@ -81,11 +81,30 @@ install -d -m 0777 /mnt/games || true
 
 COMPOSE_BASE=/opt/container-services/steam-headless/docker-compose.nvidia.privileged.yml
 COMPOSE_GCE=/opt/container-services/steam-headless/docker-compose.nvidia.privileged.gce.yml
+COMPOSE_OVERRIDE=/opt/container-services/steam-headless/docker-compose.nvidia.privileged.override.yml
 curl -fsSL \
   https://raw.githubusercontent.com/Steam-Headless/docker-steam-headless/master/docs/compose-files/docker-compose.nvidia.privileged.yml \
   -o "$COMPOSE_BASE"
 cp -f "$COMPOSE_BASE" "$COMPOSE_GCE"
 sed -i 's#/dev/input/:/dev/input/:ro#/dev/input/:/dev/input/:rw#' "$COMPOSE_GCE" || true
+if [ ! -f "$COMPOSE_OVERRIDE" ]; then
+  cat > "$COMPOSE_OVERRIDE" <<'EOF'
+---
+version: "3.8"
+
+services:
+  steam-headless:
+    environment:
+      - DISPLAY_SIZEW=${DISPLAY_SIZEW}
+      - DISPLAY_SIZEH=${DISPLAY_SIZEH}
+      - DISPLAY_REFRESH=${DISPLAY_REFRESH}
+      - DISPLAY_CDEPTH=${DISPLAY_CDEPTH}
+EOF
+fi
+COMPOSE_FILES=(-f "$COMPOSE_GCE")
+if [ -f "$COMPOSE_OVERRIDE" ]; then
+  COMPOSE_FILES+=(-f "$COMPOSE_OVERRIDE")
+fi
 
 # Environment
 ENVF=/opt/container-services/steam-headless/.env
@@ -102,6 +121,8 @@ grep -q '^FORCE_X11_DUMMY_CONFIG=' "$ENVF" && \
   echo "FORCE_X11_DUMMY_CONFIG=true" >> "$ENVF"
 grep -q '^DISPLAY_SIZEW=' "$ENVF" || echo "DISPLAY_SIZEW=1920" >> "$ENVF"
 grep -q '^DISPLAY_SIZEH=' "$ENVF" || echo "DISPLAY_SIZEH=1080" >> "$ENVF"
+grep -q '^DISPLAY_REFRESH=' "$ENVF" || echo "DISPLAY_REFRESH=60" >> "$ENVF"
+grep -q '^DISPLAY_CDEPTH=' "$ENVF" || echo "DISPLAY_CDEPTH=24" >> "$ENVF"
 
 CFG_HOST="/opt/container-data/steam-headless/home/.config/sunshine/sunshine.conf"
 mkdir -p "$(dirname "$CFG_HOST")"
@@ -120,7 +141,7 @@ sed -i -E \
   fi
 } >> "$CFG_HOST"
 
-docker compose -f "$COMPOSE_GCE" up -d
-docker compose -f "$COMPOSE_GCE" restart || true
+docker compose "${COMPOSE_FILES[@]}" up -d
+docker compose "${COMPOSE_FILES[@]}" restart || true
 docker exec -i $(docker ps -qf name=steam-headless) nvidia-smi || true
 ss -lntup | egrep '(8083|47989|47990|48010)' || true
