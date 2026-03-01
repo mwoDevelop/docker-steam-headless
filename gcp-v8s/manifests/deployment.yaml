@@ -52,6 +52,9 @@ spec:
             - name: sun-ui
               containerPort: 47990
               protocol: TCP
+            - name: sun-pair
+              containerPort: 47984
+              protocol: TCP
             - name: sun-ctrl
               containerPort: 47989
               protocol: TCP

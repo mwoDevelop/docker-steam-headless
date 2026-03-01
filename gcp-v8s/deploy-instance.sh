@@ -289,6 +289,9 @@ spec:
             - name: sun-ui
               containerPort: 47990
               protocol: TCP
+            - name: sun-pair
+              containerPort: 47984
+              protocol: TCP
             - name: sun-ctrl
               containerPort: 47989
               protocol: TCP
@@ -356,6 +359,10 @@ ${SOURCE_RANGES_BLOCK}
       protocol: TCP
       port: 47990
       targetPort: 47990
+    - name: sun-pair
+      protocol: TCP
+      port: 47984
+      targetPort: 47984
     - name: sun-ctrl
       protocol: TCP
       port: 47989

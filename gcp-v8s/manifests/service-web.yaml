@@ -16,6 +16,10 @@ spec:
       protocol: TCP
       port: 47990
       targetPort: 47990
+    - name: sun-pair
+      protocol: TCP
+      port: 47984
+      targetPort: 47984
     - name: sun-ctrl
       protocol: TCP
       port: 47989

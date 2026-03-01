@@ -9,7 +9,7 @@ Konfiguracja i skrypty do uruchomienia `steam-headless` na GKE ze wsparciem GPU.
 - namespace `steam-headless`
 - `Deployment` `steam-headless` z limitem `nvidia.com/gpu: 1`
 - 2 usługi `LoadBalancer`:
-  - `steam-headless-web` (noVNC 8083, Sunshine UI 47990, Sunshine TCP stream)
+  - `steam-headless-web` (noVNC 8083, Sunshine UI 47990, parowanie 47984, Sunshine TCP stream)
   - `steam-headless-stream-udp` (porty UDP streamingu Sunshine)
 - wspólny statyczny adres publiczny dla obu usług
 
