@@ -1,3 +1,4 @@
+config
 gcp/.env
 gcp-v8s/.env
 gcp-v8s/.active-profile
