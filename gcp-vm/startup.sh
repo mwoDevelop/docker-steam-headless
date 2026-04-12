@@ -18,6 +18,21 @@ metadata_get() {
     "http://metadata/computeMetadata/v1/instance/attributes/${key}" || true
 }
 
+schedule_auto_shutdown() {
+  local hours
+  local next_at
+  hours="$(metadata_get vm-auto-shutdown-hours)"
+  if ! [[ "$hours" =~ ^[0-9]+$ ]] || [ "$hours" -lt 1 ] || [ "$hours" -gt 24 ]; then
+    return 0
+  fi
+
+  systemctl stop vm-ctl-auto-shutdown.timer vm-ctl-auto-shutdown.service >/dev/null 2>&1 || true
+  systemctl reset-failed vm-ctl-auto-shutdown.timer vm-ctl-auto-shutdown.service >/dev/null 2>&1 || true
+  systemd-run --unit=vm-ctl-auto-shutdown --on-active="${hours}h" /sbin/poweroff >/dev/null
+  next_at="$(systemctl show vm-ctl-auto-shutdown.timer --property=NextElapseUSecRealtime --value 2>/dev/null || true)"
+  log "Auto-shutdown scheduled in ${hours}h${next_at:+ at ${next_at}}"
+}
+
 render_default_env() {
   cat <<'EOF'
 NAME=SteamHeadless
@@ -204,6 +219,8 @@ sed -i -E \
 } >> "$CFG_HOST"
 
 docker compose "${COMPOSE_FILES[@]}" restart || true
+
+schedule_auto_shutdown
 
 ss -lntup | egrep '(8083|47989|47990|48010)' || true
 log "noVNC: http://${EXT_IP:-$(hostname -I | awk '{print $1}')}:8083/"

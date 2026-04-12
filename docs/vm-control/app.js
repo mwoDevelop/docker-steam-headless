@@ -1,5 +1,5 @@
 (function () {
-  const defaultBackendUrl = "https://steam-vm-control-api-w2urpq2xlq-lm.a.run.app";
+  const defaultBackendUrl = "";
 
   const storageKeys = {
     config: "vm-control-cloudrun-config",
@@ -15,6 +15,7 @@
     signOut: document.querySelector("#sign-out"),
     targetSummary: document.querySelector("#target-summary"),
     refreshStatus: document.querySelector("#refresh-status"),
+    autoStopHours: document.querySelector("#auto-stop-hours"),
     banner: document.querySelector("#banner"),
     access: document.querySelector("#access"),
     history: document.querySelector("#history"),
@@ -69,6 +70,7 @@
     elements.connect.disabled = nextBusy;
     elements.googleSignIn.disabled = nextBusy || !state.backendConfig;
     elements.refreshStatus.disabled = nextBusy || !state.user;
+    elements.autoStopHours.disabled = nextBusy || !state.user;
     elements.actionButtons.forEach((button) => {
       button.disabled = nextBusy || !state.user;
     });
@@ -364,9 +366,15 @@
     setBanner(`Running "${command}" on the VM...`, "warning");
 
     try {
+      const body = { command };
+      const autoStopHours = readAutoStopHours(command);
+      if (autoStopHours) {
+        body.autoStopHours = autoStopHours;
+      }
+
       const data = await fetchApi("/api/command", {
         method: "POST",
-        body: JSON.stringify({ command }),
+        body: JSON.stringify(body),
       });
       state.lastStatus = data;
       renderAccess(data);
@@ -374,19 +382,50 @@
       const suffix = data.duckdnsUpdated
         ? " DuckDNS refreshed."
         : "";
-      setBanner(`Command "${command}" completed. Final VM state: ${data.status}.${suffix}`, "success");
+      const autoStop = data.autoStopHours
+        ? ` Auto-stop scheduled after ${data.autoStopHours}h.`
+        : "";
+      setBanner(`Command "${command}" completed. Final VM state: ${data.status}.${suffix}${autoStop}`, "success");
       pushHistory({
         at: new Date().toISOString(),
         command,
         status: data.status,
         tone: "success",
         userEmail: state.user.email,
-        message: data.externalIp ? `External IP: ${data.externalIp}` : "",
+        message: historyMessage(data),
         duckdnsDomains: data.duckdnsDomains || [],
       });
     } finally {
       setBusy(false);
     }
+  }
+
+  function readAutoStopHours(command) {
+    if (command !== "start") {
+      return null;
+    }
+
+    const raw = String(elements.autoStopHours.value || "").trim();
+    if (!raw) {
+      return null;
+    }
+
+    const value = Number(raw);
+    if (!Number.isInteger(value) || value < 1 || value > 24) {
+      throw new Error("Auto-stop must be a whole number of hours from 1 to 24.");
+    }
+    return value;
+  }
+
+  function historyMessage(data) {
+    const parts = [];
+    if (data.externalIp) {
+      parts.push(`External IP: ${data.externalIp}`);
+    }
+    if (data.autoStopHours) {
+      parts.push(`Auto-stop: ${data.autoStopHours}h`);
+    }
+    return parts.join(" · ");
   }
 
   async function refreshStatus(options) {

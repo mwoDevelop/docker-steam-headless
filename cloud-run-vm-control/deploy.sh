@@ -49,6 +49,16 @@ gcloud projects add-iam-policy-binding "$GCP_PROJECT" \
   --role="roles/compute.instanceAdmin.v1" \
   --quiet >/dev/null
 
+PROJECT_NUMBER=$(gcloud projects describe "$GCP_PROJECT" --format='value(projectNumber)')
+DEFAULT_COMPUTE_SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+if gcloud iam service-accounts describe "$DEFAULT_COMPUTE_SA" --project "$GCP_PROJECT" >/dev/null 2>&1; then
+  log "Granting metadata update impersonation on VM service account"
+  gcloud iam service-accounts add-iam-policy-binding "$DEFAULT_COMPUTE_SA" \
+    --project "$GCP_PROJECT" \
+    --member="serviceAccount:${RUNTIME_SA_EMAIL}" \
+    --role="roles/iam.serviceAccountUser" >/dev/null
+fi
+
 SECRET_ARGS=()
 if [[ -n "${DUCKDNS_TOKEN:-}" ]]; then
   if ! gcloud secrets describe "$DUCKDNS_SECRET_NAME" --project "$GCP_PROJECT" >/dev/null 2>&1; then

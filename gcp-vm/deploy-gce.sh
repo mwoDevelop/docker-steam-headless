@@ -127,18 +127,18 @@ else
     --source-ranges="$ALLOW_CIDR" || true
 fi
 
-# Firewall: Sunshine (web ui + control + video)
+# Firewall: Sunshine and Steam Remote Play (web ui + control + streaming)
 if ! gcloud compute firewall-rules describe allow-sunshine --project "$GCP_PROJECT" >/dev/null 2>&1; then
   gcloud compute firewall-rules create allow-sunshine \
     --project "$GCP_PROJECT" \
     --network=default \
-    --allow=tcp:47984,tcp:47989,tcp:47990,tcp:48010,udp:47998,udp:47999,udp:48000,udp:48002 \
+    --allow=tcp:47984,tcp:47989,tcp:47990,tcp:48010,tcp:27036-27037,udp:47998,udp:47999,udp:48000,udp:48002,udp:27031-27036 \
     --target-tags="$TAGS" \
     --source-ranges="$ALLOW_CIDR"
 else
   gcloud compute firewall-rules update allow-sunshine \
     --project "$GCP_PROJECT" \
-    --allow=tcp:47984,tcp:47989,tcp:47990,tcp:48010,udp:47998,udp:47999,udp:48000,udp:48002 \
+    --allow=tcp:47984,tcp:47989,tcp:47990,tcp:48010,tcp:27036-27037,udp:47998,udp:47999,udp:48000,udp:48002,udp:27031-27036 \
     --target-tags="$TAGS" \
     --source-ranges="$ALLOW_CIDR" || true
 fi

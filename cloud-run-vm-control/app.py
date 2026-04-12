@@ -57,6 +57,10 @@ CONFIG = {
     "sunshine_port": os.environ.get("VM_SUNSHINE_PORT", "47990"),
 }
 
+AUTO_STOP_METADATA_KEY = "vm-auto-shutdown-hours"
+MIN_AUTO_STOP_HOURS = 1
+MAX_AUTO_STOP_HOURS = 24
+
 
 def require_env(name: str) -> str:
     value = CONFIG.get(name) if name in CONFIG else os.environ.get(name, "")
@@ -171,7 +175,7 @@ def options_passthrough():
         command = str(payload.get("command", "")).strip().lower()
         if command not in {"status", "start", "stop", "restart"}:
             raise ApiError("Unsupported command.", 400)
-        result = execute_command(command, user)
+        result = execute_command(command, user, payload)
         return jsonify(result)
 
     raise ApiError("Not found.", 404)
@@ -255,6 +259,26 @@ def compute_request(method: str, url: str, **kwargs) -> dict[str, Any]:
     return response.json()
 
 
+def wait_for_zone_operation(operation: dict[str, Any], timeout_seconds: int = 90) -> None:
+    operation_name = str(operation.get("name", "") or "")
+    if not operation_name:
+        return
+
+    url = (
+        "https://compute.googleapis.com/compute/v1/"
+        f"projects/{CONFIG['project']}/zones/{CONFIG['zone']}/operations/{operation_name}"
+    )
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        data = compute_request("GET", url)
+        if str(data.get("status", "")).upper() == "DONE":
+            if data.get("error"):
+                raise ApiError(str(data["error"]), 502)
+            return
+        time.sleep(2)
+    raise ApiError(f"Timed out waiting for operation {operation_name}.", 504)
+
+
 def get_instance() -> dict[str, Any]:
     return compute_request("GET", instance_url())
 
@@ -267,6 +291,58 @@ def extract_external_ip(instance: dict[str, Any]) -> str:
     if not access_configs:
         return ""
     return str(access_configs[0].get("natIP", "") or "")
+
+
+def instance_metadata_items(instance: dict[str, Any]) -> list[dict[str, str]]:
+    metadata = instance.get("metadata", {}) or {}
+    items = metadata.get("items", []) or []
+    return [item for item in items if isinstance(item, dict)]
+
+
+def metadata_value(instance: dict[str, Any], key: str) -> str:
+    for item in instance_metadata_items(instance):
+        if item.get("key") == key:
+            return str(item.get("value", "") or "")
+    return ""
+
+
+def set_instance_metadata_value(instance: dict[str, Any], key: str, value: str | None) -> None:
+    metadata = instance.get("metadata", {}) or {}
+    fingerprint = str(metadata.get("fingerprint", "") or "")
+    if not fingerprint:
+        raise ApiError("Instance metadata fingerprint is missing.", 502)
+
+    items = [item for item in instance_metadata_items(instance) if item.get("key") != key]
+    if value is not None:
+        items.append({"key": key, "value": value})
+
+    operation = compute_request(
+        "POST",
+        f"{instance_url()}/setMetadata",
+        json={
+            "fingerprint": fingerprint,
+            "items": items,
+        },
+    )
+    wait_for_zone_operation(operation)
+
+
+def parse_auto_stop_hours(payload: dict[str, Any]) -> int | None:
+    raw = payload.get("autoStopHours")
+    if raw in (None, "", False):
+        return None
+
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        raise ApiError("Auto-stop hours must be a whole number.", 400)
+
+    if value < MIN_AUTO_STOP_HOURS or value > MAX_AUTO_STOP_HOURS:
+        raise ApiError(
+            f"Auto-stop hours must be between {MIN_AUTO_STOP_HOURS} and {MAX_AUTO_STOP_HOURS}.",
+            400,
+        )
+    return value
 
 
 def build_urls(external_ip: str) -> dict[str, Any]:
@@ -314,6 +390,7 @@ def build_status_payload(
         "duckdnsDomains": CONFIG["duckdns_domains"],
         "urls": build_urls(external_ip),
         "user": user,
+        "autoStopHours": metadata_value(instance, AUTO_STOP_METADATA_KEY),
     }
     if duckdns_updated is not None:
         payload["duckdnsUpdated"] = duckdns_updated
@@ -369,8 +446,9 @@ def update_duckdns(external_ip: str) -> bool:
     return updated
 
 
-def execute_command(command: str, user: dict[str, Any]) -> dict[str, Any]:
+def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] | None = None) -> dict[str, Any]:
     logging.info("VM command=%s user=%s", command, user.get("email", "<unknown>"))
+    payload = payload or {}
     current_instance = get_instance()
     current_status = str(current_instance.get("status", "UNKNOWN"))
 
@@ -378,6 +456,18 @@ def execute_command(command: str, user: dict[str, Any]) -> dict[str, Any]:
         return build_status_payload(current_instance, user=user, command=command)
 
     if command == "start":
+        auto_stop_hours = parse_auto_stop_hours(payload)
+        if auto_stop_hours is not None and current_status == "RUNNING":
+            raise ApiError("Auto-stop can only be scheduled while starting a stopped VM.", 400)
+
+        if current_status != "RUNNING":
+            set_instance_metadata_value(
+                current_instance,
+                AUTO_STOP_METADATA_KEY,
+                str(auto_stop_hours) if auto_stop_hours is not None else None,
+            )
+            current_instance = get_instance()
+
         if current_status != "RUNNING":
             compute_request("POST", f"{instance_url()}/start")
             poll_instance_status("RUNNING")
@@ -391,6 +481,8 @@ def execute_command(command: str, user: dict[str, Any]) -> dict[str, Any]:
         if current_status != "TERMINATED":
             compute_request("POST", f"{instance_url()}/stop")
         final_instance = poll_instance_status("TERMINATED")
+        set_instance_metadata_value(final_instance, AUTO_STOP_METADATA_KEY, None)
+        final_instance = get_instance()
         return build_status_payload(final_instance, user=user, command=command)
 
     if command == "restart":

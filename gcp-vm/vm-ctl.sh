@@ -36,7 +36,7 @@ VMCTL_FIREWALL_CIDR=${VMCTL_FIREWALL_CIDR:-}
 VMCTL_SKIP_FIREWALL_PIN=${VMCTL_SKIP_FIREWALL_PIN:-0}
 
 ALLOW_WEB_PORTS=${ALLOW_WEB_PORTS:-tcp:22,tcp:8083}
-ALLOW_SUN_PORTS=${ALLOW_SUN_PORTS:-tcp:47984,tcp:47989,tcp:47990,tcp:48010,udp:47998,udp:47999,udp:48000,udp:48002}
+ALLOW_SUN_PORTS=${ALLOW_SUN_PORTS:-tcp:47984,tcp:47989,tcp:47990,tcp:48010,tcp:27036-27037,udp:47998,udp:47999,udp:48000,udp:48002,udp:27031-27036}
 
 log(){ printf '%s [vm-ctl] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
 err(){ log "ERROR: $*" >&2; exit 1; }

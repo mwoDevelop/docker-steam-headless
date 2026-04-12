@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;700&display=swap"
       rel="stylesheet"
     >
-    <link rel="stylesheet" href="./styles.css">
+    <link rel="stylesheet" href="./styles.css?v=auto-stop-20260412">
     <script src="https://accounts.google.com/gsi/client" async defer></script>
   </head>
   <body>
@@ -47,7 +47,7 @@
               id="backend-url"
               name="backend-url"
               type="url"
-              placeholder="https://steam-vm-control-api-w2urpq2xlq-lm.a.run.app"
+              placeholder="https://your-cloud-run-service.run.app"
             >
           </label>
 
@@ -97,6 +97,23 @@
           <button class="action status" type="button" data-command="status">Status</button>
         </div>
 
+        <div class="start-options">
+          <label>
+            <span>Auto-stop after start</span>
+            <input
+              id="auto-stop-hours"
+              name="auto-stop-hours"
+              type="number"
+              min="1"
+              max="24"
+              step="1"
+              inputmode="numeric"
+              placeholder="Hours, optional"
+            >
+          </label>
+          <p>Leave empty to start without a scheduled shutdown. Applies only when starting a stopped VM.</p>
+        </div>
+
         <div id="banner" class="banner" data-tone="neutral">
           Connect the Cloud Run backend and sign in with Google to control the VM.
         </div>
@@ -135,6 +152,6 @@
       </section>
     </main>
 
-    <script src="./app.js"></script>
+    <script src="./app.js?v=auto-stop-20260412"></script>
   </body>
 </html>

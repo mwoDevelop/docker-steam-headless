@@ -272,6 +272,22 @@ input:focus {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
+.start-options {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(220px, 320px) minmax(0, 1fr);
+  align-items: end;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.start-options p {
+  margin: 0 0 4px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
 button {
   border: 0;
   border-radius: 14px;
@@ -538,6 +554,7 @@ code,
   .hero,
   .form-grid,
   .control-row,
+  .start-options,
   .access-grid,
   .auth-grid {
     grid-template-columns: 1fr;
