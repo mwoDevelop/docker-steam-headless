@@ -95,7 +95,23 @@
       setAuthStatus("Connect the backend, then sign in with Google.", "neutral");
       elements.signOut.classList.add("hidden");
     }
+    updateBackendUrlVisibility();
     renderTargetSummary();
+  }
+
+  function updateBackendUrlVisibility() {
+    if (!elements.backendUrl) {
+      return;
+    }
+
+    if (state.user) {
+      elements.backendUrl.type = "url";
+      elements.backendUrl.value = state.backendUrl;
+      return;
+    }
+
+    elements.backendUrl.type = "password";
+    elements.backendUrl.value = state.backendUrl;
   }
 
   function pushHistory(entry) {
