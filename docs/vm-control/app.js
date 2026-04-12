@@ -95,6 +95,7 @@
       setAuthStatus("Connect the backend, then sign in with Google.", "neutral");
       elements.signOut.classList.add("hidden");
     }
+    renderTargetSummary();
   }
 
   function pushHistory(entry) {
@@ -145,6 +146,11 @@
     const config = state.backendConfig;
     if (!config) {
       elements.targetSummary.innerHTML = "<p>Backend not connected yet.</p>";
+      return;
+    }
+
+    if (!state.user) {
+      elements.targetSummary.innerHTML = "<p>Sign in with Google to view target details.</p>";
       return;
     }
 
