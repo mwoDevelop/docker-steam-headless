@@ -275,6 +275,80 @@ code,
   color: #ffd5cd;
 }
 
+.access.empty {
+  color: var(--muted);
+}
+
+.access-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.access-card {
+  padding: 18px;
+  border-radius: 18px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.access-card.accent {
+  border-color: rgba(106, 228, 208, 0.24);
+  background: rgba(106, 228, 208, 0.08);
+}
+
+.access-card.error {
+  border-color: rgba(255, 131, 105, 0.24);
+  background: rgba(255, 131, 105, 0.08);
+}
+
+.access-card h3 {
+  margin: 0 0 10px;
+  font-size: 1rem;
+}
+
+.access-card p,
+.access-note,
+.access-meta,
+.run-detail {
+  color: var(--muted);
+}
+
+.access-card p,
+.access-note {
+  margin: 0;
+  line-height: 1.6;
+}
+
+.access-links {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.82rem;
+}
+
+.access-links a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.access-meta,
+.run-detail {
+  margin-top: 12px;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.82rem;
+}
+
+.run-detail.error {
+  color: #ffd5cd;
+}
+
+.access-note {
+  margin-top: 16px;
+}
+
 .runs {
   display: grid;
   gap: 12px;
@@ -354,7 +428,8 @@ code,
 }
 
 .run-links a:hover,
-.hero-note a:hover {
+.hero-note a:hover,
+.access-links a:hover {
   text-decoration: underline;
 }
 
@@ -366,7 +441,8 @@ code,
 
   .hero,
   .form-grid,
-  .control-row {
+  .control-row,
+  .access-grid {
     grid-template-columns: 1fr;
   }
 

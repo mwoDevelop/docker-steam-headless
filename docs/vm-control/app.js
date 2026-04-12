@@ -16,6 +16,7 @@
     zone: document.querySelector("#zone"),
     instance: document.querySelector("#instance"),
     banner: document.querySelector("#banner"),
+    access: document.querySelector("#access"),
     runs: document.querySelector("#runs"),
     refreshRuns: document.querySelector("#refresh-runs"),
     clearToken: document.querySelector("#clear-token"),
@@ -243,6 +244,7 @@
     );
 
     renderRuns(enrichedRuns);
+    renderAccess(enrichedRuns);
 
     if (enrichedRuns.length === 0) {
       setBanner("No workflow runs found for this workflow yet.", "warning");
@@ -255,8 +257,12 @@
       lastDispatchedAt && newest.created_at && newest.created_at >= lastDispatchedAt;
 
     if (newest.status !== "completed") {
+      const activeStep =
+        newest.vmControl && newest.vmControl.activeStep
+          ? ` Current step: ${newest.vmControl.activeStep}.`
+          : "";
       setBanner(
-        `Latest run is ${newest.status}. The panel will refresh again in a few seconds.`,
+        `Latest run is ${newest.status}.${activeStep} The panel will refresh again in a few seconds.`,
         "warning",
       );
       refreshTimer = window.setTimeout(() => {
@@ -272,8 +278,13 @@
       return;
     }
 
+    const failedStep =
+      newest.vmControl && newest.vmControl.failedStep
+        ? ` Failed at "${newest.vmControl.failedStep}".`
+        : "";
+
     setBanner(
-      `Latest run concluded with "${newest.conclusion || "unknown"}". Open the run for details.`,
+      `Latest run concluded with "${newest.conclusion || "unknown"}".${failedStep} Open the run for details.`,
       "error",
     );
   }
@@ -283,9 +294,15 @@
       finalState: "",
       externalIp: "",
       target: "",
+      activeStep: "",
+      failedStep: "",
     };
 
     for (const job of jobs) {
+      if (job.conclusion === "failure" && !details.failedStep) {
+        details.failedStep = job.name || "job failure";
+      }
+
       for (const step of job.steps || []) {
         const name = step.name || "";
         if (name.startsWith("Final state: ")) {
@@ -295,10 +312,139 @@
         } else if (name.startsWith("Target: ")) {
           details.target = name.slice("Target: ".length);
         }
+
+        if (step.status === "in_progress" && !details.activeStep) {
+          details.activeStep = name || "workflow step";
+        }
+
+        if (
+          !details.failedStep &&
+          (step.conclusion === "failure" || step.conclusion === "timed_out" || step.conclusion === "cancelled")
+        ) {
+          details.failedStep = name || "workflow step";
+        }
       }
     }
 
     return details;
+  }
+
+  function renderAccess(runs) {
+    if (!runs.length) {
+      elements.access.className = "access empty";
+      elements.access.textContent = "No workflow runs loaded yet.";
+      return;
+    }
+
+    const newest = runs[0];
+    const details = newest.vmControl || {};
+    const target = details.target ? escapeHtml(details.target) : "unknown target";
+    const runLink = escapeHtml(newest.html_url);
+
+    if (newest.status !== "completed") {
+      const activeStep = details.activeStep
+        ? `<p class="access-meta">Current step: <code>${escapeHtml(details.activeStep)}</code></p>`
+        : "";
+      elements.access.className = "access";
+      elements.access.innerHTML = `
+        <article class="access-card">
+          <h3>Workflow in progress</h3>
+          <p>The latest run for <code>${target}</code> is still working. Access links will refresh automatically when it completes.</p>
+          ${activeStep}
+          <div class="access-links">
+            <a href="${runLink}" target="_blank" rel="noreferrer">Open GitHub run</a>
+          </div>
+        </article>
+      `;
+      return;
+    }
+
+    if (newest.conclusion !== "success") {
+      const failedStep = details.failedStep
+        ? `<p class="access-meta">Failed step: <code>${escapeHtml(details.failedStep)}</code></p>`
+        : "";
+      elements.access.className = "access";
+      elements.access.innerHTML = `
+        <article class="access-card error">
+          <h3>Latest run failed</h3>
+          <p>The panel cannot confirm fresh access details for <code>${target}</code> because the latest workflow run did not finish successfully.</p>
+          ${failedStep}
+          <div class="access-links">
+            <a href="${runLink}" target="_blank" rel="noreferrer">Open GitHub run</a>
+          </div>
+        </article>
+      `;
+      return;
+    }
+
+    if (details.finalState !== "RUNNING") {
+      const state = details.finalState ? escapeHtml(details.finalState) : "UNKNOWN";
+      elements.access.className = "access";
+      elements.access.innerHTML = `
+        <article class="access-card">
+          <h3>VM not running</h3>
+          <p>The latest successful run reported <code>${state}</code> for <code>${target}</code>, so remote access links are not available right now.</p>
+          <div class="access-links">
+            <a href="${runLink}" target="_blank" rel="noreferrer">Open GitHub run</a>
+          </div>
+        </article>
+      `;
+      return;
+    }
+
+    if (!details.externalIp || details.externalIp === "none") {
+      elements.access.className = "access";
+      elements.access.innerHTML = `
+        <article class="access-card error">
+          <h3>VM is running, but IP is missing</h3>
+          <p>The workflow reported a running VM for <code>${target}</code>, but no external IP was captured. Open the GitHub run and verify the instance networking.</p>
+          <div class="access-links">
+            <a href="${runLink}" target="_blank" rel="noreferrer">Open GitHub run</a>
+          </div>
+        </article>
+      `;
+      return;
+    }
+
+    const ip = escapeHtml(details.externalIp);
+    elements.access.className = "access";
+    elements.access.innerHTML = `
+      <div class="access-grid">
+        <article class="access-card accent">
+          <h3>Browser Desktop</h3>
+          <p>Best for first login, Steam setup, and quick recovery when streaming clients are not paired yet.</p>
+          <div class="access-links">
+            <a href="http://${ip}:8083/" target="_blank" rel="noreferrer">Open noVNC</a>
+          </div>
+          <p class="access-meta">URL: <code>http://${ip}:8083/</code></p>
+        </article>
+
+        <article class="access-card accent">
+          <h3>Sunshine Web UI</h3>
+          <p>Use this to manage Sunshine, pair streaming clients, and inspect the host configuration. Your browser may warn about the certificate on first open.</p>
+          <div class="access-links">
+            <a href="https://${ip}:47990/" target="_blank" rel="noreferrer">Open Sunshine UI</a>
+          </div>
+          <p class="access-meta">URL: <code>https://${ip}:47990/</code></p>
+        </article>
+
+        <article class="access-card">
+          <h3>Moonlight / Sunshine Client</h3>
+          <p>Add this host in Moonlight or another Sunshine-compatible client, then pair with the PIN shown by Sunshine.</p>
+          <p class="access-meta">Host/IP: <code>${ip}</code></p>
+        </article>
+
+        <article class="access-card">
+          <h3>Steam Link / Steam Client</h3>
+          <p>After Steam inside the VM signs in, the host should appear in Steam Link or Steam Remote Play. First-time setup is usually easiest through noVNC.</p>
+          <p class="access-meta">Target: <code>${target}</code></p>
+        </article>
+      </div>
+
+      <p class="access-note">
+        The VM can report <code>RUNNING</code> before the desktop and Sunshine finish booting. On a cold start, give noVNC and Sunshine up to a minute or two to become reachable.
+      </p>
+    `;
   }
 
   function renderRuns(runs) {
@@ -336,6 +482,7 @@
       run.vmControl && run.vmControl.externalIp && run.vmControl.externalIp !== "none"
         ? escapeHtml(run.vmControl.externalIp)
         : "n/a";
+    const runDetail = renderRunDetail(run);
 
     return `
       <article class="run-card">
@@ -352,6 +499,7 @@
           <span>${escapeHtml(target)}</span>
           <span>ip ${externalIp}</span>
         </div>
+        ${runDetail}
         <div class="run-links">
           <a href="${escapeHtml(run.html_url)}" target="_blank" rel="noreferrer">Open run</a>
           ${ipLinks}
@@ -367,6 +515,22 @@
     }
     const label = status === "completed" && conclusion ? conclusion : status;
     return `<span class="${classes.join(" ")}">${escapeHtml(label || "unknown")}</span>`;
+  }
+
+  function renderRunDetail(run) {
+    if (run.vmControl && run.vmControl.error) {
+      return `<div class="run-detail error">Could not read workflow job details: ${escapeHtml(run.vmControl.error)}</div>`;
+    }
+
+    if (run.status !== "completed" && run.vmControl && run.vmControl.activeStep) {
+      return `<div class="run-detail">Current step: ${escapeHtml(run.vmControl.activeStep)}</div>`;
+    }
+
+    if (run.conclusion !== "success" && run.vmControl && run.vmControl.failedStep) {
+      return `<div class="run-detail error">Failed step: ${escapeHtml(run.vmControl.failedStep)}</div>`;
+    }
+
+    return "";
   }
 
   function escapeToken(value) {

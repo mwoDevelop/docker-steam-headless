@@ -93,7 +93,9 @@ The panel lists recent workflow runs and tries to extract:
 
 - final VM power state
 - external IP
-- links to noVNC and Sunshine when the VM is running
+- prominent access links for noVNC and Sunshine when the VM is running
+- host/IP guidance for Moonlight, Sunshine clients, and Steam Remote Play
+- the failed workflow step when the latest run does not complete successfully
 
 ## Notes
 
