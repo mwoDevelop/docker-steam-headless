@@ -32,6 +32,8 @@ FW_TAGS=${FW_TAGS:-steam-headless}
 FW_NET=${FW_NET:-default}
 DUCKDNS_DOMAINS=${DUCKDNS_DOMAINS:-${DUCKDNS_DOMAIN:-}}
 DUCKDNS_TOKEN=${DUCKDNS_TOKEN:-}
+VMCTL_FIREWALL_CIDR=${VMCTL_FIREWALL_CIDR:-}
+VMCTL_SKIP_FIREWALL_PIN=${VMCTL_SKIP_FIREWALL_PIN:-0}
 
 ALLOW_WEB_PORTS=${ALLOW_WEB_PORTS:-tcp:22,tcp:8083}
 ALLOW_SUN_PORTS=${ALLOW_SUN_PORTS:-tcp:47984,tcp:47989,tcp:47990,tcp:48010,udp:47998,udp:47999,udp:48000,udp:48002}
@@ -39,6 +41,16 @@ ALLOW_SUN_PORTS=${ALLOW_SUN_PORTS:-tcp:47984,tcp:47989,tcp:47990,tcp:48010,udp:4
 log(){ printf '%s [vm-ctl] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
 err(){ log "ERROR: $*" >&2; exit 1; }
 is_help_arg(){ [[ "${1:-}" == "help" ]]; }
+is_true() {
+  case "${1:-}" in
+    1|true|TRUE|yes|YES|on|ON)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
 
 ensure_project() {
   [[ -n "$GCP_PROJECT" ]] || err "GCP_PROJECT is empty. Set it in gcp-vm/.env (copy from gcp-vm/.env.example)."
@@ -161,6 +173,23 @@ update_firewall_to(){
   gcloud compute firewall-rules update "$FW_RULE_SUN" \
     --project "$GCP_PROJECT" --allow="$ALLOW_SUN_PORTS" \
     --target-tags="$FW_TAGS" --source-ranges="$cidr" >/dev/null || true
+}
+
+resolve_firewall_cidr() {
+  local myip=""
+
+  if [[ -n "$VMCTL_FIREWALL_CIDR" ]]; then
+    printf '%s\n' "$VMCTL_FIREWALL_CIDR"
+    return 0
+  fi
+
+  if is_true "$VMCTL_SKIP_FIREWALL_PIN"; then
+    return 1
+  fi
+
+  myip=$(get_my_ip || true)
+  [[ -n "$myip" ]] || return 1
+  printf '%s/32\n' "$myip"
 }
 
 get_vm_ip(){
@@ -380,8 +409,12 @@ case "$cmd" in
     fi
     wait_running
     ip=$(get_vm_ip)
-    myip=$(get_my_ip || true)
-    if [[ -n "$myip" ]]; then update_firewall_to "${myip}/32"; else log "WARN: cannot detect your IP; keeping current firewall ranges"; fi
+    firewall_cidr=$(resolve_firewall_cidr || true)
+    if [[ -n "$firewall_cidr" ]]; then
+      update_firewall_to "$firewall_cidr"
+    else
+      log "Leaving firewall source-ranges unchanged"
+    fi
     schedule_auto_shutdown || true
     update_duckdns "${ip:-}" || true
     log "VM RUNNING. External IP: ${ip:-unknown}"

@@ -1,4 +1,8 @@
-# GitHub Pages VM Control
+# GitHub Pages VM Control (Legacy GitHub Actions Mode)
+
+This document describes the older browser-to-GitHub-Actions flow that uses a GitHub token in the browser.
+
+For the recommended setup with Google login and a Cloud Run backend, use [Cloud Run VM Control](./cloud-run-vm-control.md).
 
 This repo now contains a static control panel under [`docs/vm-control/`](./vm-control/index.html) and a matching GitHub Actions workflow in [`.github/workflows/vm-control.yml`](../.github/workflows/vm-control.yml).
 

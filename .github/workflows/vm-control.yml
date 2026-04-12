@@ -43,11 +43,13 @@ jobs:
   control:
     name: Control GCE VM
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     env:
       DEFAULT_GCP_PROJECT: ${{ vars.GCP_PROJECT }}
       DEFAULT_GCP_ZONE: ${{ vars.GCP_ZONE }}
       DEFAULT_GCE_NAME: ${{ vars.GCE_NAME }}
+      DEFAULT_ALLOW_CIDR: ${{ vars.ALLOW_CIDR }}
+      DEFAULT_DUCKDNS_DOMAINS: ${{ vars.DUCKDNS_DOMAINS }}
 
     steps:
       - name: Validate workflow configuration
@@ -76,6 +78,9 @@ jobs:
             exit 1
           }
 
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
@@ -87,20 +92,49 @@ jobs:
       - name: Execute VM command
         id: control
         shell: bash
+        env:
+          DUCKDNS_TOKEN: ${{ secrets.DUCKDNS_TOKEN }}
         run: |
           set -euo pipefail
 
           command="${{ inputs.command }}"
-          wait_for_running="${{ inputs.wait_for_running }}"
           project="${{ inputs.project }}"
           zone="${{ inputs.zone }}"
           instance="${{ inputs.instance }}"
+          allow_cidr="${DEFAULT_ALLOW_CIDR}"
+          duckdns_domains="${DEFAULT_DUCKDNS_DOMAINS}"
 
           [[ -n "$project" ]] || project="$DEFAULT_GCP_PROJECT"
           [[ -n "$zone" ]] || zone="$DEFAULT_GCP_ZONE"
           [[ -n "$instance" ]] || instance="$DEFAULT_GCE_NAME"
 
           gcloud config set project "$project" >/dev/null
+
+          normalize_duckdns_domains() {
+            local raw="${1:-}"
+            local cleaned=""
+            local value=""
+            local out=()
+
+            cleaned="${raw// /}"
+            cleaned="${cleaned#,}"
+            cleaned="${cleaned%,}"
+            [[ -n "$cleaned" ]] || return 0
+
+            IFS=',' read -r -a items <<< "$cleaned"
+            for value in "${items[@]}"; do
+              [[ -n "$value" ]] || continue
+              value="${value%.duckdns.org}"
+              value="${value#https://}"
+              value="${value#http://}"
+              value="${value%%/*}"
+              value="${value%%:*}"
+              [[ -n "$value" ]] || continue
+              out+=("${value}.duckdns.org")
+            done
+
+            printf '%s\n' "${out[@]}"
+          }
 
           get_status() {
             gcloud compute instances describe "$instance" \
@@ -116,66 +150,48 @@ jobs:
               --format='value(networkInterfaces[0].accessConfigs[0].natIP)' 2>/dev/null || true
           }
 
-          wait_until_running() {
-            local status=""
-            [[ "$wait_for_running" == "true" ]] || return 0
-
-            for _ in $(seq 1 60); do
-              status="$(get_status)"
-              if [[ "$status" == "RUNNING" ]]; then
-                return 0
-              fi
-              sleep 5
-            done
-
-            echo "Timed out waiting for instance to reach RUNNING state" >&2
-            return 1
-          }
-
           current_status="$(get_status)"
-          [[ -n "$current_status" ]] || {
-            echo "Instance '$instance' not found in project '$project' zone '$zone'." >&2
-            exit 1
-          }
+
+          if [[ "$command" == "status" || "$command" == "stop" ]]; then
+            [[ -n "$current_status" ]] || {
+              echo "Instance '$instance' not found in project '$project' zone '$zone'." >&2
+              exit 1
+            }
+          fi
+
+          export GCP_PROJECT="$project"
+          export GCP_ZONE="$zone"
+          export GCE_NAME="$instance"
+          export ALLOW_CIDR="$allow_cidr"
+          export DUCKDNS_DOMAINS="$duckdns_domains"
+          export VMCTL_NO_CLIP=1
+
+          if [[ -n "$DUCKDNS_TOKEN" ]]; then
+            export DUCKDNS_TOKEN
+          fi
+
+          if [[ -n "$allow_cidr" ]]; then
+            export VMCTL_FIREWALL_CIDR="$allow_cidr"
+            export VMCTL_SKIP_FIREWALL_PIN=0
+          else
+            export VMCTL_SKIP_FIREWALL_PIN=1
+          fi
 
           case "$command" in
             status)
-              echo "Current state: $current_status"
+              bash ./gcp-vm/vm-ctl.sh status
               ;;
             start)
-              if [[ "$current_status" == "RUNNING" ]]; then
-                echo "Instance already RUNNING"
-              else
-                gcloud compute instances start "$instance" \
-                  --project "$project" \
-                  --zone "$zone" \
-                  --quiet
-              fi
-              wait_until_running
+              bash ./gcp-vm/vm-ctl.sh up
               ;;
             stop)
-              if [[ "$current_status" == "TERMINATED" ]]; then
-                echo "Instance already TERMINATED"
-              else
-                gcloud compute instances stop "$instance" \
-                  --project "$project" \
-                  --zone "$zone" \
-                  --quiet
-              fi
+              bash ./gcp-vm/vm-ctl.sh down
               ;;
             restart)
               if [[ "$current_status" == "RUNNING" ]]; then
-                gcloud compute instances reset "$instance" \
-                  --project "$project" \
-                  --zone "$zone" \
-                  --quiet
-              else
-                gcloud compute instances start "$instance" \
-                  --project "$project" \
-                  --zone "$zone" \
-                  --quiet
+                bash ./gcp-vm/vm-ctl.sh down
               fi
-              wait_until_running
+              bash ./gcp-vm/vm-ctl.sh up
               ;;
             *)
               echo "Unsupported command: $command" >&2
@@ -185,6 +201,12 @@ jobs:
 
           final_status="$(get_status)"
           external_ip="$(get_ip)"
+          duckdns_list="$(normalize_duckdns_domains "$duckdns_domains" | paste -sd ',' -)"
+
+          [[ "$command" != "status" || -n "$final_status" ]] || {
+            echo "Instance '$instance' not found in project '$project' zone '$zone'." >&2
+            exit 1
+          }
 
           echo "command=$command" >> "$GITHUB_OUTPUT"
           echo "project=$project" >> "$GITHUB_OUTPUT"
@@ -192,6 +214,7 @@ jobs:
           echo "instance=$instance" >> "$GITHUB_OUTPUT"
           echo "status=${final_status:-UNKNOWN}" >> "$GITHUB_OUTPUT"
           echo "external_ip=${external_ip}" >> "$GITHUB_OUTPUT"
+          echo "duckdns_domains=${duckdns_list}" >> "$GITHUB_OUTPUT"
 
           {
             echo "## VM Control"
@@ -204,9 +227,19 @@ jobs:
             if [[ -n "$external_ip" ]]; then
               echo "- External IP: \`${external_ip}\`"
             fi
+            if [[ -n "$duckdns_list" ]]; then
+              echo "- DuckDNS: \`${duckdns_list}\`"
+            fi
             if [[ "${final_status:-}" == "RUNNING" && -n "$external_ip" ]]; then
               echo "- noVNC: http://${external_ip}:8083/"
               echo "- Sunshine UI: https://${external_ip}:47990/"
+              if [[ -n "$duckdns_list" ]]; then
+                while IFS= read -r duckdns_domain; do
+                  [[ -n "$duckdns_domain" ]] || continue
+                  echo "- noVNC DNS: http://${duckdns_domain}:8083/"
+                  echo "- Sunshine DNS: https://${duckdns_domain}:47990/"
+                done < <(normalize_duckdns_domains "$duckdns_domains")
+              fi
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -221,3 +254,7 @@ jobs:
       - name: "Target: ${{ steps.control.outputs.project != '' && steps.control.outputs.project || 'unknown-project' }}/${{ steps.control.outputs.zone != '' && steps.control.outputs.zone || 'unknown-zone' }}/${{ steps.control.outputs.instance != '' && steps.control.outputs.instance || 'unknown-instance' }}"
         if: always()
         run: echo "Recorded target instance."
+
+      - name: "DuckDNS: ${{ steps.control.outputs.duckdns_domains != '' && steps.control.outputs.duckdns_domains || 'none' }}"
+        if: always()
+        run: echo "Recorded DuckDNS domains."

@@ -145,6 +145,10 @@ label span {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.hidden {
+  display: none;
+}
+
 label {
   display: flex;
   flex-direction: column;
@@ -168,6 +172,64 @@ input {
 input:focus {
   outline: 2px solid rgba(106, 228, 208, 0.35);
   outline-offset: 2px;
+}
+
+.auth-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 18px;
+}
+
+.auth-card,
+.auth-status-card {
+  padding: 18px;
+  border-radius: 18px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.auth-card-label,
+.auth-status-label {
+  margin: 0 0 10px;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.8rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.auth-status {
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.04);
+  padding: 14px 15px;
+  min-height: 54px;
+  line-height: 1.5;
+}
+
+.auth-status[data-tone="success"] {
+  border-color: rgba(106, 228, 208, 0.3);
+  color: #c6fff4;
+}
+
+.auth-status[data-tone="warning"] {
+  border-color: rgba(242, 198, 109, 0.3);
+  color: #ffe8b9;
+}
+
+.google-button {
+  min-height: 44px;
+}
+
+.connection-summary p {
+  margin: 0 0 10px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.connection-summary p:last-child {
+  margin-bottom: 0;
 }
 
 .checkbox {
@@ -334,6 +396,18 @@ code,
   text-decoration: none;
 }
 
+.access-links.stacked {
+  display: grid;
+  gap: 12px;
+}
+
+.access-dns-row {
+  display: grid;
+  gap: 8px;
+  align-items: center;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
 .access-meta,
 .run-detail {
   margin-top: 12px;
@@ -442,7 +516,8 @@ code,
   .hero,
   .form-grid,
   .control-row,
-  .access-grid {
+  .access-grid,
+  .auth-grid {
     grid-template-columns: 1fr;
   }
 
@@ -462,5 +537,9 @@ code,
   .run-top {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .access-dns-row {
+    grid-template-columns: 1fr;
   }
 }
