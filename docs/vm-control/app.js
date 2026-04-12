@@ -466,7 +466,6 @@
       : "unknown target";
 
     if (payload.status !== "RUNNING") {
-      const duckdnsCards = renderDuckDnsAccess(payload.urls && payload.urls.duckdns ? payload.urls.duckdns : []);
       elements.access.className = "access";
       elements.access.innerHTML = `
         <div class="access-grid">
@@ -474,7 +473,6 @@
             <h3>VM not running</h3>
             <p>The current backend status for <code>${escapeHtml(target)}</code> is <code>${escapeHtml(payload.status || "UNKNOWN")}</code>, so remote access links are not available right now.</p>
           </article>
-          ${duckdnsCards}
         </div>
       `;
       return;
@@ -494,7 +492,17 @@
     const ip = escapeHtml(payload.externalIp);
     const novncUrl = payload.urls && payload.urls.novnc ? escapeHtml(payload.urls.novnc) : "";
     const sunshineUrl = payload.urls && payload.urls.sunshine ? escapeHtml(payload.urls.sunshine) : "";
-    const duckdnsCards = renderDuckDnsAccess(payload.urls && payload.urls.duckdns ? payload.urls.duckdns : []);
+    const duckdnsEntries = payload.urls && payload.urls.duckdns ? payload.urls.duckdns : [];
+    const primaryDuckDns = duckdnsEntries.length ? duckdnsEntries[0] : null;
+    const novncDnsMeta = primaryDuckDns && primaryDuckDns.novnc
+      ? `<p class="access-meta">DNS URL: <code>${escapeHtml(primaryDuckDns.novnc)}</code></p>`
+      : "";
+    const sunshineDnsMeta = primaryDuckDns && primaryDuckDns.sunshine
+      ? `<p class="access-meta">DNS URL: <code>${escapeHtml(primaryDuckDns.sunshine)}</code></p>`
+      : "";
+    const dnsHostMeta = primaryDuckDns && primaryDuckDns.domain
+      ? `<p class="access-meta">DNS Host: <code>${escapeHtml(primaryDuckDns.domain)}</code></p>`
+      : "";
 
     elements.access.className = "access";
     elements.access.innerHTML = `
@@ -506,6 +514,7 @@
             <a href="${novncUrl}" target="_blank" rel="noreferrer">Open noVNC</a>
           </div>
           <p class="access-meta">URL: <code>${novncUrl}</code></p>
+          ${novncDnsMeta}
         </article>
 
         <article class="access-card accent">
@@ -515,57 +524,27 @@
             <a href="${sunshineUrl}" target="_blank" rel="noreferrer">Open Sunshine UI</a>
           </div>
           <p class="access-meta">URL: <code>${sunshineUrl}</code></p>
+          ${sunshineDnsMeta}
         </article>
 
         <article class="access-card">
           <h3>Moonlight / Sunshine Client</h3>
           <p>Add this host in Moonlight or another Sunshine-compatible client, then pair with the PIN shown by Sunshine.</p>
           <p class="access-meta">Host/IP: <code>${ip}</code></p>
+          ${dnsHostMeta}
         </article>
 
         <article class="access-card">
           <h3>Steam Link / Steam Client</h3>
           <p>After Steam inside the VM signs in, the host should appear in Steam Link or Steam Remote Play. First-time setup is usually easiest through noVNC.</p>
           <p class="access-meta">Target: <code>${escapeHtml(target)}</code></p>
+          ${dnsHostMeta}
         </article>
-
-        ${duckdnsCards}
       </div>
 
       <p class="access-note">
         The VM can report <code>RUNNING</code> before the desktop and Sunshine finish booting. On a cold start, give noVNC and Sunshine up to a minute or two to become reachable.
       </p>
-    `;
-  }
-
-  function renderDuckDnsAccess(entries) {
-    if (!entries || !entries.length) {
-      return "";
-    }
-
-    const rows = entries
-      .map((entry) => {
-        const domain = escapeHtml(entry.domain || "");
-        const novnc = escapeHtml(entry.novnc || "");
-        const sunshine = escapeHtml(entry.sunshine || "");
-        return `
-          <div class="access-dns-row">
-            <span><code>${domain}</code></span>
-            <a href="${novnc}" target="_blank" rel="noreferrer">noVNC DNS</a>
-            <a href="${sunshine}" target="_blank" rel="noreferrer">Sunshine DNS</a>
-          </div>
-        `;
-      })
-      .join("");
-
-    return `
-      <article class="access-card accent">
-        <h3>Stable DNS Access</h3>
-        <p>Use the DuckDNS hostname instead of the raw IP if you want a stable address in bookmarks or client configuration.</p>
-        <div class="access-links stacked">
-          ${rows}
-        </div>
-      </article>
     `;
   }
 
