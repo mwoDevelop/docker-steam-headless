@@ -11,7 +11,7 @@
     backendUrl: document.querySelector("#backend-url"),
     connect: document.querySelector("#connect"),
     authStatus: document.querySelector("#auth-status"),
-    googleButton: document.querySelector("#google-button"),
+    googleSignIn: document.querySelector("#google-sign-in"),
     signOut: document.querySelector("#sign-out"),
     targetSummary: document.querySelector("#target-summary"),
     refreshStatus: document.querySelector("#refresh-status"),
@@ -26,6 +26,7 @@
     backendUrl: "",
     backendConfig: null,
     googleInitializedFor: "",
+    googleTokenClient: null,
     token: "",
     user: null,
     lastStatus: null,
@@ -66,6 +67,7 @@
   function setBusy(nextBusy) {
     state.isBusy = nextBusy;
     elements.connect.disabled = nextBusy;
+    elements.googleSignIn.disabled = nextBusy || !state.backendConfig;
     elements.refreshStatus.disabled = nextBusy || !state.user;
     elements.actionButtons.forEach((button) => {
       button.disabled = nextBusy || !state.user;
@@ -162,7 +164,7 @@
 
   async function waitForGoogleIdentity() {
     for (let attempt = 0; attempt < 50; attempt += 1) {
-      if (window.google && window.google.accounts && window.google.accounts.id) {
+      if (window.google && window.google.accounts && window.google.accounts.oauth2) {
         return;
       }
       await wait(200);
@@ -217,21 +219,12 @@
 
     await waitForGoogleIdentity();
 
-    window.google.accounts.id.initialize({
+    state.googleTokenClient = window.google.accounts.oauth2.initTokenClient({
       client_id: clientId,
-      callback: handleGoogleCredential,
-      auto_select: false,
-      cancel_on_tap_outside: true,
-    });
-
-    elements.googleButton.innerHTML = "";
-    window.google.accounts.id.renderButton(elements.googleButton, {
-      type: "standard",
-      theme: "outline",
-      size: "large",
-      width: 280,
-      text: "signin_with",
-      shape: "pill",
+      scope: "openid email profile",
+      prompt: "select_account",
+      callback: handleGoogleToken,
+      error_callback: handleGoogleOAuthError,
     });
 
     state.googleInitializedFor = clientId;
@@ -246,21 +239,26 @@
     }
   }
 
-  function clearSession() {
+  function clearSession(options) {
+    const revokeGoogleSession = Boolean(options && options.revokeGoogleSession);
+    const token = state.token;
     storeSessionToken("");
     state.user = null;
     updateAuthUi();
     setBusy(false);
-    if (window.google && window.google.accounts && window.google.accounts.id) {
-      window.google.accounts.id.disableAutoSelect();
+    if (revokeGoogleSession && token && window.google && window.google.accounts && window.google.accounts.oauth2) {
+      window.google.accounts.oauth2.revoke(token, () => {});
     }
   }
 
-  async function handleGoogleCredential(response) {
+  async function handleGoogleToken(response) {
     try {
+      if (response.error) {
+        throw new Error(response.error_description || response.error);
+      }
       setBusy(true);
       setBanner("Verifying Google session...", "warning");
-      storeSessionToken(response.credential || "");
+      storeSessionToken(response.access_token || "");
       await restoreSession();
       await refreshStatus({ silent: true });
     } catch (error) {
@@ -269,6 +267,26 @@
     } finally {
       setBusy(false);
     }
+  }
+
+  function handleGoogleOAuthError(error) {
+    clearSession();
+    if (!error || !error.type) {
+      handleError(new Error("Google sign-in failed."));
+      return;
+    }
+
+    if (error.type === "popup_closed") {
+      setBanner("Google sign-in popup was closed before authentication finished.", "warning");
+      return;
+    }
+
+    if (error.type === "popup_failed_to_open") {
+      handleError(new Error("Google sign-in popup failed to open. Allow popups for this page and try again."));
+      return;
+    }
+
+    handleError(new Error(`Google sign-in failed: ${error.type}`));
   }
 
   async function restoreSession() {
@@ -530,8 +548,27 @@
     }
   });
 
+  elements.googleSignIn.addEventListener("click", async () => {
+    if (state.isBusy) {
+      return;
+    }
+    try {
+      setBusy(true);
+      if (!state.googleTokenClient) {
+        if (!state.backendConfig || !state.backendConfig.googleClientId) {
+          throw new Error("Connect the backend before signing in.");
+        }
+        await initializeGoogle(state.backendConfig.googleClientId);
+      }
+      state.googleTokenClient.requestAccessToken();
+    } catch (error) {
+      handleError(error);
+      setBusy(false);
+    }
+  });
+
   elements.signOut.addEventListener("click", () => {
-    clearSession();
+    clearSession({ revokeGoogleSession: true });
     setBanner("Google session cleared from this browser session.", "success");
   });
 

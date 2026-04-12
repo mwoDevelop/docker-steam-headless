@@ -180,11 +180,11 @@ def options_passthrough():
 def require_user() -> dict[str, Any]:
     auth_header = request.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):
-        raise ApiError("Missing Google ID token.", 401)
+        raise ApiError("Missing Google token.", 401)
 
     token = auth_header.removeprefix("Bearer ").strip()
     if not token:
-        raise ApiError("Missing Google ID token.", 401)
+        raise ApiError("Missing Google token.", 401)
 
     client_ids = CONFIG["google_client_ids"]
     if not client_ids:
@@ -198,11 +198,12 @@ def require_user() -> dict[str, Any]:
             info = id_token.verify_oauth2_token(token, verifier)
             if info.get("aud") not in client_ids:
                 raise ValueError("Token audience is not allowed.")
-    except ValueError as error:
-        raise ApiError(f"Invalid Google ID token: {error}", 401) from error
+    except ValueError:
+        info = google_userinfo(token)
 
     email = str(info.get("email", "")).lower()
     hd = str(info.get("hd", "")).lower()
+    email_domain = email.split("@", 1)[1] if "@" in email else ""
     email_verified = bool(info.get("email_verified"))
     if not email_verified or not email:
         raise ApiError("Google account email is not verified.", 403)
@@ -210,7 +211,11 @@ def require_user() -> dict[str, Any]:
     allowed_emails = CONFIG["allowed_google_emails"]
     allowed_domains = CONFIG["allowed_google_domains"]
     if allowed_emails or allowed_domains:
-        allowed = email in allowed_emails or (hd and hd in allowed_domains)
+        allowed = (
+            email in allowed_emails
+            or (hd and hd in allowed_domains)
+            or (email_domain and email_domain in allowed_domains)
+        )
         if not allowed:
             raise ApiError(f"Google account {email} is not allowed.", 403)
 
@@ -221,6 +226,21 @@ def require_user() -> dict[str, Any]:
         "sub": info.get("sub", ""),
         "hd": hd,
     }
+
+
+def google_userinfo(token: str) -> dict[str, Any]:
+    response = requests.get(
+        "https://openidconnect.googleapis.com/v1/userinfo",
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=10,
+    )
+    if response.status_code != 200:
+        raise ApiError("Invalid Google token.", 401)
+
+    info = response.json()
+    if not isinstance(info, dict):
+        raise ApiError("Invalid Google token.", 401)
+    return info
 
 
 def compute_request(method: str, url: str, **kwargs) -> dict[str, Any]:
