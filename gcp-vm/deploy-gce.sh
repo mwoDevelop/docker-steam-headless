@@ -9,14 +9,11 @@ set -euo pipefail
 ROOT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")"/.. && pwd)
 STARTUP_SCRIPT="${ROOT_DIR}/gcp-vm/startup.sh"
 
-# Config (single source of truth)
-CFG_FILE="${ROOT_DIR}/gcp-vm/.env"
-if [[ -f "$CFG_FILE" ]]; then
-  # shellcheck disable=SC1090
-  source "$CFG_FILE"
-fi
+# shellcheck disable=SC1091
+source "${ROOT_DIR}/gcp-vm/lib/env.sh"
+load_gcp_vm_env "$ROOT_DIR"
 
-# Defaults (overridable via environment or gcp-vm/.env)
+# Defaults (overridable via environment or local gcp-vm/.env* files)
 GCP_PROJECT=${GCP_PROJECT:-}
 GCP_ZONE=${GCP_ZONE:-europe-central2-b}
 GCE_NAME=${GCE_NAME:-steam-gpu}
@@ -104,7 +101,7 @@ if [[ -z "${GCP_PROJECT}" ]]; then
 fi
 
 if [[ "${USER_PASSWORD}" == "change-me" || "${SUNSHINE_PASS}" == "change-me" ]]; then
-  echo "WARNING: USER_PASSWORD/SUNSHINE_PASS still use placeholder values. Update gcp-vm/.env before exposing the VM publicly." >&2
+  echo "WARNING: USER_PASSWORD/SUNSHINE_PASS still use placeholder values. Update gcp-vm/.env.secrets before exposing the VM publicly." >&2
 fi
 
 STEAM_ENV_FILE=$(mktemp)

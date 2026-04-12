@@ -32,6 +32,7 @@ profile_file_for() {
 load_gcp_v8s_env() {
   local root_dir="${1:?root_dir is required}"
   local env_file="${ENV_FILE:-${root_dir}/.env}"
+  local env_secrets_file="${ENV_SECRETS_FILE:-${root_dir}/.env.secrets}"
   local active_profile_file="${root_dir}/.active-profile"
   local profile_requested
   local profile_file
@@ -68,6 +69,11 @@ load_gcp_v8s_env() {
   # shellcheck disable=SC1090
   source "$profile_file"
 
+  if [[ -f "$env_secrets_file" ]]; then
+    # shellcheck disable=SC1090
+    source "$env_secrets_file"
+  fi
+
   if [[ -z "${GCP_PROJECT:-}" ]]; then
     echo "[gcp-v8s] ERROR: GCP_PROJECT is empty in ${env_file}" >&2
     return 1
@@ -77,6 +83,9 @@ load_gcp_v8s_env() {
   ACTIVE_PROFILE_FILE="$profile_file"
   ACTIVE_PROFILE_STATE_FILE="$active_profile_file"
   ACTIVE_ENV_FILE="$env_file"
+  ACTIVE_ENV_SECRETS_FILE="$env_secrets_file"
   ENV_FILE="$env_file"
-  export ACTIVE_PROFILE ACTIVE_PROFILE_FILE ACTIVE_PROFILE_STATE_FILE ACTIVE_ENV_FILE ENV_FILE
+  ENV_SECRETS_FILE="$env_secrets_file"
+  export ACTIVE_PROFILE ACTIVE_PROFILE_FILE ACTIVE_PROFILE_STATE_FILE ACTIVE_ENV_FILE ACTIVE_ENV_SECRETS_FILE
+  export ENV_FILE ENV_SECRETS_FILE
 }

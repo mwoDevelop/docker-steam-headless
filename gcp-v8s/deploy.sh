@@ -106,9 +106,9 @@ printf '%s\n' "$ACTIVE_PROFILE" > "$ACTIVE_PROFILE_STATE_FILE"
 
 log() { printf '%s [gcp-v8s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
 warn_placeholder_secrets() {
-  if [[ "$USER_PASSWORD" == "change-me" || "$SUNSHINE_PASS" == "change-me" ]]; then
-    log "WARN: USER_PASSWORD/SUNSHINE_PASS still use placeholder values. Set real values in ${ACTIVE_ENV_FILE} before exposing the service publicly."
-  fi
+if [[ "$USER_PASSWORD" == "change-me" || "$SUNSHINE_PASS" == "change-me" ]]; then
+  log "WARN: USER_PASSWORD/SUNSHINE_PASS still use placeholder values. Set real values in local .env.secrets before exposing the service publicly."
+fi
 }
 normalize_gpu_sharing_strategy() {
   local value="${1:-}"
@@ -374,4 +374,4 @@ echo "Sources:    ${SOURCE_RANGES}"
 echo "noVNC:      http://${WEB_IP:-<pending>}:${WEB_PORT_NOVNC}/"
 echo "Sunshine:   https://${WEB_IP:-<pending>}:${WEB_PORT_SUNSHINE}/"
 echo "SUNSHINE_USER=${SUNSHINE_USER}"
-echo "SUNSHINE_PASS=<hidden; set in ${ACTIVE_ENV_FILE}>"
+echo "SUNSHINE_PASS=<hidden; set in local env files>"

@@ -15,15 +15,13 @@ set -euo pipefail
 #   vm-ctl.sh install prism   # install PrismLauncher in container
 #   vm-ctl.sh install chrome  # install Chrome in container
 #
-# Config file: gcp-vm/.env (copy from gcp-vm/.env.example)
+# Config files: gcp-vm/.env + optional gcp-vm/.env.gcp + gcp-vm/.env.secrets
 # Duration format for "up": <number><unit>, where unit is s|m|h|d.
 
 ROOT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")"/.. && pwd)
-CFG_FILE="${ROOT_DIR}/gcp-vm/.env"
-if [[ -f "$CFG_FILE" ]]; then
-  # shellcheck disable=SC1090
-  source "$CFG_FILE"
-fi
+# shellcheck disable=SC1091
+source "${ROOT_DIR}/gcp-vm/lib/env.sh"
+load_gcp_vm_env "$ROOT_DIR"
 
 GCP_PROJECT=${GCP_PROJECT:-}
 GCP_ZONE=${GCP_ZONE:-europe-central2-b}
@@ -525,9 +523,12 @@ Commands:
   install help    Show install targets and examples
   help            Show this help
 
-Env (gcp-vm/.env, copy from gcp-vm/.env.example):
-  GCP_PROJECT, GCP_ZONE, GCE_NAME, FW_RULE_WEB, FW_RULE_SUN, FW_TAGS, FW_NET,
-  DUCKDNS_DOMAINS, DUCKDNS_TOKEN
+Env (copy from gcp-vm/.env.example and gcp-vm/.env.secrets.example):
+  gcp-vm/.env:
+    GCP_PROJECT, GCP_ZONE, GCE_NAME, FW_RULE_WEB, FW_RULE_SUN, FW_TAGS, FW_NET,
+    DUCKDNS_DOMAINS
+  gcp-vm/.env.secrets:
+    DUCKDNS_TOKEN
 
 One-liner deployment examples:
   Start VM + lock firewall to your current IP:

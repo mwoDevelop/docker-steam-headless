@@ -60,9 +60,9 @@ log() { printf '%s [gcp-v8s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
 err() { log "ERROR: $*" >&2; exit 1; }
 
 warn_placeholder_secrets() {
-  if [[ "$USER_PASSWORD" == "change-me" || "$SUNSHINE_PASS" == "change-me" ]]; then
-    log "WARN: USER_PASSWORD/SUNSHINE_PASS still use placeholder values. Set real values in ${ACTIVE_ENV_FILE} before exposing the service publicly."
-  fi
+if [[ "$USER_PASSWORD" == "change-me" || "$SUNSHINE_PASS" == "change-me" ]]; then
+  log "WARN: USER_PASSWORD/SUNSHINE_PASS still use placeholder values. Set real values in local .env.secrets before exposing the service publicly."
+fi
 }
 
 usage() {
@@ -462,4 +462,4 @@ if [[ -n "$DUCKDNS_FQDN" ]]; then
   echo "Sun DNS:    https://${DUCKDNS_FQDN}:${WEB_PORT_SUNSHINE}/"
 fi
 echo "SUNSHINE_USER=${SUNSHINE_USER}"
-echo "SUNSHINE_PASS=<hidden; set in ${ACTIVE_ENV_FILE}>"
+echo "SUNSHINE_PASS=<hidden; set in local env files>"

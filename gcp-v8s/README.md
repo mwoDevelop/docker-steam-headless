@@ -81,15 +81,22 @@ Opcjonalne usunięcie starego klastra `kub-free`:
 ## Konfiguracja
 
 - Skrypty zawsze czytają wspólne `./.env`.
+- Jeśli istnieje `./.env.secrets`, skrypty dociągają je po `./.env`.
 - Potem automatycznie dociągają profil z `./profiles/<profil>.env`.
 - Profil możesz nadpisać parametrem `--profile` tylko w `deploy.sh`.
 - `deploy.sh` zapisuje aktywny profil do `./.active-profile`.
 - Pozostałe skrypty używają `./.active-profile`.
 - Bez `./.active-profile` skrypty zgłoszą błąd (najpierw uruchom `deploy.sh --profile ...`).
 - `./.env` jest lokalny (gitignored). Wzorzec: `./.env.example`.
-- W lokalnym `.env` ustaw własne sekrety (`USER_PASSWORD`, `SUNSHINE_PASS`, `DUCKDNS_TOKEN`) i nie commituj tego pliku.
-- Startowo skopiuj: `cp .env.example .env`.
-- Nie używamy już `.env.local` — cała konfiguracja jest w jednym pliku `.env`.
+- `./.env.secrets` jest lokalny (gitignored). Wzorzec: `./.env.secrets.example`.
+- Sekrety (`USER_PASSWORD`, `SUNSHINE_PASS`, `DUCKDNS_TOKEN`) trzymaj w `./.env.secrets`, nie w commitowanych plikach.
+- Startowo skopiuj:
+
+```bash
+cp .env.example .env
+cp .env.secrets.example .env.secrets
+```
+
 - Wersjonowane profile `.env` (np. `profiles/l4.env`, `profiles/t4.env`) zawierają tylko ustawienia profilu GPU.
 
 ## Multi-instance `steam-headless`
@@ -138,10 +145,10 @@ Przykład:
 - instancja `gamer1`
 - domena: `my-steam-domain-gamer1.duckdns.org`
 
-Włączenie (lokalnie w `.env`):
+Włączenie:
 - ustaw `DUCKDNS_ENABLED=true`
 - ustaw `DUCKDNS_BASE_DOMAIN=<twoja-domena>`
-- ustaw `DUCKDNS_TOKEN=<token>`
+- ustaw `DUCKDNS_TOKEN=<token>` w lokalnym `.env.secrets`
 - tryb multi-domain: `DUCKDNS_PER_INSTANCE=true` (domyślnie)
 - tryb single-domain: `DUCKDNS_PER_INSTANCE=false` (wszyscy używają `DUCKDNS_BASE_DOMAIN.duckdns.org`)
 - fallback (gdy domena per-instancja nie istnieje): `DUCKDNS_FALLBACK_TO_BASE=true` (domyślnie)
