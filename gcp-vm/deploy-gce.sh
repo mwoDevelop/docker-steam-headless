@@ -8,6 +8,8 @@ set -euo pipefail
 
 ROOT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")"/.. && pwd)
 STARTUP_SCRIPT="${ROOT_DIR}/gcp-vm/startup.sh"
+SHUTDOWN_SCRIPT="${ROOT_DIR}/gcp-vm/shutdown.sh"
+PERSIST_SCRIPT="${ROOT_DIR}/gcp-vm/persist-state.sh"
 
 # shellcheck disable=SC1091
 source "${ROOT_DIR}/gcp-vm/lib/env.sh"
@@ -23,8 +25,13 @@ GPU_COUNT=${GPU_COUNT:-1}
 BOOT_DISK_SIZE=${BOOT_DISK_SIZE:-120GB}
 BOOT_DISK_TYPE=${BOOT_DISK_TYPE:-pd-ssd}
 TAGS=${TAGS:-steam-headless}
+INSTANCE_TEMPLATE_NAME=${INSTANCE_TEMPLATE_NAME:-${GCE_NAME}-template}
 # CIDR allowed to reach Web UI and Sunshine (set to your IP/32 for safety)
 ALLOW_CIDR=${ALLOW_CIDR:-0.0.0.0/0}
+GDRIVE_FOLDER_ID=${GDRIVE_FOLDER_ID:-}
+GDRIVE_STATE_ROOT=${GDRIVE_STATE_ROOT:-steam-vm-state}
+GDRIVE_SERVICE_ACCOUNT_SECRET_NAME=${GDRIVE_SERVICE_ACCOUNT_SECRET_NAME:-steam-vm-state-drive-sa}
+GDRIVE_SERVICE_ACCOUNT_JSON_FILE=${GDRIVE_SERVICE_ACCOUNT_JSON_FILE:-}
 
 NAME=${NAME:-SteamHeadless}
 TZ=${TZ:-Europe/Warsaw}
@@ -115,6 +122,41 @@ render_steam_headless_env > "$STEAM_ENV_FILE"
 echo "Using project=${GCP_PROJECT} zone=${GCP_ZONE} name=${GCE_NAME}"
 gcloud config set project "$GCP_PROJECT" >/dev/null 2>&1 || true
 
+PROJECT_NUMBER=$(gcloud projects describe "$GCP_PROJECT" --format='value(projectNumber)')
+DEFAULT_COMPUTE_SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+
+if [[ -n "$GDRIVE_SERVICE_ACCOUNT_JSON_FILE" ]]; then
+  if [[ ! -f "$GDRIVE_SERVICE_ACCOUNT_JSON_FILE" ]]; then
+    echo "ERROR: GDRIVE_SERVICE_ACCOUNT_JSON_FILE does not exist: ${GDRIVE_SERVICE_ACCOUNT_JSON_FILE}" >&2
+    exit 1
+  fi
+
+  if ! gcloud secrets describe "$GDRIVE_SERVICE_ACCOUNT_SECRET_NAME" --project "$GCP_PROJECT" >/dev/null 2>&1; then
+    gcloud secrets create "$GDRIVE_SERVICE_ACCOUNT_SECRET_NAME" \
+      --project "$GCP_PROJECT" \
+      --replication-policy=automatic >/dev/null
+  fi
+
+  gcloud secrets versions add "$GDRIVE_SERVICE_ACCOUNT_SECRET_NAME" \
+    --project "$GCP_PROJECT" \
+    --data-file="$GDRIVE_SERVICE_ACCOUNT_JSON_FILE" >/dev/null
+fi
+
+if [[ -n "$GDRIVE_FOLDER_ID" ]]; then
+  gcloud secrets add-iam-policy-binding "$GDRIVE_SERVICE_ACCOUNT_SECRET_NAME" \
+    --project "$GCP_PROJECT" \
+    --member="serviceAccount:${DEFAULT_COMPUTE_SA}" \
+    --role="roles/secretmanager.secretAccessor" >/dev/null || true
+fi
+
+INSTANCE_METADATA_ARGS=()
+if [[ -n "$GDRIVE_FOLDER_ID" ]]; then
+  INSTANCE_METADATA_ARGS+=(
+    --metadata
+    "gdrive-folder-id=${GDRIVE_FOLDER_ID},gdrive-state-root=${GDRIVE_STATE_ROOT},gdrive-service-account-secret-name=${GDRIVE_SERVICE_ACCOUNT_SECRET_NAME}"
+  )
+fi
+
 # Firewall: noVNC + SSH
 if ! gcloud compute firewall-rules describe allow-steam-headless-web --project "$GCP_PROJECT" >/dev/null 2>&1; then
   gcloud compute firewall-rules create allow-steam-headless-web \
@@ -147,28 +189,42 @@ else
     --source-ranges="$ALLOW_CIDR" || true
 fi
 
+if gcloud compute instance-templates describe "$INSTANCE_TEMPLATE_NAME" --project "$GCP_PROJECT" >/dev/null 2>&1; then
+  gcloud compute instance-templates delete "$INSTANCE_TEMPLATE_NAME" \
+    --project "$GCP_PROJECT" \
+    --quiet >/dev/null
+fi
+
+gcloud compute instance-templates create "$INSTANCE_TEMPLATE_NAME" \
+  --project="$GCP_PROJECT" \
+  --machine-type="$MACHINE_TYPE" \
+  --accelerator="type=${GPU_TYPE},count=${GPU_COUNT}" \
+  --maintenance-policy=TERMINATE \
+  --restart-on-failure \
+  --image-family=ubuntu-2204-lts \
+  --image-project=ubuntu-os-cloud \
+  --boot-disk-size="$BOOT_DISK_SIZE" \
+  --boot-disk-type="$BOOT_DISK_TYPE" \
+  --tags="$TAGS" \
+  --service-account="$DEFAULT_COMPUTE_SA" \
+  --scopes="https://www.googleapis.com/auth/cloud-platform" \
+  --metadata-from-file startup-script="$STARTUP_SCRIPT",shutdown-script="$SHUTDOWN_SCRIPT",vm-persist-script="$PERSIST_SCRIPT",steam-headless-env="$STEAM_ENV_FILE" \
+  "${INSTANCE_METADATA_ARGS[@]}" >/dev/null
+
 # Create VM if missing
 if ! gcloud compute instances describe "$GCE_NAME" --zone="$GCP_ZONE" --project="$GCP_PROJECT" >/dev/null 2>&1; then
   echo "Creating instance ${GCE_NAME}..."
   gcloud compute instances create "$GCE_NAME" \
     --project="$GCP_PROJECT" \
     --zone="$GCP_ZONE" \
-    --machine-type="$MACHINE_TYPE" \
-    --accelerator="type=${GPU_TYPE},count=${GPU_COUNT}" \
-    --maintenance-policy=TERMINATE \
-    --restart-on-failure \
-    --image-family=ubuntu-2204-lts \
-    --image-project=ubuntu-os-cloud \
-    --boot-disk-size="$BOOT_DISK_SIZE" \
-    --boot-disk-type="$BOOT_DISK_TYPE" \
-    --tags="$TAGS" \
-    --metadata-from-file startup-script="$STARTUP_SCRIPT",steam-headless-env="$STEAM_ENV_FILE"
+    --source-instance-template="$INSTANCE_TEMPLATE_NAME"
 else
   echo "Instance ${GCE_NAME} already exists; updating startup metadata."
   gcloud compute instances add-metadata "$GCE_NAME" \
     --project="$GCP_PROJECT" \
     --zone="$GCP_ZONE" \
-    --metadata-from-file startup-script="$STARTUP_SCRIPT",steam-headless-env="$STEAM_ENV_FILE" >/dev/null
+    --metadata-from-file startup-script="$STARTUP_SCRIPT",shutdown-script="$SHUTDOWN_SCRIPT",vm-persist-script="$PERSIST_SCRIPT",steam-headless-env="$STEAM_ENV_FILE" \
+    "${INSTANCE_METADATA_ARGS[@]}" >/dev/null
 fi
 
 echo "Instance details:"

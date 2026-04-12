@@ -1,5 +1,6 @@
 (function () {
   const defaultBackendUrl = "";
+  const defaultAutoStopHours = "3";
 
   const storageKeys = {
     config: "vm-control-cloudrun-config",
@@ -41,6 +42,9 @@
     state.token = window.sessionStorage.getItem(storageKeys.sessionToken) || "";
     state.history = JSON.parse(window.localStorage.getItem(storageKeys.history) || "[]");
     elements.backendUrl.value = state.backendUrl;
+    elements.autoStopHours.value = Object.prototype.hasOwnProperty.call(saved, "autoStopHours")
+      ? String(saved.autoStopHours || "")
+      : defaultAutoStopHours;
     renderHistory();
     renderTargetSummary();
     renderAccess(null);
@@ -53,6 +57,7 @@
       storageKeys.config,
       JSON.stringify({
         backendUrl: state.backendUrl,
+        autoStopHours: String(elements.autoStopHours.value || "").trim(),
       }),
     );
   }
@@ -69,10 +74,22 @@
     state.isBusy = nextBusy;
     elements.connect.disabled = nextBusy;
     elements.googleSignIn.disabled = nextBusy || !state.backendConfig;
-    elements.refreshStatus.disabled = nextBusy || !state.user;
-    elements.autoStopHours.disabled = nextBusy || !state.user;
+    updateActionAvailability();
+  }
+
+  function updateActionAvailability() {
+    const allowed = new Set(
+      state.user && state.lastStatus && Array.isArray(state.lastStatus.allowedCommands)
+        ? state.lastStatus.allowedCommands
+        : state.user
+          ? ["status"]
+          : [],
+    );
+
+    elements.refreshStatus.disabled = state.isBusy || !state.user || !allowed.has("status");
+    elements.autoStopHours.disabled = state.isBusy || !state.user || !allowed.has("start");
     elements.actionButtons.forEach((button) => {
-      button.disabled = nextBusy || !state.user;
+      button.disabled = state.isBusy || !state.user || !allowed.has(button.dataset.command);
     });
   }
 
@@ -99,6 +116,7 @@
     }
     updateBackendUrlVisibility();
     renderTargetSummary();
+    updateActionAvailability();
   }
 
   function updateBackendUrlVisibility() {
@@ -233,6 +251,7 @@
 
     if (state.token) {
       await restoreSession();
+      await refreshStatus({ silent: true });
     }
   }
 
@@ -268,6 +287,8 @@
     const token = state.token;
     storeSessionToken("");
     state.user = null;
+    state.lastStatus = null;
+    renderAccess(null);
     updateAuthUi();
     setBusy(false);
     if (revokeGoogleSession && token && window.google && window.google.accounts && window.google.accounts.oauth2) {
@@ -362,11 +383,22 @@
       throw new Error("Sign in with Google first.");
     }
 
+    if (command === "delete") {
+      const confirmed = window.confirm("Delete will stop the VM, back up state, and remove the instance. Continue?");
+      if (!confirmed) {
+        setBanner("Delete cancelled.", "warning");
+        return;
+      }
+    }
+
     setBusy(true);
     setBanner(`Running "${command}" on the VM...`, "warning");
 
     try {
       const body = { command };
+      if (command === "delete") {
+        body.confirmDelete = true;
+      }
       const autoStopHours = readAutoStopHours(command);
       if (autoStopHours) {
         body.autoStopHours = autoStopHours;
@@ -385,7 +417,8 @@
       const autoStop = data.autoStopHours
         ? ` Auto-stop scheduled after ${data.autoStopHours}h.`
         : "";
-      setBanner(`Command "${command}" completed. Final VM state: ${data.status}.${suffix}${autoStop}`, "success");
+      const finalState = data.instanceExists === false ? "deleted" : data.status;
+      setBanner(`Command "${command}" completed. Final VM state: ${finalState}.${suffix}${autoStop}`, "success");
       pushHistory({
         at: new Date().toISOString(),
         command,
@@ -443,6 +476,7 @@
       const data = await fetchApi("/api/status", { method: "GET" });
       state.lastStatus = data;
       renderAccess(data);
+      updateActionAvailability();
       if (!silent) {
         setBanner(`VM status loaded. Current state: ${data.status}.`, "success");
       }
@@ -464,6 +498,19 @@
     const target = payload.target
       ? `${payload.target.project}/${payload.target.zone}/${payload.target.instance}`
       : "unknown target";
+
+    if (payload.instanceExists === false || payload.status === "NOT_FOUND") {
+      elements.access.className = "access";
+      elements.access.innerHTML = `
+        <div class="access-grid">
+          <article class="access-card">
+            <h3>VM not created</h3>
+            <p>No Compute Engine instance exists yet for <code>${escapeHtml(target)}</code>. Use <code>Create</code> to provision a new VM and restore state from backup when available.</p>
+          </article>
+        </div>
+      `;
+      return;
+    }
 
     if (payload.status !== "RUNNING") {
       elements.access.className = "access";
@@ -513,15 +560,12 @@
 
     elements.access.className = "access";
     elements.access.innerHTML = `
-      <div class="access-grid">
-        <article class="access-card accent">
-          <h3>Browser Desktop</h3>
-          <p>Best for first login, Steam setup, and recovery when streaming clients are not paired yet.</p>
-          <div class="access-links">
-            <a href="${novncUrl}" target="_blank" rel="noreferrer">Open noVNC</a>
-          </div>
-          <p class="access-meta">URL: <code>${novncUrl}</code></p>
-          ${novncDnsMeta}
+        <div class="access-grid">
+        <article class="access-card">
+          <h3>Moonlight / Sunshine Client</h3>
+          <p>Add this host in Moonlight or another Sunshine-compatible client, then pair with the PIN shown by Sunshine.</p>
+          <p class="access-meta">Host/IP: <code>${ip}</code></p>
+          ${dnsHostMeta}
         </article>
 
         <article class="access-card accent">
@@ -537,17 +581,20 @@
         </article>
 
         <article class="access-card">
-          <h3>Moonlight / Sunshine Client</h3>
-          <p>Add this host in Moonlight or another Sunshine-compatible client, then pair with the PIN shown by Sunshine.</p>
-          <p class="access-meta">Host/IP: <code>${ip}</code></p>
-          ${dnsHostMeta}
-        </article>
-
-        <article class="access-card">
           <h3>Steam Link / Steam Client</h3>
           <p>After Steam inside the VM signs in, the host should appear in Steam Link or Steam Remote Play. First-time setup is usually easiest through noVNC.</p>
           <p class="access-meta">Target: <code>${escapeHtml(target)}</code></p>
           ${dnsHostMeta}
+        </article>
+
+        <article class="access-card accent">
+          <h3>Browser Desktop</h3>
+          <p>Best for first login, Steam setup, and recovery when streaming clients are not paired yet.</p>
+          <div class="access-links">
+            <a href="${novncUrl}" target="_blank" rel="noreferrer">Open noVNC</a>
+          </div>
+          <p class="access-meta">URL: <code>${novncUrl}</code></p>
+          ${novncDnsMeta}
         </article>
       </div>
 

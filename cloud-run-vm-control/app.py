@@ -48,6 +48,7 @@ CONFIG = {
     "project": os.environ.get("GCP_PROJECT", ""),
     "zone": os.environ.get("GCP_ZONE", ""),
     "instance": os.environ.get("GCE_NAME", ""),
+    "instance_template": os.environ.get("INSTANCE_TEMPLATE_NAME", ""),
     "allowed_origins": csv_env("ALLOWED_ORIGINS"),
     "google_client_ids": csv_env("GOOGLE_CLIENT_IDS") or csv_env("GOOGLE_CLIENT_ID"),
     "allowed_google_emails": {value.lower() for value in csv_env("ALLOWED_GOOGLE_EMAILS")},
@@ -63,6 +64,7 @@ STEAM_ENV_METADATA_KEY = "steam-headless-env"
 SUNSHINE_USERNAME = "admin"
 MIN_AUTO_STOP_HOURS = 1
 MAX_AUTO_STOP_HOURS = 24
+STATUS_NOT_FOUND = "NOT_FOUND"
 
 
 def require_env(name: str) -> str:
@@ -86,6 +88,18 @@ def instance_url() -> str:
         "https://compute.googleapis.com/compute/v1/"
         f"projects/{project}/zones/{zone}/instances/{instance}"
     )
+
+
+def instances_collection_url() -> str:
+    project = require_env("project")
+    zone = require_env("zone")
+    return f"https://compute.googleapis.com/compute/v1/projects/{project}/zones/{zone}/instances"
+
+
+def instance_template_self_link() -> str:
+    template = CONFIG["instance_template"] or f"{CONFIG['instance']}-template"
+    project = require_env("project")
+    return f"https://compute.googleapis.com/compute/v1/projects/{project}/global/instanceTemplates/{template}"
 
 
 def allowed_origin() -> str | None:
@@ -155,6 +169,7 @@ def options_passthrough():
                     "project": CONFIG["project"],
                     "zone": CONFIG["zone"],
                     "instance": CONFIG["instance"],
+                    "instanceTemplate": CONFIG["instance_template"] or f"{CONFIG['instance']}-template",
                 },
                 "duckdnsDomains": CONFIG["duckdns_domains"],
                 "ports": {
@@ -169,14 +184,14 @@ def options_passthrough():
 
     if request.path == "/api/status":
         user = require_user()
-        instance = get_instance()
+        instance = get_instance_or_none()
         return jsonify(build_status_payload(instance, user=user, command="status"))
 
     if request.path == "/api/command":
         user = require_user()
         payload = request.get_json(silent=True) or {}
         command = str(payload.get("command", "")).strip().lower()
-        if command not in {"status", "start", "stop", "restart"}:
+        if command not in {"status", "start", "stop", "restart", "create", "delete"}:
             raise ApiError("Unsupported command.", 400)
         result = execute_command(command, user, payload)
         return jsonify(result)
@@ -250,9 +265,11 @@ def google_userinfo(token: str) -> dict[str, Any]:
     return info
 
 
-def compute_request(method: str, url: str, **kwargs) -> dict[str, Any]:
+def compute_request(method: str, url: str, *, allow_404: bool = False, **kwargs) -> dict[str, Any] | None:
     response = compute_session().request(method=method, url=url, timeout=30, **kwargs)
     if response.status_code == 404:
+        if allow_404:
+            return None
         raise ApiError(
             f"Instance '{CONFIG['instance']}' was not found in {CONFIG['project']}/{CONFIG['zone']}.",
             404,
@@ -274,6 +291,8 @@ def wait_for_zone_operation(operation: dict[str, Any], timeout_seconds: int = 90
     deadline = time.time() + timeout_seconds
     while time.time() < deadline:
         data = compute_request("GET", url)
+        if data is None:
+            raise ApiError(f"Operation {operation_name} was not found.", 404)
         if str(data.get("status", "")).upper() == "DONE":
             if data.get("error"):
                 raise ApiError(str(data["error"]), 502)
@@ -283,7 +302,15 @@ def wait_for_zone_operation(operation: dict[str, Any], timeout_seconds: int = 90
 
 
 def get_instance() -> dict[str, Any]:
-    return compute_request("GET", instance_url())
+    data = compute_request("GET", instance_url())
+    if data is None:
+        raise ApiError("Instance was not found.", 404)
+    return data
+
+
+def get_instance_or_none() -> dict[str, Any] | None:
+    data = compute_request("GET", instance_url(), allow_404=True)
+    return data if isinstance(data, dict) else None
 
 
 def extract_external_ip(instance: dict[str, Any]) -> str:
@@ -437,14 +464,51 @@ def build_urls(external_ip: str) -> dict[str, Any]:
     return urls
 
 
+def allowed_commands(instance: dict[str, Any] | None) -> list[str]:
+    if instance is None:
+        return ["create"]
+
+    status = str(instance.get("status", "UNKNOWN")).upper()
+    if status == "RUNNING":
+        return ["status", "restart", "stop", "delete"]
+    if status == "TERMINATED":
+        return ["status", "start", "delete"]
+    return ["status", "delete"]
+
+
 def build_status_payload(
-    instance: dict[str, Any],
+    instance: dict[str, Any] | None,
     *,
     user: dict[str, Any],
     command: str,
     duckdns_updated: bool | None = None,
     sunshine_credentials: dict[str, str] | None = None,
 ) -> dict[str, Any]:
+    if instance is None:
+        payload = {
+            "command": command,
+            "target": {
+                "project": CONFIG["project"],
+                "zone": CONFIG["zone"],
+                "instance": CONFIG["instance"],
+            },
+            "status": STATUS_NOT_FOUND,
+            "instanceExists": False,
+            "allowedCommands": allowed_commands(None),
+            "externalIp": "",
+            "duckdnsDomains": CONFIG["duckdns_domains"],
+            "urls": build_urls(""),
+            "user": user,
+            "autoStopHours": "",
+            "sunshineCredentials": {
+                "username": SUNSHINE_USERNAME,
+                "password": "",
+            },
+        }
+        if duckdns_updated is not None:
+            payload["duckdnsUpdated"] = duckdns_updated
+        return payload
+
     external_ip = extract_external_ip(instance)
     status = str(instance.get("status", "UNKNOWN"))
     credentials = sunshine_credentials or sunshine_credentials_from_instance(instance)
@@ -461,6 +525,8 @@ def build_status_payload(
             "instance": CONFIG["instance"],
         },
         "status": status,
+        "instanceExists": True,
+        "allowedCommands": allowed_commands(instance),
         "externalIp": external_ip,
         "duckdnsDomains": CONFIG["duckdns_domains"],
         "urls": build_urls(external_ip),
@@ -485,6 +551,15 @@ def poll_instance_status(target_status: str, timeout_seconds: int = 300) -> dict
     if last_instance:
         return last_instance
     raise ApiError(f"Timed out waiting for instance to reach {target_status}.", 504)
+
+
+def poll_instance_deleted(timeout_seconds: int = 300) -> None:
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        if get_instance_or_none() is None:
+            return
+        time.sleep(3)
+    raise ApiError("Timed out waiting for instance deletion.", 504)
 
 
 def wait_for_external_ip(timeout_seconds: int = 90) -> dict[str, Any]:
@@ -525,13 +600,32 @@ def update_duckdns(external_ip: str) -> bool:
 def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] | None = None) -> dict[str, Any]:
     logging.info("VM command=%s user=%s", command, user.get("email", "<unknown>"))
     payload = payload or {}
-    current_instance = get_instance()
-    current_status = str(current_instance.get("status", "UNKNOWN"))
+    current_instance = get_instance_or_none()
+    current_status = str(current_instance.get("status", STATUS_NOT_FOUND)) if current_instance else STATUS_NOT_FOUND
 
     if command == "status":
         return build_status_payload(current_instance, user=user, command=command)
 
+    if command == "create":
+        if current_instance is not None:
+            raise ApiError("Instance already exists.", 400)
+        operation = compute_request(
+            "POST",
+            instances_collection_url(),
+            params={"sourceInstanceTemplate": instance_template_self_link()},
+            json={"name": CONFIG["instance"]},
+        )
+        if not isinstance(operation, dict):
+            raise ApiError("Failed to create instance.", 502)
+        wait_for_zone_operation(operation, timeout_seconds=180)
+        poll_instance_status("RUNNING", timeout_seconds=240)
+        final_instance = wait_for_external_ip(timeout_seconds=180)
+        updated = update_duckdns(extract_external_ip(final_instance))
+        return build_status_payload(final_instance, user=user, command=command, duckdns_updated=updated)
+
     if command == "start":
+        if current_instance is None:
+            raise ApiError("Instance does not exist. Use Create first.", 400)
         auto_stop_hours = parse_auto_stop_hours(payload)
         if auto_stop_hours is not None and current_status == "RUNNING":
             raise ApiError("Auto-stop can only be scheduled while starting a stopped VM.", 400)
@@ -562,6 +656,8 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
         )
 
     if command == "stop":
+        if current_instance is None:
+            raise ApiError("Instance does not exist.", 400)
         if current_status != "TERMINATED":
             compute_request("POST", f"{instance_url()}/stop")
         final_instance = poll_instance_status("TERMINATED")
@@ -570,11 +666,13 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
         return build_status_payload(final_instance, user=user, command=command)
 
     if command == "restart":
+        if current_instance is None:
+            raise ApiError("Instance does not exist. Use Create first.", 400)
         current_instance, sunshine_credentials = prepare_sunshine_credentials(current_instance)
         if current_status == "RUNNING":
-            compute_request("POST", f"{instance_url()}/reset")
-        else:
-            compute_request("POST", f"{instance_url()}/start")
+            compute_request("POST", f"{instance_url()}/stop")
+            poll_instance_status("TERMINATED")
+        compute_request("POST", f"{instance_url()}/start")
         poll_instance_status("RUNNING")
         final_instance = wait_for_external_ip(timeout_seconds=120)
         updated = update_duckdns(extract_external_ip(final_instance))
@@ -585,6 +683,23 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
             duckdns_updated=updated,
             sunshine_credentials=sunshine_credentials,
         )
+
+    if command == "delete":
+        if current_instance is None:
+            raise ApiError("Instance does not exist.", 400)
+        confirmed = bool(payload.get("confirmDelete"))
+        if not confirmed:
+            raise ApiError("Delete requires confirmation.", 400)
+
+        if current_status != "TERMINATED":
+            compute_request("POST", f"{instance_url()}/stop")
+            poll_instance_status("TERMINATED")
+        operation = compute_request("DELETE", instance_url())
+        if not isinstance(operation, dict):
+            raise ApiError("Failed to delete instance.", 502)
+        wait_for_zone_operation(operation, timeout_seconds=180)
+        poll_instance_deleted(timeout_seconds=120)
+        return build_status_payload(None, user=user, command=command)
 
     raise ApiError("Unsupported command.", 400)
 

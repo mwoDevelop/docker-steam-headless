@@ -269,7 +269,7 @@ input:focus {
 .control-row {
   display: grid;
   gap: 12px;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
 }
 
 .start-options {
@@ -312,6 +312,10 @@ button:disabled {
   color: #051015;
 }
 
+.action.create {
+  background: linear-gradient(135deg, #b0f3ff, #65d3ec);
+}
+
 .action.start {
   background: linear-gradient(135deg, #7cf0d1, #1cc7ae);
 }
@@ -326,6 +330,10 @@ button:disabled {
 
 .action.status {
   background: linear-gradient(135deg, #8fd8ff, #56a8e8);
+}
+
+.action.delete {
+  background: linear-gradient(135deg, #ff7a98, #e8416f);
 }
 
 .ghost {

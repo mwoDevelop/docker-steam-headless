@@ -18,6 +18,67 @@ metadata_get() {
     "http://metadata/computeMetadata/v1/instance/attributes/${key}" || true
 }
 
+metadata_token() {
+  curl "${METADATA_HDR[@]}" \
+    "http://metadata/computeMetadata/v1/instance/service-accounts/default/token" \
+    | jq -r '.access_token'
+}
+
+instance_name() {
+  curl "${METADATA_HDR[@]}" \
+    "http://metadata/computeMetadata/v1/instance/name"
+}
+
+project_id() {
+  curl "${METADATA_HDR[@]}" \
+    "http://metadata/computeMetadata/v1/project/project-id"
+}
+
+zone_name() {
+  local zone
+  zone="$(curl "${METADATA_HDR[@]}" "http://metadata/computeMetadata/v1/instance/zone")"
+  printf '%s\n' "${zone##*/}"
+}
+
+install_persist_script() {
+  local payload
+  local target=/usr/local/bin/vm-persist-state
+  payload="$(metadata_get vm-persist-script)"
+  [[ -n "$payload" ]] || return 0
+  install -d -m 0755 "$(dirname "$target")"
+  printf '%s\n' "$payload" > "$target"
+  chmod 0755 "$target"
+}
+
+sync_env_metadata() {
+  local token project zone name instance_json fingerprint items payload
+  token="$(metadata_token || true)"
+  project="$(project_id || true)"
+  zone="$(zone_name || true)"
+  name="$(instance_name || true)"
+  [[ -n "$token" && -n "$project" && -n "$zone" && -n "$name" ]] || return 0
+
+  instance_json="$(curl --fail --silent --show-error \
+    -H "Authorization: Bearer ${token}" \
+    "https://compute.googleapis.com/compute/v1/projects/${project}/zones/${zone}/instances/${name}" || true)"
+  [[ -n "$instance_json" ]] || return 0
+  fingerprint="$(printf '%s' "$instance_json" | jq -r '.metadata.fingerprint // empty')"
+  [[ -n "$fingerprint" ]] || return 0
+  items="$(printf '%s' "$instance_json" | jq '[.metadata.items // [] | .[] | select(.key != "steam-headless-env")]')"
+  payload="$(jq -n \
+    --arg fingerprint "$fingerprint" \
+    --arg env_value "$(cat "$ENVF")" \
+    --argjson items "$items" \
+    '{fingerprint: $fingerprint, items: ($items + [{key: "steam-headless-env", value: $env_value}])}')"
+
+  curl --fail --silent --show-error \
+    -X POST \
+    -H "Authorization: Bearer ${token}" \
+    -H "Content-Type: application/json" \
+    -d "$payload" \
+    "https://compute.googleapis.com/compute/v1/projects/${project}/zones/${zone}/instances/${name}/setMetadata" >/dev/null || true
+}
+
 schedule_auto_shutdown() {
   local hours
   local next_at
@@ -101,7 +162,7 @@ ensure_sunshine_credentials() {
 
 log "Installing base packages"
 apt-get update -y
-apt-get install -y ca-certificates curl gnupg lsb-release ubuntu-drivers-common jq
+apt-get install -y ca-certificates curl gnupg lsb-release ubuntu-drivers-common jq zstd rclone
 
 if ! command -v nvidia-smi >/dev/null 2>&1; then
   log "Installing NVIDIA driver (ubuntu-drivers autoinstall)"
@@ -145,6 +206,7 @@ install -d -m 0755 /opt/container-data/steam-headless/home
 install -d -m 0755 /opt/container-data/steam-headless/sockets/.X11-unix
 install -d -m 0755 /opt/container-data/steam-headless/sockets/pulse
 install -d -m 0777 /mnt/games || true
+install_persist_script
 
 cd /opt/container-services/steam-headless
 
@@ -216,6 +278,11 @@ ensure_env_key_missing NVIDIA_VISIBLE_DEVICES "all"
 ensure_env_key_missing NVIDIA_DRIVER_VERSION ""
 ensure_sunshine_credentials
 chmod 600 "$ENVF"
+sync_env_metadata
+
+if [ -x /usr/local/bin/vm-persist-state ]; then
+  /usr/local/bin/vm-persist-state restore || log "State restore skipped or failed"
+fi
 
 docker compose "${COMPOSE_FILES[@]}" up -d
 

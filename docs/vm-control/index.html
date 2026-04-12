@@ -91,10 +91,12 @@
         </div>
 
         <div class="control-row">
+          <button class="action create" type="button" data-command="create">Create</button>
           <button class="action start" type="button" data-command="start">Start</button>
           <button class="action restart" type="button" data-command="restart">Restart</button>
           <button class="action stop" type="button" data-command="stop">Stop</button>
           <button class="action status" type="button" data-command="status">Status</button>
+          <button class="action delete" type="button" data-command="delete">Delete</button>
         </div>
 
         <div class="start-options">
@@ -108,6 +110,7 @@
               max="24"
               step="1"
               inputmode="numeric"
+              value="3"
               placeholder="Hours, optional"
             >
           </label>
@@ -152,6 +155,6 @@
       </section>
     </main>
 
-    <script src="./app.js?v=sunshine-creds-20260412"></script>
+    <script src="./app.js?v=vm-persistence-20260412"></script>
   </body>
 </html>
