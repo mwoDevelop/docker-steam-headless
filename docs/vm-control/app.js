@@ -492,6 +492,7 @@
     const ip = escapeHtml(payload.externalIp);
     const novncUrl = payload.urls && payload.urls.novnc ? escapeHtml(payload.urls.novnc) : "";
     const sunshineUrl = payload.urls && payload.urls.sunshine ? escapeHtml(payload.urls.sunshine) : "";
+    const sunshineCredentials = payload.sunshineCredentials || {};
     const duckdnsEntries = payload.urls && payload.urls.duckdns ? payload.urls.duckdns : [];
     const primaryDuckDns = duckdnsEntries.length ? duckdnsEntries[0] : null;
     const novncDnsMeta = primaryDuckDns && primaryDuckDns.novnc
@@ -503,6 +504,12 @@
     const dnsHostMeta = primaryDuckDns && primaryDuckDns.domain
       ? `<p class="access-meta">DNS Host: <code>${escapeHtml(primaryDuckDns.domain)}</code></p>`
       : "";
+    const sunshineUserMeta = sunshineCredentials.username
+      ? `<p class="access-meta">Username: <code>${escapeHtml(sunshineCredentials.username)}</code></p>`
+      : "";
+    const sunshinePasswordMeta = sunshineCredentials.password
+      ? `<p class="access-meta">Password: <code>${escapeHtml(sunshineCredentials.password)}</code></p>`
+      : `<p class="access-meta">Password: <code>unavailable</code></p>`;
 
     elements.access.className = "access";
     elements.access.innerHTML = `
@@ -525,6 +532,8 @@
           </div>
           <p class="access-meta">URL: <code>${sunshineUrl}</code></p>
           ${sunshineDnsMeta}
+          ${sunshineUserMeta}
+          ${sunshinePasswordMeta}
         </article>
 
         <article class="access-card">

@@ -1,5 +1,6 @@
 import logging
 import os
+import secrets
 import time
 from functools import lru_cache
 from typing import Any
@@ -58,6 +59,8 @@ CONFIG = {
 }
 
 AUTO_STOP_METADATA_KEY = "vm-auto-shutdown-hours"
+STEAM_ENV_METADATA_KEY = "steam-headless-env"
+SUNSHINE_USERNAME = "admin"
 MIN_AUTO_STOP_HOURS = 1
 MAX_AUTO_STOP_HOURS = 24
 
@@ -345,6 +348,71 @@ def parse_auto_stop_hours(payload: dict[str, Any]) -> int | None:
     return value
 
 
+def metadata_env_value(raw_env: str, key: str) -> str:
+    for line in raw_env.splitlines():
+        if line.startswith(f"{key}="):
+            return line.split("=", 1)[1]
+    return ""
+
+
+def upsert_metadata_env_value(raw_env: str, key: str, value: str) -> str:
+    lines = raw_env.splitlines()
+    output: list[str] = []
+    replaced = False
+    for line in lines:
+        if line.startswith(f"{key}="):
+            if not replaced:
+                output.append(f"{key}={value}")
+                replaced = True
+            continue
+        output.append(line)
+
+    if not replaced:
+        output.append(f"{key}={value}")
+
+    return "\n".join(output)
+
+
+def generate_sunshine_password() -> str:
+    return secrets.token_hex(12)
+
+
+def update_steam_env_metadata(instance: dict[str, Any], values: dict[str, str]) -> tuple[dict[str, Any], str]:
+    current_env = metadata_value(instance, STEAM_ENV_METADATA_KEY)
+    updated_env = current_env
+    for key, value in values.items():
+        updated_env = upsert_metadata_env_value(updated_env, key, value)
+
+    if updated_env == current_env:
+        return instance, current_env
+
+    set_instance_metadata_value(instance, STEAM_ENV_METADATA_KEY, updated_env)
+    return get_instance(), updated_env
+
+
+def sunshine_credentials_from_env(raw_env: str) -> dict[str, str]:
+    return {
+        "username": metadata_env_value(raw_env, "SUNSHINE_USER") or SUNSHINE_USERNAME,
+        "password": metadata_env_value(raw_env, "SUNSHINE_PASS"),
+    }
+
+
+def sunshine_credentials_from_instance(instance: dict[str, Any]) -> dict[str, str]:
+    return sunshine_credentials_from_env(metadata_value(instance, STEAM_ENV_METADATA_KEY))
+
+
+def prepare_sunshine_credentials(instance: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:
+    password = generate_sunshine_password()
+    updated_instance, _ = update_steam_env_metadata(
+        instance,
+        {
+            "SUNSHINE_USER": SUNSHINE_USERNAME,
+            "SUNSHINE_PASS": password,
+        },
+    )
+    return updated_instance, {"username": SUNSHINE_USERNAME, "password": password}
+
+
 def build_urls(external_ip: str) -> dict[str, Any]:
     urls: dict[str, Any] = {
         "novnc": "",
@@ -375,9 +443,16 @@ def build_status_payload(
     user: dict[str, Any],
     command: str,
     duckdns_updated: bool | None = None,
+    sunshine_credentials: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     external_ip = extract_external_ip(instance)
     status = str(instance.get("status", "UNKNOWN"))
+    credentials = sunshine_credentials or sunshine_credentials_from_instance(instance)
+    if status != "RUNNING":
+        credentials = {
+            "username": credentials.get("username", SUNSHINE_USERNAME) or SUNSHINE_USERNAME,
+            "password": "",
+        }
     payload = {
         "command": command,
         "target": {
@@ -391,6 +466,7 @@ def build_status_payload(
         "urls": build_urls(external_ip),
         "user": user,
         "autoStopHours": metadata_value(instance, AUTO_STOP_METADATA_KEY),
+        "sunshineCredentials": credentials,
     }
     if duckdns_updated is not None:
         payload["duckdnsUpdated"] = duckdns_updated
@@ -460,7 +536,9 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
         if auto_stop_hours is not None and current_status == "RUNNING":
             raise ApiError("Auto-stop can only be scheduled while starting a stopped VM.", 400)
 
+        sunshine_credentials = sunshine_credentials_from_instance(current_instance)
         if current_status != "RUNNING":
+            current_instance, sunshine_credentials = prepare_sunshine_credentials(current_instance)
             set_instance_metadata_value(
                 current_instance,
                 AUTO_STOP_METADATA_KEY,
@@ -475,7 +553,13 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
         else:
             final_instance = wait_for_external_ip()
         updated = update_duckdns(extract_external_ip(final_instance))
-        return build_status_payload(final_instance, user=user, command=command, duckdns_updated=updated)
+        return build_status_payload(
+            final_instance,
+            user=user,
+            command=command,
+            duckdns_updated=updated,
+            sunshine_credentials=sunshine_credentials,
+        )
 
     if command == "stop":
         if current_status != "TERMINATED":
@@ -486,6 +570,7 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
         return build_status_payload(final_instance, user=user, command=command)
 
     if command == "restart":
+        current_instance, sunshine_credentials = prepare_sunshine_credentials(current_instance)
         if current_status == "RUNNING":
             compute_request("POST", f"{instance_url()}/reset")
         else:
@@ -493,7 +578,13 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
         poll_instance_status("RUNNING")
         final_instance = wait_for_external_ip(timeout_seconds=120)
         updated = update_duckdns(extract_external_ip(final_instance))
-        return build_status_payload(final_instance, user=user, command=command, duckdns_updated=updated)
+        return build_status_payload(
+            final_instance,
+            user=user,
+            command=command,
+            duckdns_updated=updated,
+            sunshine_credentials=sunshine_credentials,
+        )
 
     raise ApiError("Unsupported command.", 400)
 

@@ -75,6 +75,30 @@ ensure_env_key_missing() {
   grep -q "^${key}=" "$ENVF" || echo "${key}=${value}" >> "$ENVF"
 }
 
+set_env_value() {
+  local key="$1"
+  local value="$2"
+  if grep -q "^${key}=" "$ENVF"; then
+    sed -i -E "s#^${key}=.*#${key}=${value}#" "$ENVF"
+  else
+    echo "${key}=${value}" >> "$ENVF"
+  fi
+}
+
+generate_runtime_password() {
+  od -An -N12 -tx1 /dev/urandom | tr -d ' \n'
+}
+
+ensure_sunshine_credentials() {
+  local current_pass
+  set_env_value SUNSHINE_USER "admin"
+  current_pass="$(awk -F= '/^SUNSHINE_PASS=/{print substr($0,index($0,"=")+1)}' "$ENVF" | tail -n1)"
+  if [ -z "$current_pass" ] || [ "$current_pass" = "change-me" ]; then
+    set_env_value SUNSHINE_PASS "$(generate_runtime_password)"
+    log "Generated runtime Sunshine password"
+  fi
+}
+
 log "Installing base packages"
 apt-get update -y
 apt-get install -y ca-certificates curl gnupg lsb-release ubuntu-drivers-common jq
@@ -190,6 +214,7 @@ ensure_env_key_missing DISPLAY_CDEPTH "24"
 ensure_env_key_missing NVIDIA_DRIVER_CAPABILITIES "all"
 ensure_env_key_missing NVIDIA_VISIBLE_DEVICES "all"
 ensure_env_key_missing NVIDIA_DRIVER_VERSION ""
+ensure_sunshine_credentials
 chmod 600 "$ENVF"
 
 docker compose "${COMPOSE_FILES[@]}" up -d

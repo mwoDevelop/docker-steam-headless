@@ -134,6 +134,30 @@ ensure_env_key_missing() {
   grep -q "^${key}=" "$ENVF" || echo "${key}=${value}" >> "$ENVF"
 }
 
+set_env_value() {
+  local key="$1"
+  local value="$2"
+  if grep -q "^${key}=" "$ENVF"; then
+    sed -i -E "s#^${key}=.*#${key}=${value}#" "$ENVF"
+  else
+    echo "${key}=${value}" >> "$ENVF"
+  fi
+}
+
+generate_runtime_password() {
+  od -An -N12 -tx1 /dev/urandom | tr -d ' \n'
+}
+
+ensure_sunshine_credentials() {
+  local current_pass
+  set_env_value SUNSHINE_USER "admin"
+  current_pass="$(awk -F= '/^SUNSHINE_PASS=/{print substr($0,index($0,"=")+1)}' "$ENVF" | tail -n1)"
+  if [ -z "$current_pass" ] || [ "$current_pass" = "change-me" ]; then
+    set_env_value SUNSHINE_PASS "$(generate_runtime_password)"
+    echo "[remote-setup] Generated runtime Sunshine password"
+  fi
+}
+
 ensure_env_key_missing ENABLE_SUNSHINE "true"
 ensure_env_key_missing SUNSHINE_USER "admin"
 ensure_env_key_missing SUNSHINE_PASS "change-me"
@@ -142,6 +166,7 @@ ensure_env_key_missing DISPLAY_SIZEW "1920"
 ensure_env_key_missing DISPLAY_SIZEH "1080"
 ensure_env_key_missing DISPLAY_REFRESH "60"
 ensure_env_key_missing DISPLAY_CDEPTH "24"
+ensure_sunshine_credentials
 chmod 600 "$ENVF"
 
 CFG_HOST="/opt/container-data/steam-headless/home/.config/sunshine/sunshine.conf"

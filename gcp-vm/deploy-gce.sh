@@ -100,8 +100,12 @@ if [[ -z "${GCP_PROJECT}" ]]; then
   exit 1
 fi
 
-if [[ "${USER_PASSWORD}" == "change-me" || "${SUNSHINE_PASS}" == "change-me" ]]; then
-  echo "WARNING: USER_PASSWORD/SUNSHINE_PASS still use placeholder values. Update gcp-vm/.env.secrets before exposing the VM publicly." >&2
+if [[ "${USER_PASSWORD}" == "change-me" ]]; then
+  echo "WARNING: USER_PASSWORD still uses a placeholder value. Update gcp-vm/.env.secrets before exposing the VM publicly." >&2
+fi
+
+if [[ "${SUNSHINE_PASS}" == "change-me" ]]; then
+  echo "INFO: SUNSHINE_PASS uses a placeholder and will be rotated to a random runtime password when the VM starts from the control panel." >&2
 fi
 
 STEAM_ENV_FILE=$(mktemp)
