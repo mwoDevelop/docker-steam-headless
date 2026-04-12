@@ -1,0 +1,39 @@
+{
+    "env": {
+        "PATH": "$(PATH):$(HOME)\/.local\/bin"
+    },
+    "apps": [
+        {
+            "name": "Desktop",
+            "image-path": "desktop.png",
+            "exclude-global-prep-cmd": "true"
+        },
+        {
+            "name": "Steam Big Picture",
+            "image-path": "steam.png",
+            "exclude-global-prep-cmd": "true",
+            "detached": [
+                "\/usr\/games\/steam steam:\/\/open\/bigpicture",
+                "\/usr\/bin\/sunshine-run sleep infinity"
+            ],
+            "prep-cmd": [
+                {
+                    "do": "",
+                    "undo": "sh -c \"sleep 5 && pkill -f -2 \/usr\/bin\/sunshine\""
+                },
+                {
+                    "do": "",
+                    "undo": "\/usr\/bin\/sunshine-stop"
+                },
+                {
+                    "do": "",
+                    "undo": "\/usr\/bin\/xfce4-close-all-windows"
+                },
+                {
+                    "do": "",
+                    "undo": "\/usr\/games\/steam steam:\/\/close\/bigpicture"
+                }
+            ]
+        }
+    ]
+}

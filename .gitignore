@@ -1,0 +1,7 @@
+config
+# Local environment files (keep examples as *.env.example)
+gcp-vm/.env
+gcp-vm/.env.gcp
+gcp-v8s/.env
+gcp-v8s/.active-profile
+docs/compose-files/.env

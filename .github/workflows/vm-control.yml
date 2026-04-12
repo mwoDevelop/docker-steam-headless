@@ -1,0 +1,223 @@
+name: VM Control
+run-name: >-
+  VM ${{ inputs.command }} ·
+  ${{ inputs.instance != '' && inputs.instance || vars.GCE_NAME != '' && vars.GCE_NAME || 'instance' }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      command:
+        description: Action to execute against the GCE VM
+        required: true
+        type: choice
+        options:
+          - status
+          - start
+          - stop
+          - restart
+      project:
+        description: Optional override for the GCP project
+        required: false
+        type: string
+      zone:
+        description: Optional override for the GCP zone
+        required: false
+        type: string
+      instance:
+        description: Optional override for the GCE instance name
+        required: false
+        type: string
+      wait_for_running:
+        description: Wait until the VM reports RUNNING after start/restart
+        required: false
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+
+permissions:
+  contents: read
+
+jobs:
+  control:
+    name: Control GCE VM
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DEFAULT_GCP_PROJECT: ${{ vars.GCP_PROJECT }}
+      DEFAULT_GCP_ZONE: ${{ vars.GCP_ZONE }}
+      DEFAULT_GCE_NAME: ${{ vars.GCE_NAME }}
+
+    steps:
+      - name: Validate workflow configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          project="${{ inputs.project }}"
+          zone="${{ inputs.zone }}"
+          instance="${{ inputs.instance }}"
+
+          [[ -n "$project" ]] || project="$DEFAULT_GCP_PROJECT"
+          [[ -n "$zone" ]] || zone="$DEFAULT_GCP_ZONE"
+          [[ -n "$instance" ]] || instance="$DEFAULT_GCE_NAME"
+
+          [[ -n "$project" ]] || {
+            echo "Missing GCP project. Set repository variable GCP_PROJECT or provide workflow input 'project'." >&2
+            exit 1
+          }
+          [[ -n "$zone" ]] || {
+            echo "Missing GCP zone. Set repository variable GCP_ZONE or provide workflow input 'zone'." >&2
+            exit 1
+          }
+          [[ -n "$instance" ]] || {
+            echo "Missing GCE instance name. Set repository variable GCE_NAME or provide workflow input 'instance'." >&2
+            exit 1
+          }
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Setup gcloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Execute VM command
+        id: control
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          command="${{ inputs.command }}"
+          wait_for_running="${{ inputs.wait_for_running }}"
+          project="${{ inputs.project }}"
+          zone="${{ inputs.zone }}"
+          instance="${{ inputs.instance }}"
+
+          [[ -n "$project" ]] || project="$DEFAULT_GCP_PROJECT"
+          [[ -n "$zone" ]] || zone="$DEFAULT_GCP_ZONE"
+          [[ -n "$instance" ]] || instance="$DEFAULT_GCE_NAME"
+
+          gcloud config set project "$project" >/dev/null
+
+          get_status() {
+            gcloud compute instances describe "$instance" \
+              --project "$project" \
+              --zone "$zone" \
+              --format='value(status)' 2>/dev/null || true
+          }
+
+          get_ip() {
+            gcloud compute instances describe "$instance" \
+              --project "$project" \
+              --zone "$zone" \
+              --format='value(networkInterfaces[0].accessConfigs[0].natIP)' 2>/dev/null || true
+          }
+
+          wait_until_running() {
+            local status=""
+            [[ "$wait_for_running" == "true" ]] || return 0
+
+            for _ in $(seq 1 60); do
+              status="$(get_status)"
+              if [[ "$status" == "RUNNING" ]]; then
+                return 0
+              fi
+              sleep 5
+            done
+
+            echo "Timed out waiting for instance to reach RUNNING state" >&2
+            return 1
+          }
+
+          current_status="$(get_status)"
+          [[ -n "$current_status" ]] || {
+            echo "Instance '$instance' not found in project '$project' zone '$zone'." >&2
+            exit 1
+          }
+
+          case "$command" in
+            status)
+              echo "Current state: $current_status"
+              ;;
+            start)
+              if [[ "$current_status" == "RUNNING" ]]; then
+                echo "Instance already RUNNING"
+              else
+                gcloud compute instances start "$instance" \
+                  --project "$project" \
+                  --zone "$zone" \
+                  --quiet
+              fi
+              wait_until_running
+              ;;
+            stop)
+              if [[ "$current_status" == "TERMINATED" ]]; then
+                echo "Instance already TERMINATED"
+              else
+                gcloud compute instances stop "$instance" \
+                  --project "$project" \
+                  --zone "$zone" \
+                  --quiet
+              fi
+              ;;
+            restart)
+              if [[ "$current_status" == "RUNNING" ]]; then
+                gcloud compute instances reset "$instance" \
+                  --project "$project" \
+                  --zone "$zone" \
+                  --quiet
+              else
+                gcloud compute instances start "$instance" \
+                  --project "$project" \
+                  --zone "$zone" \
+                  --quiet
+              fi
+              wait_until_running
+              ;;
+            *)
+              echo "Unsupported command: $command" >&2
+              exit 1
+              ;;
+          esac
+
+          final_status="$(get_status)"
+          external_ip="$(get_ip)"
+
+          echo "command=$command" >> "$GITHUB_OUTPUT"
+          echo "project=$project" >> "$GITHUB_OUTPUT"
+          echo "zone=$zone" >> "$GITHUB_OUTPUT"
+          echo "instance=$instance" >> "$GITHUB_OUTPUT"
+          echo "status=${final_status:-UNKNOWN}" >> "$GITHUB_OUTPUT"
+          echo "external_ip=${external_ip}" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "## VM Control"
+            echo
+            echo "- Command: \`$command\`"
+            echo "- Project: \`$project\`"
+            echo "- Zone: \`$zone\`"
+            echo "- Instance: \`$instance\`"
+            echo "- Final state: \`${final_status:-UNKNOWN}\`"
+            if [[ -n "$external_ip" ]]; then
+              echo "- External IP: \`${external_ip}\`"
+            fi
+            if [[ "${final_status:-}" == "RUNNING" && -n "$external_ip" ]]; then
+              echo "- noVNC: http://${external_ip}:8083/"
+              echo "- Sunshine UI: https://${external_ip}:47990/"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: "Final state: ${{ steps.control.outputs.status != '' && steps.control.outputs.status || 'UNKNOWN' }}"
+        if: always()
+        run: echo "Recorded final VM state."
+
+      - name: "External IP: ${{ steps.control.outputs.external_ip != '' && steps.control.outputs.external_ip || 'none' }}"
+        if: always()
+        run: echo "Recorded external IP."
+
+      - name: "Target: ${{ steps.control.outputs.project != '' && steps.control.outputs.project || 'unknown-project' }}/${{ steps.control.outputs.zone != '' && steps.control.outputs.zone || 'unknown-zone' }}/${{ steps.control.outputs.instance != '' && steps.control.outputs.instance || 'unknown-instance' }}"
+        if: always()
+        run: echo "Recorded target instance."

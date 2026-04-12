@@ -1,0 +1,11 @@
+---
+version: "3.8"
+
+services:
+  steam-headless:
+    # Local extension for custom display settings.
+    environment:
+      - DISPLAY_SIZEW=${DISPLAY_SIZEW}
+      - DISPLAY_SIZEH=${DISPLAY_SIZEH}
+      - DISPLAY_REFRESH=${DISPLAY_REFRESH}
+      - DISPLAY_CDEPTH=${DISPLAY_CDEPTH}

@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>VM Control</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;700&display=swap"
+      rel="stylesheet"
+    >
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <main class="shell">
+      <section class="hero panel">
+        <div>
+          <p class="eyebrow">GitHub Pages + Actions</p>
+          <h1>VM Control</h1>
+          <p class="hero-copy">
+            Static control panel for a single GCE VM. The page triggers GitHub Actions,
+            and the workflow starts, stops, restarts, or inspects the instance.
+          </p>
+        </div>
+        <div class="hero-note">
+          <p>Token stays in your browser unless you explicitly choose to remember it.</p>
+          <a href="../github-pages-vm-control.html">Setup guide</a>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Connection</p>
+            <h2>GitHub Access</h2>
+          </div>
+          <button id="clear-token" class="ghost" type="button">Clear Token</button>
+        </div>
+
+        <form id="settings-form" class="form-grid" autocomplete="off">
+          <label>
+            <span>GitHub token</span>
+            <input id="token" name="token" type="password" placeholder="ghp_... or fine-grained PAT">
+          </label>
+
+          <label class="checkbox">
+            <input id="remember-token" name="remember-token" type="checkbox">
+            <span>Remember token on this device</span>
+          </label>
+
+          <label>
+            <span>Owner</span>
+            <input id="owner" name="owner" type="text" placeholder="your-github-user">
+          </label>
+
+          <label>
+            <span>Repository</span>
+            <input id="repo" name="repo" type="text" placeholder="docker-steam-headless">
+          </label>
+
+          <label>
+            <span>Ref / branch</span>
+            <input id="ref" name="ref" type="text" placeholder="master">
+          </label>
+
+          <label>
+            <span>Workflow file</span>
+            <input id="workflow" name="workflow" type="text" placeholder="vm-control.yml">
+          </label>
+
+          <label>
+            <span>GCP project override</span>
+            <input id="project" name="project" type="text" placeholder="leave blank to use repo variable">
+          </label>
+
+          <label>
+            <span>Zone override</span>
+            <input id="zone" name="zone" type="text" placeholder="leave blank to use repo variable">
+          </label>
+
+          <label>
+            <span>Instance override</span>
+            <input id="instance" name="instance" type="text" placeholder="leave blank to use repo variable">
+          </label>
+        </form>
+
+        <p class="hint">
+          Use a fine-grained PAT with repository access and permissions:
+          <code>Actions: Read and write</code>, <code>Contents: Read-only</code>.
+        </p>
+      </section>
+
+      <section class="panel">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Control</p>
+            <h2>Power Actions</h2>
+          </div>
+          <button id="refresh-runs" class="ghost" type="button">Refresh Runs</button>
+        </div>
+
+        <div class="control-row">
+          <button class="action start" type="button" data-command="start">Start</button>
+          <button class="action restart" type="button" data-command="restart">Restart</button>
+          <button class="action stop" type="button" data-command="stop">Stop</button>
+          <button class="action status" type="button" data-command="status">Status</button>
+        </div>
+
+        <div id="banner" class="banner" data-tone="neutral">
+          Fill in GitHub access first, then trigger a workflow.
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Activity</p>
+            <h2>Recent Workflow Runs</h2>
+          </div>
+          <p class="section-meta">The panel reads workflow runs and extracts VM state from the latest jobs.</p>
+        </div>
+
+        <div id="runs" class="runs empty">
+          No runs loaded yet.
+        </div>
+      </section>
+    </main>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

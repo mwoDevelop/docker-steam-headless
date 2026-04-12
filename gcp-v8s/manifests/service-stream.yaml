@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: steam-headless-stream-udp
+  namespace: steam-headless
+spec:
+  type: LoadBalancer
+  selector:
+    app: steam-headless
+  ports:
+    - name: sun-udp-1
+      protocol: UDP
+      port: 47998
+      targetPort: 47998
+    - name: sun-udp-2
+      protocol: UDP
+      port: 47999
+      targetPort: 47999
+    - name: sun-udp-3
+      protocol: UDP
+      port: 48000
+      targetPort: 48000
+    - name: sun-udp-4
+      protocol: UDP
+      port: 48002
+      targetPort: 48002
