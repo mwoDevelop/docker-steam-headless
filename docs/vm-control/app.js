@@ -458,7 +458,26 @@
     if (data.autoStopHours) {
       parts.push(`Auto-stop: ${data.autoStopHours}h`);
     }
+    if (data.sunshineStatus && data.sunshineStatus.label) {
+      parts.push(`Sunshine: ${data.sunshineStatus.label}`);
+    }
     return parts.join(" · ");
+  }
+
+  function renderSunshineStatusMeta(payload) {
+    const sunshineStatus = payload.sunshineStatus || {};
+    const state = escapeToken(sunshineStatus.state || "starting");
+    const label = escapeHtml(sunshineStatus.label || "Starting");
+    const detail = sunshineStatus.detail
+      ? `<p class="access-meta">Status detail: <span>${escapeHtml(sunshineStatus.detail)}</span></p>`
+      : "";
+    return `
+      <div class="service-status ${state}">
+        <span class="service-status-dot" aria-hidden="true"></span>
+        <span>Status: ${label}</span>
+      </div>
+      ${detail}
+    `;
   }
 
   async function refreshStatus(options) {
@@ -557,6 +576,7 @@
     const sunshinePasswordMeta = sunshineCredentials.password
       ? `<p class="access-meta">Password: <code>${escapeHtml(sunshineCredentials.password)}</code></p>`
       : `<p class="access-meta">Password: <code>unavailable</code></p>`;
+    const sunshineStatusMeta = renderSunshineStatusMeta(payload);
 
     elements.access.className = "access";
     elements.access.innerHTML = `
@@ -576,6 +596,7 @@
           </div>
           <p class="access-meta">URL: <code>${sunshineUrl}</code></p>
           ${sunshineDnsMeta}
+          ${sunshineStatusMeta}
           ${sunshineUserMeta}
           ${sunshinePasswordMeta}
         </article>

@@ -469,6 +469,51 @@ code,
   margin-top: 16px;
 }
 
+.service-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.04);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.82rem;
+  color: var(--text);
+}
+
+.service-status-dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: var(--warn);
+}
+
+.service-status.ready {
+  border-color: rgba(106, 228, 208, 0.28);
+  background: rgba(106, 228, 208, 0.08);
+}
+
+.service-status.ready .service-status-dot {
+  background: var(--accent);
+}
+
+.service-status.starting {
+  border-color: rgba(242, 198, 109, 0.28);
+  background: rgba(242, 198, 109, 0.08);
+}
+
+.service-status.error {
+  border-color: rgba(255, 131, 105, 0.28);
+  background: rgba(255, 131, 105, 0.08);
+}
+
+.service-status.error .service-status-dot {
+  background: var(--danger);
+}
+
 .runs {
   display: grid;
   gap: 12px;

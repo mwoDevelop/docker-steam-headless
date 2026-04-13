@@ -41,6 +41,53 @@ metadata_token() {
     | jq -r '.access_token'
 }
 
+set_instance_metadata_value() {
+  local key="$1"
+  local value="${2-}"
+  local token project zone name instance_json fingerprint items payload
+  token="$(metadata_token || true)"
+  project="$(project_id || true)"
+  zone="$(zone_name || true)"
+  name="$(instance_name || true)"
+  [[ -n "$token" && -n "$project" && -n "$zone" && -n "$name" ]] || return 0
+
+  instance_json="$(curl --fail --silent --show-error \
+    -H "Authorization: Bearer ${token}" \
+    "https://compute.googleapis.com/compute/v1/projects/${project}/zones/${zone}/instances/${name}" || true)"
+  [[ -n "$instance_json" ]] || return 0
+  fingerprint="$(printf '%s' "$instance_json" | jq -r '.metadata.fingerprint // empty')"
+  [[ -n "$fingerprint" ]] || return 0
+  items="$(printf '%s' "$instance_json" | jq --arg key "$key" '[.metadata.items // [] | .[] | select(.key != $key)]')"
+
+  if [ -n "$value" ]; then
+    payload="$(jq -n \
+      --arg fingerprint "$fingerprint" \
+      --arg key "$key" \
+      --arg value "$value" \
+      --argjson items "$items" \
+      '{fingerprint: $fingerprint, items: ($items + [{key: $key, value: $value}])}')"
+  else
+    payload="$(jq -n \
+      --arg fingerprint "$fingerprint" \
+      --argjson items "$items" \
+      '{fingerprint: $fingerprint, items: $items}')"
+  fi
+
+  curl --fail --silent --show-error \
+    -X POST \
+    -H "Authorization: Bearer ${token}" \
+    -H "Content-Type: application/json" \
+    -d "$payload" \
+    "https://compute.googleapis.com/compute/v1/projects/${project}/zones/${zone}/instances/${name}/setMetadata" >/dev/null || true
+}
+
+set_sunshine_status() {
+  local state="$1"
+  local detail="${2-}"
+  set_instance_metadata_value vm-sunshine-status "$state"
+  set_instance_metadata_value vm-sunshine-status-detail "$detail"
+}
+
 instance_name() {
   curl "${METADATA_HDR[@]}" \
     "http://metadata/computeMetadata/v1/instance/name"
@@ -97,6 +144,7 @@ sync_env_metadata() {
 }
 wait_for_apt_idle
 apt-get update -y
+set_sunshine_status "starting" "VM setup in progress."
 apt-get install -y ca-certificates curl gnupg lsb-release ubuntu-drivers-common jq zstd rclone
 
 if ! command -v nvidia-smi >/dev/null 2>&1; then
@@ -255,5 +303,19 @@ sed -i -E \
 
 docker compose "${COMPOSE_FILES[@]}" up -d
 docker compose "${COMPOSE_FILES[@]}" restart || true
+
+sunshine_http_code=""
+for _ in $(seq 1 60); do
+  sunshine_http_code="$(curl -k --silent --output /dev/null --write-out '%{http_code}' --max-time 5 https://127.0.0.1:47990/ || true)"
+  if [[ "$sunshine_http_code" == "200" || "$sunshine_http_code" == "401" || "$sunshine_http_code" == "403" ]]; then
+    set_sunshine_status "ready" "Sunshine Web UI responded with HTTP ${sunshine_http_code}."
+    break
+  fi
+  sleep 2
+done
+
+if [[ "$sunshine_http_code" != "200" && "$sunshine_http_code" != "401" && "$sunshine_http_code" != "403" ]]; then
+  set_sunshine_status "starting" "VM is running, but Sunshine Web UI is still warming up."
+fi
 docker exec -i $(docker ps -qf name=steam-headless) nvidia-smi || true
 ss -lntup | egrep '(8083|47989|47990|48010)' || true

@@ -61,6 +61,8 @@ CONFIG = {
 
 AUTO_STOP_METADATA_KEY = "vm-auto-shutdown-hours"
 STEAM_ENV_METADATA_KEY = "steam-headless-env"
+SUNSHINE_STATUS_METADATA_KEY = "vm-sunshine-status"
+SUNSHINE_STATUS_DETAIL_METADATA_KEY = "vm-sunshine-status-detail"
 SUNSHINE_USERNAME = "admin"
 MIN_AUTO_STOP_HOURS = 1
 MAX_AUTO_STOP_HOURS = 24
@@ -336,15 +338,17 @@ def metadata_value(instance: dict[str, Any], key: str) -> str:
     return ""
 
 
-def set_instance_metadata_value(instance: dict[str, Any], key: str, value: str | None) -> None:
+def set_instance_metadata_values(instance: dict[str, Any], updates: dict[str, str | None]) -> None:
     metadata = instance.get("metadata", {}) or {}
     fingerprint = str(metadata.get("fingerprint", "") or "")
     if not fingerprint:
         raise ApiError("Instance metadata fingerprint is missing.", 502)
 
-    items = [item for item in instance_metadata_items(instance) if item.get("key") != key]
-    if value is not None:
-        items.append({"key": key, "value": value})
+    update_keys = set(updates)
+    items = [item for item in instance_metadata_items(instance) if item.get("key") not in update_keys]
+    for key, value in updates.items():
+        if value is not None:
+            items.append({"key": key, "value": value})
 
     operation = compute_request(
         "POST",
@@ -355,6 +359,10 @@ def set_instance_metadata_value(instance: dict[str, Any], key: str, value: str |
         },
     )
     wait_for_zone_operation(operation)
+
+
+def set_instance_metadata_value(instance: dict[str, Any], key: str, value: str | None) -> None:
+    set_instance_metadata_values(instance, {key: value})
 
 
 def parse_auto_stop_hours(payload: dict[str, Any]) -> int | None:
@@ -464,6 +472,36 @@ def build_urls(external_ip: str) -> dict[str, Any]:
     return urls
 
 
+def build_sunshine_status(instance: dict[str, Any] | None) -> dict[str, str]:
+    if instance is None:
+        return {
+            "state": "not_created",
+            "label": "VM not created",
+            "detail": "",
+        }
+
+    vm_status = str(instance.get("status", "UNKNOWN")).upper()
+    if vm_status != "RUNNING":
+        return {
+            "state": "stopped",
+            "label": "VM not running",
+            "detail": "",
+        }
+
+    state = metadata_value(instance, SUNSHINE_STATUS_METADATA_KEY).strip().lower() or "starting"
+    detail = metadata_value(instance, SUNSHINE_STATUS_DETAIL_METADATA_KEY).strip()
+    labels = {
+        "ready": "Ready",
+        "starting": "Starting",
+        "error": "Error",
+    }
+    return {
+        "state": state,
+        "label": labels.get(state, state.title()),
+        "detail": detail,
+    }
+
+
 def allowed_commands(instance: dict[str, Any] | None) -> list[str]:
     if instance is None:
         return ["create"]
@@ -504,6 +542,7 @@ def build_status_payload(
                 "username": SUNSHINE_USERNAME,
                 "password": "",
             },
+            "sunshineStatus": build_sunshine_status(None),
         }
         if duckdns_updated is not None:
             payload["duckdnsUpdated"] = duckdns_updated
@@ -533,6 +572,7 @@ def build_status_payload(
         "user": user,
         "autoStopHours": metadata_value(instance, AUTO_STOP_METADATA_KEY),
         "sunshineCredentials": credentials,
+        "sunshineStatus": build_sunshine_status(instance),
     }
     if duckdns_updated is not None:
         payload["duckdnsUpdated"] = duckdns_updated
@@ -633,10 +673,13 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
         sunshine_credentials = sunshine_credentials_from_instance(current_instance)
         if current_status != "RUNNING":
             current_instance, sunshine_credentials = prepare_sunshine_credentials(current_instance)
-            set_instance_metadata_value(
+            set_instance_metadata_values(
                 current_instance,
-                AUTO_STOP_METADATA_KEY,
-                str(auto_stop_hours) if auto_stop_hours is not None else None,
+                {
+                    AUTO_STOP_METADATA_KEY: str(auto_stop_hours) if auto_stop_hours is not None else None,
+                    SUNSHINE_STATUS_METADATA_KEY: "starting",
+                    SUNSHINE_STATUS_DETAIL_METADATA_KEY: "VM booting. Waiting for Sunshine Web UI.",
+                },
             )
             current_instance = get_instance()
 
@@ -661,7 +704,14 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
         if current_status != "TERMINATED":
             compute_request("POST", f"{instance_url()}/stop")
         final_instance = poll_instance_status("TERMINATED")
-        set_instance_metadata_value(final_instance, AUTO_STOP_METADATA_KEY, None)
+        set_instance_metadata_values(
+            final_instance,
+            {
+                AUTO_STOP_METADATA_KEY: None,
+                SUNSHINE_STATUS_METADATA_KEY: "stopped",
+                SUNSHINE_STATUS_DETAIL_METADATA_KEY: None,
+            },
+        )
         final_instance = get_instance()
         return build_status_payload(final_instance, user=user, command=command)
 
@@ -669,6 +719,14 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
         if current_instance is None:
             raise ApiError("Instance does not exist. Use Create first.", 400)
         current_instance, sunshine_credentials = prepare_sunshine_credentials(current_instance)
+        set_instance_metadata_values(
+            current_instance,
+            {
+                SUNSHINE_STATUS_METADATA_KEY: "starting",
+                SUNSHINE_STATUS_DETAIL_METADATA_KEY: "VM restarting. Waiting for Sunshine Web UI.",
+            },
+        )
+        current_instance = get_instance()
         if current_status == "RUNNING":
             compute_request("POST", f"{instance_url()}/stop")
             poll_instance_status("TERMINATED")
