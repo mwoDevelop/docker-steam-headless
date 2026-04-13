@@ -1,5 +1,5 @@
 (function () {
-  const defaultBackendUrl = "";
+  const defaultBackendUrl = "https://steam-vm-control-api-w2urpq2xlq-lm.a.run.app";
   const defaultAutoStopHours = "3";
 
   const storageKeys = {
