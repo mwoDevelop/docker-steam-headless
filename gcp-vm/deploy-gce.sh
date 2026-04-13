@@ -30,6 +30,8 @@ INSTANCE_TEMPLATE_NAME=${INSTANCE_TEMPLATE_NAME:-${GCE_NAME}-template}
 ALLOW_CIDR=${ALLOW_CIDR:-0.0.0.0/0}
 GDRIVE_FOLDER_ID=${GDRIVE_FOLDER_ID:-}
 GDRIVE_STATE_ROOT=${GDRIVE_STATE_ROOT:-steam-vm-state}
+GDRIVE_OAUTH_TOKEN_SECRET_NAME=${GDRIVE_OAUTH_TOKEN_SECRET_NAME:-}
+GDRIVE_OAUTH_TOKEN_FILE=${GDRIVE_OAUTH_TOKEN_FILE:-}
 GDRIVE_SERVICE_ACCOUNT_SECRET_NAME=${GDRIVE_SERVICE_ACCOUNT_SECRET_NAME:-steam-vm-state-drive-sa}
 GDRIVE_SERVICE_ACCOUNT_JSON_FILE=${GDRIVE_SERVICE_ACCOUNT_JSON_FILE:-}
 
@@ -142,8 +144,37 @@ if [[ -n "$GDRIVE_SERVICE_ACCOUNT_JSON_FILE" ]]; then
     --data-file="$GDRIVE_SERVICE_ACCOUNT_JSON_FILE" >/dev/null
 fi
 
-if [[ -n "$GDRIVE_FOLDER_ID" ]]; then
+if [[ -n "$GDRIVE_OAUTH_TOKEN_FILE" ]]; then
+  if [[ ! -f "$GDRIVE_OAUTH_TOKEN_FILE" ]]; then
+    echo "ERROR: GDRIVE_OAUTH_TOKEN_FILE does not exist: ${GDRIVE_OAUTH_TOKEN_FILE}" >&2
+    exit 1
+  fi
+
+  if [[ -z "$GDRIVE_OAUTH_TOKEN_SECRET_NAME" ]]; then
+    echo "ERROR: GDRIVE_OAUTH_TOKEN_SECRET_NAME must be set when GDRIVE_OAUTH_TOKEN_FILE is used." >&2
+    exit 1
+  fi
+
+  if ! gcloud secrets describe "$GDRIVE_OAUTH_TOKEN_SECRET_NAME" --project "$GCP_PROJECT" >/dev/null 2>&1; then
+    gcloud secrets create "$GDRIVE_OAUTH_TOKEN_SECRET_NAME" \
+      --project "$GCP_PROJECT" \
+      --replication-policy=automatic >/dev/null
+  fi
+
+  gcloud secrets versions add "$GDRIVE_OAUTH_TOKEN_SECRET_NAME" \
+    --project "$GCP_PROJECT" \
+    --data-file="$GDRIVE_OAUTH_TOKEN_FILE" >/dev/null
+fi
+
+if [[ -n "$GDRIVE_FOLDER_ID" && -n "$GDRIVE_SERVICE_ACCOUNT_SECRET_NAME" ]]; then
   gcloud secrets add-iam-policy-binding "$GDRIVE_SERVICE_ACCOUNT_SECRET_NAME" \
+    --project "$GCP_PROJECT" \
+    --member="serviceAccount:${DEFAULT_COMPUTE_SA}" \
+    --role="roles/secretmanager.secretAccessor" >/dev/null || true
+fi
+
+if [[ -n "$GDRIVE_FOLDER_ID" && -n "$GDRIVE_OAUTH_TOKEN_SECRET_NAME" ]]; then
+  gcloud secrets add-iam-policy-binding "$GDRIVE_OAUTH_TOKEN_SECRET_NAME" \
     --project "$GCP_PROJECT" \
     --member="serviceAccount:${DEFAULT_COMPUTE_SA}" \
     --role="roles/secretmanager.secretAccessor" >/dev/null || true
@@ -151,9 +182,16 @@ fi
 
 INSTANCE_METADATA_ARGS=()
 if [[ -n "$GDRIVE_FOLDER_ID" ]]; then
+  metadata_values=("gdrive-folder-id=${GDRIVE_FOLDER_ID}" "gdrive-state-root=${GDRIVE_STATE_ROOT}")
+  if [[ -n "$GDRIVE_OAUTH_TOKEN_SECRET_NAME" ]]; then
+    metadata_values+=("gdrive-oauth-token-secret-name=${GDRIVE_OAUTH_TOKEN_SECRET_NAME}")
+  fi
+  if [[ -n "$GDRIVE_SERVICE_ACCOUNT_SECRET_NAME" ]]; then
+    metadata_values+=("gdrive-service-account-secret-name=${GDRIVE_SERVICE_ACCOUNT_SECRET_NAME}")
+  fi
   INSTANCE_METADATA_ARGS+=(
     --metadata
-    "gdrive-folder-id=${GDRIVE_FOLDER_ID},gdrive-state-root=${GDRIVE_STATE_ROOT},gdrive-service-account-secret-name=${GDRIVE_SERVICE_ACCOUNT_SECRET_NAME}"
+    "$(IFS=,; echo "${metadata_values[*]}")"
   )
 fi
 
