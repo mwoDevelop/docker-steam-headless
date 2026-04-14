@@ -33,10 +33,9 @@ VM_SUBNET=${VM_SUBNET:-}
 ALLOW_CIDR=${ALLOW_CIDR:-0.0.0.0/0}
 GDRIVE_FOLDER_ID=${GDRIVE_FOLDER_ID:-}
 GDRIVE_STATE_ROOT=${GDRIVE_STATE_ROOT:-steam-vm-state}
+GDRIVE_OWNER_EMAIL=${GDRIVE_OWNER_EMAIL:-mwodevelop@gmail.com}
 GDRIVE_OAUTH_TOKEN_SECRET_NAME=${GDRIVE_OAUTH_TOKEN_SECRET_NAME:-}
 GDRIVE_OAUTH_TOKEN_FILE=${GDRIVE_OAUTH_TOKEN_FILE:-}
-GDRIVE_SERVICE_ACCOUNT_SECRET_NAME=${GDRIVE_SERVICE_ACCOUNT_SECRET_NAME:-steam-vm-state-drive-sa}
-GDRIVE_SERVICE_ACCOUNT_JSON_FILE=${GDRIVE_SERVICE_ACCOUNT_JSON_FILE:-}
 
 NAME=${NAME:-SteamHeadless}
 TZ=${TZ:-Europe/Warsaw}
@@ -130,23 +129,6 @@ gcloud config set project "$GCP_PROJECT" >/dev/null 2>&1 || true
 PROJECT_NUMBER=$(gcloud projects describe "$GCP_PROJECT" --format='value(projectNumber)')
 DEFAULT_COMPUTE_SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
 
-if [[ -n "$GDRIVE_SERVICE_ACCOUNT_JSON_FILE" ]]; then
-  if [[ ! -f "$GDRIVE_SERVICE_ACCOUNT_JSON_FILE" ]]; then
-    echo "ERROR: GDRIVE_SERVICE_ACCOUNT_JSON_FILE does not exist: ${GDRIVE_SERVICE_ACCOUNT_JSON_FILE}" >&2
-    exit 1
-  fi
-
-  if ! gcloud secrets describe "$GDRIVE_SERVICE_ACCOUNT_SECRET_NAME" --project "$GCP_PROJECT" >/dev/null 2>&1; then
-    gcloud secrets create "$GDRIVE_SERVICE_ACCOUNT_SECRET_NAME" \
-      --project "$GCP_PROJECT" \
-      --replication-policy=automatic >/dev/null
-  fi
-
-  gcloud secrets versions add "$GDRIVE_SERVICE_ACCOUNT_SECRET_NAME" \
-    --project "$GCP_PROJECT" \
-    --data-file="$GDRIVE_SERVICE_ACCOUNT_JSON_FILE" >/dev/null
-fi
-
 if [[ -n "$GDRIVE_OAUTH_TOKEN_FILE" ]]; then
   if [[ ! -f "$GDRIVE_OAUTH_TOKEN_FILE" ]]; then
     echo "ERROR: GDRIVE_OAUTH_TOKEN_FILE does not exist: ${GDRIVE_OAUTH_TOKEN_FILE}" >&2
@@ -169,13 +151,6 @@ if [[ -n "$GDRIVE_OAUTH_TOKEN_FILE" ]]; then
     --data-file="$GDRIVE_OAUTH_TOKEN_FILE" >/dev/null
 fi
 
-if [[ -n "$GDRIVE_FOLDER_ID" && -n "$GDRIVE_SERVICE_ACCOUNT_SECRET_NAME" ]]; then
-  gcloud secrets add-iam-policy-binding "$GDRIVE_SERVICE_ACCOUNT_SECRET_NAME" \
-    --project "$GCP_PROJECT" \
-    --member="serviceAccount:${DEFAULT_COMPUTE_SA}" \
-    --role="roles/secretmanager.secretAccessor" >/dev/null || true
-fi
-
 if [[ -n "$GDRIVE_FOLDER_ID" && -n "$GDRIVE_OAUTH_TOKEN_SECRET_NAME" ]]; then
   gcloud secrets add-iam-policy-binding "$GDRIVE_OAUTH_TOKEN_SECRET_NAME" \
     --project "$GCP_PROJECT" \
@@ -185,12 +160,13 @@ fi
 
 INSTANCE_METADATA_ARGS=()
 if [[ -n "$GDRIVE_FOLDER_ID" ]]; then
-  metadata_values=("gdrive-folder-id=${GDRIVE_FOLDER_ID}" "gdrive-state-root=${GDRIVE_STATE_ROOT}")
+  metadata_values=(
+    "gdrive-folder-id=${GDRIVE_FOLDER_ID}"
+    "gdrive-state-root=${GDRIVE_STATE_ROOT}"
+    "gdrive-owner-email=${GDRIVE_OWNER_EMAIL}"
+  )
   if [[ -n "$GDRIVE_OAUTH_TOKEN_SECRET_NAME" ]]; then
     metadata_values+=("gdrive-oauth-token-secret-name=${GDRIVE_OAUTH_TOKEN_SECRET_NAME}")
-  fi
-  if [[ -n "$GDRIVE_SERVICE_ACCOUNT_SECRET_NAME" ]]; then
-    metadata_values+=("gdrive-service-account-secret-name=${GDRIVE_SERVICE_ACCOUNT_SECRET_NAME}")
   fi
   INSTANCE_METADATA_ARGS+=(
     --metadata

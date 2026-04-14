@@ -62,8 +62,8 @@ CONFIG = {
     "vm_service_account_email": os.environ.get("VM_SERVICE_ACCOUNT_EMAIL", ""),
     "gdrive_folder_id": os.environ.get("GDRIVE_FOLDER_ID", ""),
     "gdrive_state_root": os.environ.get("GDRIVE_STATE_ROOT", "steam-vm-state"),
+    "gdrive_owner_email": os.environ.get("GDRIVE_OWNER_EMAIL", "mwodevelop@gmail.com"),
     "gdrive_oauth_token_secret_name": os.environ.get("GDRIVE_OAUTH_TOKEN_SECRET_NAME", ""),
-    "gdrive_service_account_secret_name": os.environ.get("GDRIVE_SERVICE_ACCOUNT_SECRET_NAME", ""),
     "vm_startup_script_b64": os.environ.get("VM_STARTUP_SCRIPT_B64", ""),
     "vm_shutdown_script_b64": os.environ.get("VM_SHUTDOWN_SCRIPT_B64", ""),
     "vm_persist_script_b64": os.environ.get("VM_PERSIST_SCRIPT_B64", ""),
@@ -548,18 +548,12 @@ def build_instance_metadata_items(
     if CONFIG["gdrive_folder_id"]:
         items.append({"key": "gdrive-folder-id", "value": CONFIG["gdrive_folder_id"]})
         items.append({"key": "gdrive-state-root", "value": CONFIG["gdrive_state_root"]})
+        items.append({"key": "gdrive-owner-email", "value": CONFIG["gdrive_owner_email"]})
     if CONFIG["gdrive_oauth_token_secret_name"]:
         items.append(
             {
                 "key": "gdrive-oauth-token-secret-name",
                 "value": CONFIG["gdrive_oauth_token_secret_name"],
-            }
-        )
-    if CONFIG["gdrive_service_account_secret_name"]:
-        items.append(
-            {
-                "key": "gdrive-service-account-secret-name",
-                "value": CONFIG["gdrive_service_account_secret_name"],
             }
         )
     if auto_stop_hours is not None:

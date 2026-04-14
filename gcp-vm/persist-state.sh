@@ -8,7 +8,6 @@ log() {
 METADATA_HDR=( -H "Metadata-Flavor: Google" --fail --silent --show-error )
 STATE_DIR=${STATE_DIR:-/var/lib/vm-state}
 RCLONE_CONFIG_PATH="${STATE_DIR}/rclone.conf"
-SERVICE_ACCOUNT_PATH="${STATE_DIR}/drive-service-account.json"
 OAUTH_TOKEN_PATH="${STATE_DIR}/drive-oauth-token.json"
 WORK_DIR="${STATE_DIR}/work"
 HOME_ARCHIVE="${WORK_DIR}/home.tar.zst"
@@ -89,18 +88,6 @@ ensure_tools() {
   command -v rclone >/dev/null 2>&1 || { log "rclone is required"; return 1; }
 }
 
-render_rclone_config_service_account() {
-  local folder_id="$1"
-  cat > "$RCLONE_CONFIG_PATH" <<EOF
-[${REMOTE_NAME}]
-type = drive
-scope = drive
-service_account_file = ${SERVICE_ACCOUNT_PATH}
-root_folder_id = ${folder_id}
-EOF
-  chmod 600 "$RCLONE_CONFIG_PATH"
-}
-
 render_rclone_config_oauth() {
   local folder_id="$1"
   local token_json
@@ -116,11 +103,11 @@ EOF
 }
 
 ensure_rclone_remote() {
-  local folder_id oauth_secret_name service_account_secret_name
+  local folder_id oauth_secret_name owner_email
 
   folder_id="$(metadata_get gdrive-folder-id)"
+  owner_email="$(metadata_get gdrive-owner-email)"
   oauth_secret_name="$(metadata_get gdrive-oauth-token-secret-name)"
-  service_account_secret_name="$(metadata_get gdrive-service-account-secret-name)"
 
   if [[ -z "$folder_id" ]]; then
     log "Google Drive persistence is not configured; skipping."
@@ -128,22 +115,15 @@ ensure_rclone_remote() {
   fi
 
   mkdir -p "$STATE_DIR" "$WORK_DIR"
-  if [[ -n "$oauth_secret_name" ]]; then
-    secret_json_to_file "$oauth_secret_name" "$OAUTH_TOKEN_PATH"
-    render_rclone_config_oauth "$folder_id"
-    log "Configured Drive remote with OAuth user token secret ${oauth_secret_name}"
-    return 0
+  if [[ -z "$oauth_secret_name" ]]; then
+    log "Google Drive persistence requires a fixed OAuth token secret for ${owner_email:-the Drive owner}; skipping."
+    return 1
   fi
 
-  if [[ -n "$service_account_secret_name" ]]; then
-    secret_json_to_file "$service_account_secret_name" "$SERVICE_ACCOUNT_PATH"
-    render_rclone_config_service_account "$folder_id"
-    log "Configured Drive remote with service account secret ${service_account_secret_name}"
-    return 0
-  fi
-
-  log "Google Drive persistence metadata is incomplete; skipping."
-  return 1
+  secret_json_to_file "$oauth_secret_name" "$OAUTH_TOKEN_PATH"
+  render_rclone_config_oauth "$folder_id"
+  log "Configured Drive remote with fixed OAuth token secret ${oauth_secret_name}${owner_email:+ for ${owner_email}}"
+  return 0
 }
 
 remote_root() {
