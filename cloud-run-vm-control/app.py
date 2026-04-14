@@ -67,6 +67,7 @@ CONFIG = {
     "vm_startup_script_b64": os.environ.get("VM_STARTUP_SCRIPT_B64", ""),
     "vm_shutdown_script_b64": os.environ.get("VM_SHUTDOWN_SCRIPT_B64", ""),
     "vm_persist_script_b64": os.environ.get("VM_PERSIST_SCRIPT_B64", ""),
+    "vm_power_action_script_b64": os.environ.get("VM_POWER_ACTION_SCRIPT_B64", ""),
     "vm_steam_env_b64": os.environ.get("VM_STEAM_ENV_B64", ""),
     "allowed_origins": csv_env("ALLOWED_ORIGINS"),
     "google_client_ids": csv_env("GOOGLE_CLIENT_IDS") or csv_env("GOOGLE_CLIENT_ID"),
@@ -82,6 +83,8 @@ AUTO_STOP_METADATA_KEY = "vm-auto-shutdown-hours"
 STEAM_ENV_METADATA_KEY = "steam-headless-env"
 SUNSHINE_STATUS_METADATA_KEY = "vm-sunshine-status"
 SUNSHINE_STATUS_DETAIL_METADATA_KEY = "vm-sunshine-status-detail"
+POWER_ACTION_METADATA_KEY = "vm-pending-power-action"
+POWER_ACTION_STATUS_METADATA_KEY = "vm-power-action-status"
 SUNSHINE_USERNAME = "admin"
 MIN_AUTO_STOP_HOURS = 1
 MAX_AUTO_STOP_HOURS = 24
@@ -515,6 +518,72 @@ def prepare_sunshine_credentials(instance: dict[str, Any]) -> tuple[dict[str, An
     return updated_instance, {"username": SUNSHINE_USERNAME, "password": password}
 
 
+def generate_action_token() -> str:
+    return secrets.token_hex(8)
+
+
+def parse_power_action_status(raw_status: str) -> tuple[str, str, str]:
+    parts = raw_status.split(":", 2)
+    if len(parts) != 3:
+        return "", "", ""
+    return parts[0], parts[1], parts[2]
+
+
+def request_live_power_action(
+    instance: dict[str, Any],
+    *,
+    action: str,
+    status_detail: str,
+) -> tuple[dict[str, Any], str]:
+    token = generate_action_token()
+    set_instance_metadata_values(
+        instance,
+        {
+            POWER_ACTION_METADATA_KEY: f"{action}:{token}",
+            POWER_ACTION_STATUS_METADATA_KEY: f"requested:{action}:{token}",
+            SUNSHINE_STATUS_METADATA_KEY: "starting",
+            SUNSHINE_STATUS_DETAIL_METADATA_KEY: status_detail,
+        },
+    )
+    return get_instance(), token
+
+
+def poll_power_action_backup(
+    *,
+    action: str,
+    token: str,
+    timeout_seconds: int = 1800,
+) -> dict[str, Any]:
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        instance = get_instance()
+        phase, status_action, status_token = parse_power_action_status(
+            metadata_value(instance, POWER_ACTION_STATUS_METADATA_KEY)
+        )
+        if phase == "backed-up" and status_action == action and status_token == token:
+            return instance
+        if phase == "failed" and status_action == action and status_token == token:
+            raise ApiError(f"Live backup failed before {action}.", 502)
+        time.sleep(5)
+    raise ApiError(f"Timed out waiting for live backup before {action}.", 504)
+
+
+def poll_instance_restarted(previous_start_timestamp: str, timeout_seconds: int = 600) -> dict[str, Any]:
+    deadline = time.time() + timeout_seconds
+    last_instance: dict[str, Any] | None = None
+    while time.time() < deadline:
+        last_instance = get_instance()
+        current_status = str(last_instance.get("status", "")).upper()
+        current_start_timestamp = str(last_instance.get("lastStartTimestamp", "") or "")
+        if current_status == "RUNNING" and current_start_timestamp and current_start_timestamp != previous_start_timestamp:
+            return last_instance
+        time.sleep(5)
+
+    if last_instance:
+        return last_instance
+    raise ApiError("Timed out waiting for instance restart.", 504)
+
+
 def build_steam_env_value(overrides: dict[str, str]) -> str:
     raw_env = decode_config_b64("vm_steam_env_b64")
     updated_env = raw_env
@@ -532,6 +601,7 @@ def build_instance_metadata_items(
         {"key": "startup-script", "value": decode_config_b64("vm_startup_script_b64")},
         {"key": "shutdown-script", "value": decode_config_b64("vm_shutdown_script_b64")},
         {"key": "vm-persist-script", "value": decode_config_b64("vm_persist_script_b64")},
+        {"key": "vm-power-action-script", "value": decode_config_b64("vm_power_action_script_b64")},
         {
             "key": STEAM_ENV_METADATA_KEY,
             "value": build_steam_env_value(
@@ -892,8 +962,15 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
         if current_instance is None:
             raise ApiError("Instance does not exist.", 400)
         if current_status != "TERMINATED":
-            compute_request("POST", f"{instance_url()}/stop")
-        final_instance = poll_instance_status("TERMINATED")
+            current_instance, token = request_live_power_action(
+                current_instance,
+                action="stop",
+                status_detail="VM stopping after a live backup.",
+            )
+            poll_power_action_backup(action="stop", token=token)
+            final_instance = poll_instance_status("TERMINATED", timeout_seconds=900)
+        else:
+            final_instance = current_instance
         set_instance_metadata_values(
             final_instance,
             {
@@ -918,8 +995,23 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
         )
         current_instance = get_instance()
         if current_status == "RUNNING":
-            compute_request("POST", f"{instance_url()}/stop")
-            poll_instance_status("TERMINATED")
+            previous_start_timestamp = str(current_instance.get("lastStartTimestamp", "") or "")
+            current_instance, token = request_live_power_action(
+                current_instance,
+                action="restart",
+                status_detail="VM restarting after a live backup.",
+            )
+            poll_power_action_backup(action="restart", token=token)
+            poll_instance_restarted(previous_start_timestamp, timeout_seconds=900)
+            final_instance = wait_for_external_ip(timeout_seconds=180)
+            updated = update_duckdns(extract_external_ip(final_instance))
+            return build_status_payload(
+                final_instance,
+                user=user,
+                command=command,
+                duckdns_updated=updated,
+                sunshine_credentials=sunshine_credentials,
+            )
         compute_request("POST", f"{instance_url()}/start")
         poll_instance_status("RUNNING")
         final_instance = wait_for_external_ip(timeout_seconds=120)
@@ -940,8 +1032,13 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
             raise ApiError("Delete requires confirmation.", 400)
 
         if current_status != "TERMINATED":
-            compute_request("POST", f"{instance_url()}/stop")
-            poll_instance_status("TERMINATED")
+            current_instance, token = request_live_power_action(
+                current_instance,
+                action="delete",
+                status_detail="VM deleting after a live backup.",
+            )
+            poll_power_action_backup(action="delete", token=token)
+            poll_instance_status("TERMINATED", timeout_seconds=900)
         operation = compute_request("DELETE", instance_url())
         if not isinstance(operation, dict):
             raise ApiError("Failed to delete instance.", 502)

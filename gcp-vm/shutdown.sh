@@ -7,6 +7,9 @@ log() {
 
 METADATA_HDR=( -H "Metadata-Flavor: Google" --fail --silent --show-error )
 PERSIST_SCRIPT=/usr/local/bin/vm-persist-state
+STATE_DIR=${STATE_DIR:-/var/lib/vm-state}
+BACKUP_READY_MARKER="${STATE_DIR}/backup-ready"
+BACKUP_COMPLETE_MARKER="${STATE_DIR}/backup-complete"
 
 metadata_get() {
   local key="$1"
@@ -30,6 +33,16 @@ ensure_persist_script() {
 main() {
   if ! ensure_persist_script; then
     log "Persist script is unavailable; skipping backup."
+    exit 0
+  fi
+
+  if [[ ! -f "$BACKUP_READY_MARKER" ]]; then
+    log "Backup readiness marker is missing; skipping backup."
+    exit 0
+  fi
+
+  if [[ -f "$BACKUP_COMPLETE_MARKER" ]]; then
+    log "Backup already completed before shutdown; skipping backup."
     exit 0
   fi
 

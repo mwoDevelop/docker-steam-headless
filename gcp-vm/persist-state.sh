@@ -10,6 +10,8 @@ STATE_DIR=${STATE_DIR:-/var/lib/vm-state}
 RCLONE_CONFIG_PATH="${STATE_DIR}/rclone.conf"
 OAUTH_TOKEN_PATH="${STATE_DIR}/drive-oauth-token.json"
 WORK_DIR="${STATE_DIR}/work"
+BACKUP_READY_MARKER="${STATE_DIR}/backup-ready"
+BACKUP_COMPLETE_MARKER="${STATE_DIR}/backup-complete"
 HOME_ARCHIVE="${WORK_DIR}/home.tar.zst"
 HOST_HOME_DIR=${HOST_HOME_DIR:-/opt/container-data/steam-headless/home}
 HOST_HOME_PARENT=${HOST_HOME_PARENT:-/opt/container-data/steam-headless}
@@ -182,12 +184,24 @@ write_manifest() {
   rclone --config "$RCLONE_CONFIG_PATH" copyto "$manifest" "${REMOTE_NAME}:${root}/manifest.json"
 }
 
+remote_has_state() {
+  local root="$1"
+  local entries
+
+  entries="$(rclone --config "$RCLONE_CONFIG_PATH" lsf "${REMOTE_NAME}:${root}" 2>/dev/null || true)"
+  [[ -n "$entries" ]]
+}
+
+backup_is_ready() {
+  [[ -f "$BACKUP_READY_MARKER" ]]
+}
+
 backup_home() {
   local root="$1"
   mkdir -p "$HOST_HOME_PARENT" "$WORK_DIR"
   if [[ ! -d "$HOST_HOME_DIR" ]]; then
-    log "Home directory ${HOST_HOME_DIR} does not exist; creating empty tree"
-    mkdir -p "$HOST_HOME_DIR"
+    log "Home directory ${HOST_HOME_DIR} does not exist; refusing to back up an empty tree"
+    return 1
   fi
   rm -f "$HOME_ARCHIVE"
   tar --zstd -cpf "$HOME_ARCHIVE" -C "$HOST_HOME_PARENT" "$(basename "$HOST_HOME_DIR")"
@@ -196,7 +210,10 @@ backup_home() {
 
 backup_games() {
   local root="$1"
-  mkdir -p "$HOST_GAMES_DIR"
+  if [[ ! -d "$HOST_GAMES_DIR" ]]; then
+    log "Games directory ${HOST_GAMES_DIR} does not exist; refusing to back up an empty tree"
+    return 1
+  fi
   rclone --config "$RCLONE_CONFIG_PATH" sync "$HOST_GAMES_DIR" "${REMOTE_NAME}:${root}/games"
 }
 
@@ -227,10 +244,15 @@ backup_state() {
   root="$(remote_root)"
   ensure_tools
   ensure_rclone_remote || return 0
+  if ! backup_is_ready; then
+    log "Backup readiness marker is missing; skipping backup."
+    return 0
+  fi
   stop_stack
   backup_home "$root"
   backup_games "$root"
   write_manifest "backup" "$root"
+  touch "$BACKUP_COMPLETE_MARKER"
   log "Backup completed to ${root}"
 }
 
@@ -239,6 +261,10 @@ restore_state() {
   root="$(remote_root)"
   ensure_tools
   ensure_rclone_remote || return 0
+  if ! remote_has_state "$root"; then
+    log "No persisted state found in Drive for ${root}"
+    return 0
+  fi
   restore_home "$root"
   restore_games "$root"
   restore_stack_perms

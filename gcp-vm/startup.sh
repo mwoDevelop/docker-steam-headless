@@ -9,6 +9,9 @@ log() { echo "[startup] $*"; }
 
 export DEBIAN_FRONTEND=noninteractive
 METADATA_HDR=( -H "Metadata-Flavor: Google" --fail --silent --show-error )
+STATE_DIR=${STATE_DIR:-/var/lib/vm-state}
+BACKUP_READY_MARKER="${STATE_DIR}/backup-ready"
+BACKUP_COMPLETE_MARKER="${STATE_DIR}/backup-complete"
 EXT_IP=$(curl "${METADATA_HDR[@]}" \
   http://metadata/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip || true)
 
@@ -71,6 +74,17 @@ set_sunshine_status() {
   set_instance_metadata_value vm-sunshine-status-detail "$detail"
 }
 
+clear_backup_ready_marker() {
+  install -d -m 0755 "$STATE_DIR"
+  rm -f "$BACKUP_READY_MARKER"
+  rm -f "$BACKUP_COMPLETE_MARKER"
+}
+
+mark_backup_ready() {
+  install -d -m 0755 "$STATE_DIR"
+  date -u +"%Y-%m-%dT%H:%M:%SZ" > "$BACKUP_READY_MARKER"
+}
+
 instance_name() {
   curl "${METADATA_HDR[@]}" \
     "http://metadata/computeMetadata/v1/instance/name"
@@ -95,6 +109,40 @@ install_persist_script() {
   install -d -m 0755 "$(dirname "$target")"
   printf '%s\n' "$payload" > "$target"
   chmod 0755 "$target"
+}
+
+install_power_action_script() {
+  local payload
+  local target=/usr/local/bin/vm-power-action
+  payload="$(metadata_get vm-power-action-script)"
+  [[ -n "$payload" ]] || return 0
+  install -d -m 0755 "$(dirname "$target")"
+  printf '%s\n' "$payload" > "$target"
+  chmod 0755 "$target"
+}
+
+install_power_action_service() {
+  local service_path=/etc/systemd/system/vm-power-action-daemon.service
+  if [[ ! -x /usr/local/bin/vm-power-action ]]; then
+    return 0
+  fi
+  cat > "$service_path" <<'EOF'
+[Unit]
+Description=VM power action daemon
+After=network-online.target google-guest-agent.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/vm-power-action daemon
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  systemctl daemon-reload
+  systemctl enable --now vm-power-action-daemon.service >/dev/null 2>&1 || true
 }
 
 sync_env_metadata() {
@@ -136,7 +184,7 @@ schedule_auto_shutdown() {
 
   systemctl stop vm-ctl-auto-shutdown.timer vm-ctl-auto-shutdown.service >/dev/null 2>&1 || true
   systemctl reset-failed vm-ctl-auto-shutdown.timer vm-ctl-auto-shutdown.service >/dev/null 2>&1 || true
-  systemd-run --unit=vm-ctl-auto-shutdown --on-active="${hours}h" /sbin/poweroff >/dev/null
+  systemd-run --unit=vm-ctl-auto-shutdown --on-active="${hours}h" /usr/local/bin/vm-power-action auto-stop >/dev/null
   next_at="$(systemctl show vm-ctl-auto-shutdown.timer --property=NextElapseUSecRealtime --value 2>/dev/null || true)"
   log "Auto-shutdown scheduled in ${hours}h${next_at:+ at ${next_at}}"
 }
@@ -208,6 +256,7 @@ ensure_sunshine_credentials() {
 }
 
 log "Installing base packages"
+clear_backup_ready_marker
 set_sunshine_status "starting" "VM startup in progress."
 apt-get update -y
 apt-get install -y ca-certificates curl gnupg lsb-release ubuntu-drivers-common jq zstd rclone
@@ -255,6 +304,8 @@ install -d -m 0755 /opt/container-data/steam-headless/sockets/.X11-unix
 install -d -m 0755 /opt/container-data/steam-headless/sockets/pulse
 install -d -m 0777 /mnt/games || true
 install_persist_script
+install_power_action_script
+install_power_action_service
 
 cd /opt/container-services/steam-headless
 
@@ -329,7 +380,11 @@ chmod 600 "$ENVF"
 sync_env_metadata
 
 if [ -x /usr/local/bin/vm-persist-state ]; then
-  /usr/local/bin/vm-persist-state restore || log "State restore skipped or failed"
+  if ! /usr/local/bin/vm-persist-state restore; then
+    set_sunshine_status "starting" "Persisted state restore failed."
+    log "State restore failed"
+    exit 1
+  fi
 fi
 
 docker compose "${COMPOSE_FILES[@]}" up -d
@@ -359,6 +414,8 @@ sed -i -E \
 } >> "$CFG_HOST"
 
 docker compose "${COMPOSE_FILES[@]}" restart || true
+mark_backup_ready
+log "Backup readiness marker created"
 
 schedule_auto_shutdown
 
