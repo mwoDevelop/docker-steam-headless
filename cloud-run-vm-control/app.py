@@ -649,11 +649,26 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
     if command == "create":
         if current_instance is not None:
             raise ApiError("Instance already exists.", 400)
+        auto_stop_hours = parse_auto_stop_hours(payload)
+        metadata_items = []
+        if auto_stop_hours is not None:
+            metadata_items.append({"key": AUTO_STOP_METADATA_KEY, "value": str(auto_stop_hours)})
+        metadata_items.extend(
+            [
+                {"key": SUNSHINE_STATUS_METADATA_KEY, "value": "starting"},
+                {"key": SUNSHINE_STATUS_DETAIL_METADATA_KEY, "value": "VM booting. Waiting for Sunshine Web UI."},
+            ]
+        )
         operation = compute_request(
             "POST",
             instances_collection_url(),
             params={"sourceInstanceTemplate": instance_template_self_link()},
-            json={"name": CONFIG["instance"]},
+            json={
+                "name": CONFIG["instance"],
+                "metadata": {
+                    "items": metadata_items,
+                },
+            },
         )
         if not isinstance(operation, dict):
             raise ApiError("Failed to create instance.", 502)

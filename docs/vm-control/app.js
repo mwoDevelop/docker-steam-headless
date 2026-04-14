@@ -87,7 +87,7 @@
     );
 
     elements.refreshStatus.disabled = state.isBusy || !state.user || !allowed.has("status");
-    elements.autoStopHours.disabled = state.isBusy || !state.user || !allowed.has("start");
+    elements.autoStopHours.disabled = state.isBusy || !state.user || (!allowed.has("start") && !allowed.has("create"));
     elements.actionButtons.forEach((button) => {
       button.disabled = state.isBusy || !state.user || !allowed.has(button.dataset.command);
     });
@@ -434,7 +434,7 @@
   }
 
   function readAutoStopHours(command) {
-    if (command !== "start") {
+    if (command !== "start" && command !== "create") {
       return null;
     }
 
