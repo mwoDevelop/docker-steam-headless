@@ -1,3 +1,4 @@
+import base64
 import logging
 import os
 import secrets
@@ -48,7 +49,25 @@ CONFIG = {
     "project": os.environ.get("GCP_PROJECT", ""),
     "zone": os.environ.get("GCP_ZONE", ""),
     "instance": os.environ.get("GCE_NAME", ""),
-    "instance_template": os.environ.get("INSTANCE_TEMPLATE_NAME", ""),
+    "machine_type": os.environ.get("MACHINE_TYPE", "n1-standard-4"),
+    "gpu_type": os.environ.get("GPU_TYPE", "nvidia-tesla-t4"),
+    "gpu_count": int(os.environ.get("GPU_COUNT", "1") or "1"),
+    "boot_disk_size": os.environ.get("BOOT_DISK_SIZE", "120GB"),
+    "boot_disk_type": os.environ.get("BOOT_DISK_TYPE", "pd-ssd"),
+    "vm_image_family": os.environ.get("VM_IMAGE_FAMILY", "ubuntu-2204-lts"),
+    "vm_image_project": os.environ.get("VM_IMAGE_PROJECT", "ubuntu-os-cloud"),
+    "vm_network": os.environ.get("VM_NETWORK", "default"),
+    "vm_subnet": os.environ.get("VM_SUBNET", ""),
+    "vm_tags": csv_env("VM_TAGS") or csv_env("TAGS"),
+    "vm_service_account_email": os.environ.get("VM_SERVICE_ACCOUNT_EMAIL", ""),
+    "gdrive_folder_id": os.environ.get("GDRIVE_FOLDER_ID", ""),
+    "gdrive_state_root": os.environ.get("GDRIVE_STATE_ROOT", "steam-vm-state"),
+    "gdrive_oauth_token_secret_name": os.environ.get("GDRIVE_OAUTH_TOKEN_SECRET_NAME", ""),
+    "gdrive_service_account_secret_name": os.environ.get("GDRIVE_SERVICE_ACCOUNT_SECRET_NAME", ""),
+    "vm_startup_script_b64": os.environ.get("VM_STARTUP_SCRIPT_B64", ""),
+    "vm_shutdown_script_b64": os.environ.get("VM_SHUTDOWN_SCRIPT_B64", ""),
+    "vm_persist_script_b64": os.environ.get("VM_PERSIST_SCRIPT_B64", ""),
+    "vm_steam_env_b64": os.environ.get("VM_STEAM_ENV_B64", ""),
     "allowed_origins": csv_env("ALLOWED_ORIGINS"),
     "google_client_ids": csv_env("GOOGLE_CLIENT_IDS") or csv_env("GOOGLE_CLIENT_ID"),
     "allowed_google_emails": {value.lower() for value in csv_env("ALLOWED_GOOGLE_EMAILS")},
@@ -98,10 +117,59 @@ def instances_collection_url() -> str:
     return f"https://compute.googleapis.com/compute/v1/projects/{project}/zones/{zone}/instances"
 
 
-def instance_template_self_link() -> str:
-    template = CONFIG["instance_template"] or f"{CONFIG['instance']}-template"
-    project = require_env("project")
-    return f"https://compute.googleapis.com/compute/v1/projects/{project}/global/instanceTemplates/{template}"
+def zone_region(zone: str) -> str:
+    if zone.count("-") >= 2:
+        return zone.rsplit("-", 1)[0]
+    return zone
+
+
+def machine_type_path() -> str:
+    return f"zones/{require_env('zone')}/machineTypes/{CONFIG['machine_type']}"
+
+
+def accelerator_type_path() -> str:
+    return f"zones/{require_env('zone')}/acceleratorTypes/{CONFIG['gpu_type']}"
+
+
+def disk_type_path() -> str:
+    return f"zones/{require_env('zone')}/diskTypes/{CONFIG['boot_disk_type']}"
+
+
+def network_path() -> str:
+    value = CONFIG["vm_network"].strip()
+    if not value:
+        return f"projects/{require_env('project')}/global/networks/default"
+    if "/" in value:
+        return value
+    return f"projects/{require_env('project')}/global/networks/{value}"
+
+
+def subnet_path() -> str:
+    value = CONFIG["vm_subnet"].strip()
+    if not value:
+        return ""
+    if "/" in value:
+        return value
+    return (
+        f"projects/{require_env('project')}/regions/{zone_region(require_env('zone'))}/subnetworks/{value}"
+    )
+
+
+def parse_disk_size_gb(raw_value: str) -> str:
+    digits = "".join(ch for ch in raw_value if ch.isdigit())
+    if not digits:
+        raise ApiError("BOOT_DISK_SIZE must include a numeric size.", 500)
+    return digits
+
+
+def decode_config_b64(name: str) -> str:
+    raw_value = str(CONFIG.get(name, "") or "")
+    if not raw_value:
+        raise ApiError(f"Service is missing required configuration: {name}", 500)
+    try:
+        return base64.b64decode(raw_value).decode("utf-8")
+    except Exception as error:
+        raise ApiError(f"Service has invalid base64 configuration for {name}: {error}", 500) from error
 
 
 def allowed_origin() -> str | None:
@@ -171,7 +239,6 @@ def options_passthrough():
                     "project": CONFIG["project"],
                     "zone": CONFIG["zone"],
                     "instance": CONFIG["instance"],
-                    "instanceTemplate": CONFIG["instance_template"] or f"{CONFIG['instance']}-template",
                 },
                 "duckdnsDomains": CONFIG["duckdns_domains"],
                 "ports": {
@@ -448,6 +515,122 @@ def prepare_sunshine_credentials(instance: dict[str, Any]) -> tuple[dict[str, An
     return updated_instance, {"username": SUNSHINE_USERNAME, "password": password}
 
 
+def build_steam_env_value(overrides: dict[str, str]) -> str:
+    raw_env = decode_config_b64("vm_steam_env_b64")
+    updated_env = raw_env
+    for key, value in overrides.items():
+        updated_env = upsert_metadata_env_value(updated_env, key, value)
+    return updated_env
+
+
+def build_instance_metadata_items(
+    *,
+    auto_stop_hours: int | None,
+    sunshine_credentials: dict[str, str],
+) -> list[dict[str, str]]:
+    items = [
+        {"key": "startup-script", "value": decode_config_b64("vm_startup_script_b64")},
+        {"key": "shutdown-script", "value": decode_config_b64("vm_shutdown_script_b64")},
+        {"key": "vm-persist-script", "value": decode_config_b64("vm_persist_script_b64")},
+        {
+            "key": STEAM_ENV_METADATA_KEY,
+            "value": build_steam_env_value(
+                {
+                    "SUNSHINE_USER": sunshine_credentials["username"],
+                    "SUNSHINE_PASS": sunshine_credentials["password"],
+                }
+            ),
+        },
+        {"key": SUNSHINE_STATUS_METADATA_KEY, "value": "starting"},
+        {"key": SUNSHINE_STATUS_DETAIL_METADATA_KEY, "value": "VM booting. Waiting for Sunshine Web UI."},
+    ]
+
+    if CONFIG["gdrive_folder_id"]:
+        items.append({"key": "gdrive-folder-id", "value": CONFIG["gdrive_folder_id"]})
+        items.append({"key": "gdrive-state-root", "value": CONFIG["gdrive_state_root"]})
+    if CONFIG["gdrive_oauth_token_secret_name"]:
+        items.append(
+            {
+                "key": "gdrive-oauth-token-secret-name",
+                "value": CONFIG["gdrive_oauth_token_secret_name"],
+            }
+        )
+    if CONFIG["gdrive_service_account_secret_name"]:
+        items.append(
+            {
+                "key": "gdrive-service-account-secret-name",
+                "value": CONFIG["gdrive_service_account_secret_name"],
+            }
+        )
+    if auto_stop_hours is not None:
+        items.append({"key": AUTO_STOP_METADATA_KEY, "value": str(auto_stop_hours)})
+    return items
+
+
+def build_instance_create_request(
+    *,
+    auto_stop_hours: int | None,
+    sunshine_credentials: dict[str, str],
+) -> dict[str, Any]:
+    network_interface: dict[str, Any] = {
+        "network": network_path(),
+        "accessConfigs": [{"name": "External NAT", "type": "ONE_TO_ONE_NAT"}],
+    }
+    subnet = subnet_path()
+    if subnet:
+        network_interface["subnetwork"] = subnet
+
+    service_account_email = CONFIG["vm_service_account_email"].strip()
+    if not service_account_email:
+        raise ApiError("Service is missing required configuration: vm_service_account_email", 500)
+
+    request_body: dict[str, Any] = {
+        "name": CONFIG["instance"],
+        "machineType": machine_type_path(),
+        "disks": [
+            {
+                "boot": True,
+                "autoDelete": True,
+                "initializeParams": {
+                    "sourceImage": (
+                        f"projects/{CONFIG['vm_image_project']}/global/images/family/{CONFIG['vm_image_family']}"
+                    ),
+                    "diskSizeGb": parse_disk_size_gb(CONFIG["boot_disk_size"]),
+                    "diskType": disk_type_path(),
+                },
+            }
+        ],
+        "networkInterfaces": [network_interface],
+        "serviceAccounts": [
+            {
+                "email": service_account_email,
+                "scopes": ["https://www.googleapis.com/auth/cloud-platform"],
+            }
+        ],
+        "scheduling": {
+            "onHostMaintenance": "TERMINATE",
+            "automaticRestart": True,
+        },
+        "metadata": {
+            "items": build_instance_metadata_items(
+                auto_stop_hours=auto_stop_hours,
+                sunshine_credentials=sunshine_credentials,
+            )
+        },
+    }
+
+    if CONFIG["vm_tags"]:
+        request_body["tags"] = {"items": CONFIG["vm_tags"]}
+    if CONFIG["gpu_count"] > 0:
+        request_body["guestAccelerators"] = [
+            {
+                "acceleratorType": accelerator_type_path(),
+                "acceleratorCount": CONFIG["gpu_count"],
+            }
+        ]
+    return request_body
+
+
 def build_urls(external_ip: str) -> dict[str, Any]:
     urls: dict[str, Any] = {
         "novnc": "",
@@ -650,25 +833,17 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
         if current_instance is not None:
             raise ApiError("Instance already exists.", 400)
         auto_stop_hours = parse_auto_stop_hours(payload)
-        metadata_items = []
-        if auto_stop_hours is not None:
-            metadata_items.append({"key": AUTO_STOP_METADATA_KEY, "value": str(auto_stop_hours)})
-        metadata_items.extend(
-            [
-                {"key": SUNSHINE_STATUS_METADATA_KEY, "value": "starting"},
-                {"key": SUNSHINE_STATUS_DETAIL_METADATA_KEY, "value": "VM booting. Waiting for Sunshine Web UI."},
-            ]
-        )
+        sunshine_credentials = {
+            "username": SUNSHINE_USERNAME,
+            "password": generate_sunshine_password(),
+        }
         operation = compute_request(
             "POST",
             instances_collection_url(),
-            params={"sourceInstanceTemplate": instance_template_self_link()},
-            json={
-                "name": CONFIG["instance"],
-                "metadata": {
-                    "items": metadata_items,
-                },
-            },
+            json=build_instance_create_request(
+                auto_stop_hours=auto_stop_hours,
+                sunshine_credentials=sunshine_credentials,
+            ),
         )
         if not isinstance(operation, dict):
             raise ApiError("Failed to create instance.", 502)
@@ -676,7 +851,13 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
         poll_instance_status("RUNNING", timeout_seconds=240)
         final_instance = wait_for_external_ip(timeout_seconds=180)
         updated = update_duckdns(extract_external_ip(final_instance))
-        return build_status_payload(final_instance, user=user, command=command, duckdns_updated=updated)
+        return build_status_payload(
+            final_instance,
+            user=user,
+            command=command,
+            duckdns_updated=updated,
+            sunshine_credentials=sunshine_credentials,
+        )
 
     if command == "start":
         if current_instance is None:

@@ -25,7 +25,10 @@ GPU_COUNT=${GPU_COUNT:-1}
 BOOT_DISK_SIZE=${BOOT_DISK_SIZE:-120GB}
 BOOT_DISK_TYPE=${BOOT_DISK_TYPE:-pd-ssd}
 TAGS=${TAGS:-steam-headless}
-INSTANCE_TEMPLATE_NAME=${INSTANCE_TEMPLATE_NAME:-${GCE_NAME}-template}
+VM_IMAGE_FAMILY=${VM_IMAGE_FAMILY:-ubuntu-2204-lts}
+VM_IMAGE_PROJECT=${VM_IMAGE_PROJECT:-ubuntu-os-cloud}
+VM_NETWORK=${VM_NETWORK:-default}
+VM_SUBNET=${VM_SUBNET:-}
 # CIDR allowed to reach Web UI and Sunshine (set to your IP/32 for safety)
 ALLOW_CIDR=${ALLOW_CIDR:-0.0.0.0/0}
 GDRIVE_FOLDER_ID=${GDRIVE_FOLDER_ID:-}
@@ -227,35 +230,35 @@ else
     --source-ranges="$ALLOW_CIDR" || true
 fi
 
-if gcloud compute instance-templates describe "$INSTANCE_TEMPLATE_NAME" --project "$GCP_PROJECT" >/dev/null 2>&1; then
-  gcloud compute instance-templates delete "$INSTANCE_TEMPLATE_NAME" \
-    --project "$GCP_PROJECT" \
-    --quiet >/dev/null
-fi
-
-gcloud compute instance-templates create "$INSTANCE_TEMPLATE_NAME" \
-  --project="$GCP_PROJECT" \
-  --machine-type="$MACHINE_TYPE" \
-  --accelerator="type=${GPU_TYPE},count=${GPU_COUNT}" \
-  --maintenance-policy=TERMINATE \
-  --restart-on-failure \
-  --image-family=ubuntu-2204-lts \
-  --image-project=ubuntu-os-cloud \
-  --boot-disk-size="$BOOT_DISK_SIZE" \
-  --boot-disk-type="$BOOT_DISK_TYPE" \
-  --tags="$TAGS" \
-  --service-account="$DEFAULT_COMPUTE_SA" \
-  --scopes="https://www.googleapis.com/auth/cloud-platform" \
-  --metadata-from-file startup-script="$STARTUP_SCRIPT",shutdown-script="$SHUTDOWN_SCRIPT",vm-persist-script="$PERSIST_SCRIPT",steam-headless-env="$STEAM_ENV_FILE" \
-  "${INSTANCE_METADATA_ARGS[@]}" >/dev/null
-
 # Create VM if missing
 if ! gcloud compute instances describe "$GCE_NAME" --zone="$GCP_ZONE" --project="$GCP_PROJECT" >/dev/null 2>&1; then
   echo "Creating instance ${GCE_NAME}..."
+  CREATE_ARGS=(
+    --project="$GCP_PROJECT"
+    --zone="$GCP_ZONE"
+    --machine-type="$MACHINE_TYPE"
+    --accelerator="type=${GPU_TYPE},count=${GPU_COUNT}"
+    --maintenance-policy=TERMINATE
+    --restart-on-failure
+    --image-family="$VM_IMAGE_FAMILY"
+    --image-project="$VM_IMAGE_PROJECT"
+    --boot-disk-size="$BOOT_DISK_SIZE"
+    --boot-disk-type="$BOOT_DISK_TYPE"
+    --tags="$TAGS"
+    --service-account="$DEFAULT_COMPUTE_SA"
+    --scopes="https://www.googleapis.com/auth/cloud-platform"
+    --metadata-from-file
+    "startup-script=${STARTUP_SCRIPT},shutdown-script=${SHUTDOWN_SCRIPT},vm-persist-script=${PERSIST_SCRIPT},steam-headless-env=${STEAM_ENV_FILE}"
+  )
+  if [[ -n "$VM_NETWORK" ]]; then
+    CREATE_ARGS+=(--network="$VM_NETWORK")
+  fi
+  if [[ -n "$VM_SUBNET" ]]; then
+    CREATE_ARGS+=(--subnet="$VM_SUBNET")
+  fi
   gcloud compute instances create "$GCE_NAME" \
-    --project="$GCP_PROJECT" \
-    --zone="$GCP_ZONE" \
-    --source-instance-template="$INSTANCE_TEMPLATE_NAME"
+    "${CREATE_ARGS[@]}" \
+    "${INSTANCE_METADATA_ARGS[@]}" >/dev/null
 else
   echo "Instance ${GCE_NAME} already exists; updating startup metadata."
   gcloud compute instances add-metadata "$GCE_NAME" \
