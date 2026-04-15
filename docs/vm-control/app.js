@@ -194,6 +194,15 @@
     const domains = (config.duckdnsDomains || []).length
       ? `<p><strong>DuckDNS:</strong> <code>${escapeHtml(config.duckdnsDomains.join(", "))}</code></p>`
       : "<p><strong>DuckDNS:</strong> not configured</p>";
+    const persistence = state.lastStatus && state.lastStatus.persistence ? state.lastStatus.persistence : null;
+    const persistenceMeta = persistence
+      ? `
+        <p><strong>Data disk:</strong> <code>${escapeHtml(persistence.dataDisk && persistence.dataDisk.label || "unknown")}</code></p>
+        <p><strong>Restore:</strong> <code>${escapeHtml(persistence.restore && persistence.restore.label || "idle")}</code></p>
+        <p><strong>Last home backup:</strong> <code>${escapeHtml(persistence.homeBackup && persistence.homeBackup.lastAt || "n/a")}</code></p>
+        <p><strong>Last games archive:</strong> <code>${escapeHtml(persistence.gamesArchive && persistence.gamesArchive.lastAt || "n/a")}</code></p>
+      `
+      : "";
 
     elements.targetSummary.innerHTML = `
       <p><strong>Backend:</strong> <code>${escapeHtml(state.backendUrl)}</code></p>
@@ -201,6 +210,7 @@
       <p><strong>Zone:</strong> <code>${escapeHtml(target.zone || "unknown")}</code></p>
       <p><strong>Instance:</strong> <code>${escapeHtml(target.instance || "unknown")}</code></p>
       ${domains}
+      ${persistenceMeta}
     `;
   }
 
@@ -409,6 +419,7 @@
         body: JSON.stringify(body),
       });
       state.lastStatus = data;
+      renderTargetSummary();
       renderAccess(data);
 
       const suffix = data.duckdnsUpdated
@@ -494,6 +505,7 @@
     try {
       const data = await fetchApi("/api/status", { method: "GET" });
       state.lastStatus = data;
+      renderTargetSummary();
       renderAccess(data);
       updateActionAvailability();
       if (!silent) {
@@ -518,6 +530,22 @@
       ? `${payload.target.project}/${payload.target.zone}/${payload.target.instance}`
       : "unknown target";
 
+    const persistence = payload.persistence || {};
+    const dataDisk = persistence.dataDisk || {};
+    const restore = persistence.restore || {};
+    const homeBackup = persistence.homeBackup || {};
+    const gamesArchive = persistence.gamesArchive || {};
+    const persistenceMeta = `
+      <article class="access-card">
+        <h3>Persistence</h3>
+        <p>Runtime state is split between frequent home backups and a games archive created during delete.</p>
+        <p class="access-meta">Data disk: <code>${escapeHtml(dataDisk.label || "unknown")}</code></p>
+        <p class="access-meta">Restore: <code>${escapeHtml(restore.label || "idle")}</code></p>
+        <p class="access-meta">Last home backup: <code>${escapeHtml(homeBackup.lastAt || "n/a")}</code></p>
+        <p class="access-meta">Last games archive: <code>${escapeHtml(gamesArchive.lastAt || "n/a")}</code></p>
+      </article>
+    `;
+
     if (payload.instanceExists === false || payload.status === "NOT_FOUND") {
       elements.access.className = "access";
       elements.access.innerHTML = `
@@ -526,6 +554,7 @@
             <h3>VM not created</h3>
             <p>No Compute Engine instance exists yet for <code>${escapeHtml(target)}</code>. Use <code>Create</code> to provision a new VM and restore state from backup when available.</p>
           </article>
+          ${persistenceMeta}
         </div>
       `;
       return;
@@ -539,6 +568,7 @@
             <h3>VM not running</h3>
             <p>The current backend status for <code>${escapeHtml(target)}</code> is <code>${escapeHtml(payload.status || "UNKNOWN")}</code>, so remote access links are not available right now.</p>
           </article>
+          ${persistenceMeta}
         </div>
       `;
       return;
@@ -551,6 +581,7 @@
           <h3>VM is running, but IP is missing</h3>
           <p>The backend reported a running VM for <code>${escapeHtml(target)}</code>, but no external IP is available yet.</p>
         </article>
+        ${persistenceMeta}
       `;
       return;
     }
@@ -617,6 +648,8 @@
           <p class="access-meta">URL: <code>${novncUrl}</code></p>
           ${novncDnsMeta}
         </article>
+
+        ${persistenceMeta}
       </div>
 
       <p class="access-note">

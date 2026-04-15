@@ -174,6 +174,10 @@ sync_env_metadata() {
     "https://compute.googleapis.com/compute/v1/projects/${project}/zones/${zone}/instances/${name}/setMetadata" >/dev/null || true
 }
 
+clear_restore_mode() {
+  set_instance_metadata_value vm-restore-mode ""
+}
+
 schedule_auto_shutdown() {
   local hours
   local next_at
@@ -299,13 +303,22 @@ modprobe fuse || true
 echo uinput > /etc/modules-load.d/uinput.conf
 
 install -d -m 0755 /opt/container-services/steam-headless
-install -d -m 0755 /opt/container-data/steam-headless/home
 install -d -m 0755 /opt/container-data/steam-headless/sockets/.X11-unix
 install -d -m 0755 /opt/container-data/steam-headless/sockets/pulse
-install -d -m 0777 /mnt/games || true
 install_persist_script
 install_power_action_script
 install_power_action_service
+
+if [[ -x /usr/local/bin/vm-persist-state ]]; then
+  if ! /usr/local/bin/vm-persist-state prepare-disk; then
+    set_sunshine_status "error" "Shared data disk preparation failed."
+    log "Shared data disk preparation failed"
+    exit 1
+  fi
+fi
+
+install -d -m 0755 /opt/container-data/steam-headless/home
+install -d -m 0777 /mnt/games || true
 
 cd /opt/container-services/steam-headless
 
@@ -380,9 +393,14 @@ chmod 600 "$ENVF"
 sync_env_metadata
 
 if [ -x /usr/local/bin/vm-persist-state ]; then
-  if ! /usr/local/bin/vm-persist-state restore; then
+  if ! /usr/local/bin/vm-persist-state restore-create; then
     set_sunshine_status "starting" "Persisted state restore failed."
     log "State restore failed"
+    exit 1
+  fi
+  if ! /usr/local/bin/vm-persist-state bind-mounts; then
+    set_sunshine_status "error" "Shared data disk bind mounts failed."
+    log "Shared data disk bind mounts failed"
     exit 1
   fi
 fi
@@ -418,6 +436,10 @@ mark_backup_ready
 log "Backup readiness marker created"
 
 schedule_auto_shutdown
+if [[ "$(metadata_get vm-restore-mode)" == "create" ]]; then
+  clear_restore_mode
+  log "Cleared create-time restore gate"
+fi
 
 sunshine_http_code=""
 for _ in $(seq 1 60); do

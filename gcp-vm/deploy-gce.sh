@@ -10,6 +10,7 @@ ROOT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")"/.. && pwd)
 STARTUP_SCRIPT="${ROOT_DIR}/gcp-vm/startup.sh"
 SHUTDOWN_SCRIPT="${ROOT_DIR}/gcp-vm/shutdown.sh"
 PERSIST_SCRIPT="${ROOT_DIR}/gcp-vm/persist-state.sh"
+POWER_ACTION_SCRIPT="${ROOT_DIR}/gcp-vm/power-action.sh"
 
 # shellcheck disable=SC1091
 source "${ROOT_DIR}/gcp-vm/lib/env.sh"
@@ -24,6 +25,10 @@ GPU_TYPE=${GPU_TYPE:-nvidia-tesla-t4}
 GPU_COUNT=${GPU_COUNT:-1}
 BOOT_DISK_SIZE=${BOOT_DISK_SIZE:-120GB}
 BOOT_DISK_TYPE=${BOOT_DISK_TYPE:-pd-ssd}
+DATA_DISK_SIZE=${DATA_DISK_SIZE:-300GB}
+DATA_DISK_TYPE=${DATA_DISK_TYPE:-pd-balanced}
+DATA_DISK_DEVICE_NAME=${DATA_DISK_DEVICE_NAME:-steam-state}
+DATA_DISK_MOUNT_ROOT=${DATA_DISK_MOUNT_ROOT:-/mnt/state}
 TAGS=${TAGS:-steam-headless}
 VM_IMAGE_FAMILY=${VM_IMAGE_FAMILY:-ubuntu-2204-lts}
 VM_IMAGE_PROJECT=${VM_IMAGE_PROJECT:-ubuntu-os-cloud}
@@ -158,20 +163,19 @@ if [[ -n "$GDRIVE_FOLDER_ID" && -n "$GDRIVE_OAUTH_TOKEN_SECRET_NAME" ]]; then
     --role="roles/secretmanager.secretAccessor" >/dev/null || true
 fi
 
-INSTANCE_METADATA_ARGS=()
+METADATA_VALUES=(
+  "vm-data-disk-device-name=${DATA_DISK_DEVICE_NAME}"
+  "vm-data-disk-mount-root=${DATA_DISK_MOUNT_ROOT}"
+)
 if [[ -n "$GDRIVE_FOLDER_ID" ]]; then
-  metadata_values=(
+  METADATA_VALUES+=(
     "gdrive-folder-id=${GDRIVE_FOLDER_ID}"
     "gdrive-state-root=${GDRIVE_STATE_ROOT}"
     "gdrive-owner-email=${GDRIVE_OWNER_EMAIL}"
   )
   if [[ -n "$GDRIVE_OAUTH_TOKEN_SECRET_NAME" ]]; then
-    metadata_values+=("gdrive-oauth-token-secret-name=${GDRIVE_OAUTH_TOKEN_SECRET_NAME}")
+    METADATA_VALUES+=("gdrive-oauth-token-secret-name=${GDRIVE_OAUTH_TOKEN_SECRET_NAME}")
   fi
-  INSTANCE_METADATA_ARGS+=(
-    --metadata
-    "$(IFS=,; echo "${metadata_values[*]}")"
-  )
 fi
 
 # Firewall: noVNC + SSH
@@ -220,11 +224,20 @@ if ! gcloud compute instances describe "$GCE_NAME" --zone="$GCP_ZONE" --project=
     --image-project="$VM_IMAGE_PROJECT"
     --boot-disk-size="$BOOT_DISK_SIZE"
     --boot-disk-type="$BOOT_DISK_TYPE"
+    --create-disk="device-name=${DATA_DISK_DEVICE_NAME},mode=rw,auto-delete=yes,size=${DATA_DISK_SIZE},type=${DATA_DISK_TYPE}"
     --tags="$TAGS"
     --service-account="$DEFAULT_COMPUTE_SA"
     --scopes="https://www.googleapis.com/auth/cloud-platform"
     --metadata-from-file
-    "startup-script=${STARTUP_SCRIPT},shutdown-script=${SHUTDOWN_SCRIPT},vm-persist-script=${PERSIST_SCRIPT},steam-headless-env=${STEAM_ENV_FILE}"
+    "startup-script=${STARTUP_SCRIPT},shutdown-script=${SHUTDOWN_SCRIPT},vm-persist-script=${PERSIST_SCRIPT},vm-power-action-script=${POWER_ACTION_SCRIPT},steam-headless-env=${STEAM_ENV_FILE}"
+  )
+  CREATE_METADATA_VALUES=(
+    "${METADATA_VALUES[@]}"
+    "vm-restore-mode=create"
+    "vm-restore-status=pending"
+    "vm-restore-detail=Waiting for create-time restore."
+    "vm-data-disk-status=pending"
+    "vm-data-disk-detail=Waiting for shared data disk mount."
   )
   if [[ -n "$VM_NETWORK" ]]; then
     CREATE_ARGS+=(--network="$VM_NETWORK")
@@ -234,14 +247,14 @@ if ! gcloud compute instances describe "$GCE_NAME" --zone="$GCP_ZONE" --project=
   fi
   gcloud compute instances create "$GCE_NAME" \
     "${CREATE_ARGS[@]}" \
-    "${INSTANCE_METADATA_ARGS[@]}" >/dev/null
+    --metadata "$(IFS=,; echo "${CREATE_METADATA_VALUES[*]}")" >/dev/null
 else
   echo "Instance ${GCE_NAME} already exists; updating startup metadata."
   gcloud compute instances add-metadata "$GCE_NAME" \
     --project="$GCP_PROJECT" \
     --zone="$GCP_ZONE" \
-    --metadata-from-file startup-script="$STARTUP_SCRIPT",shutdown-script="$SHUTDOWN_SCRIPT",vm-persist-script="$PERSIST_SCRIPT",steam-headless-env="$STEAM_ENV_FILE" \
-    "${INSTANCE_METADATA_ARGS[@]}" >/dev/null
+    --metadata-from-file startup-script="$STARTUP_SCRIPT",shutdown-script="$SHUTDOWN_SCRIPT",vm-persist-script="$PERSIST_SCRIPT",vm-power-action-script="$POWER_ACTION_SCRIPT",steam-headless-env="$STEAM_ENV_FILE" \
+    --metadata "$(IFS=,; echo "${METADATA_VALUES[*]}")" >/dev/null
 fi
 
 echo "Instance details:"

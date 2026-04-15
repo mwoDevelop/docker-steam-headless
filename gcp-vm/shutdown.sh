@@ -46,7 +46,7 @@ main() {
     exit 0
   fi
 
-  if "$PERSIST_SCRIPT" backup; then
+  if "$PERSIST_SCRIPT" backup-runtime; then
     log "State backup completed during shutdown."
     exit 0
   fi

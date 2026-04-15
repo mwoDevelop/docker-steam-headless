@@ -117,6 +117,7 @@ ensure_persist_script() {
 }
 
 run_backup() {
+  local mode="$1"
   if ! ensure_persist_script; then
     log "Persist script is unavailable."
     return 1
@@ -125,18 +126,26 @@ run_backup() {
     log "Backup readiness marker is missing."
     return 1
   fi
-  "$PERSIST_SCRIPT" backup
+  "$PERSIST_SCRIPT" "$mode"
 }
 
 perform_action() {
   local action="$1"
   local token="$2"
   local trigger="$3"
+  local backup_mode="backup-runtime"
 
   log "Handling action=${action} token=${token} trigger=${trigger}"
   set_power_action_status "$action" "$token" "running"
 
-  if ! run_backup; then
+  case "$action" in
+    delete)
+      backup_mode="backup-delete"
+      ;;
+  esac
+
+  if ! run_backup "$backup_mode"; then
+    "$PERSIST_SCRIPT" start-stack >/dev/null 2>&1 || true
     set_power_action_status "$action" "$token" "failed" ""
     return 1
   fi
