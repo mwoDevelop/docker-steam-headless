@@ -818,6 +818,11 @@ def build_persistence_status(instance: dict[str, Any] | None) -> dict[str, Any]:
                 "label": "VM not created",
                 "detail": "",
             },
+            "backupReady": {
+                "state": "",
+                "label": "",
+                "lastAt": "",
+            },
             "restore": {
                 "mode": "",
                 "state": "",
@@ -868,6 +873,15 @@ def build_persistence_status(instance: dict[str, Any] | None) -> dict[str, Any]:
             "label": data_disk_labels.get(data_disk_state, data_disk_state.title() if data_disk_state else ""),
             "detail": metadata_value(instance, DATA_DISK_DETAIL_METADATA_KEY),
         },
+        "backupReady": {
+            "state": "ready" if metadata_value(instance, BACKUP_READY_AT_METADATA_KEY).strip() else "pending",
+            "label": (
+                "Ready"
+                if metadata_value(instance, BACKUP_READY_AT_METADATA_KEY).strip()
+                else "Pending"
+            ),
+            "lastAt": metadata_value(instance, BACKUP_READY_AT_METADATA_KEY),
+        },
         "restore": {
             "mode": restore_mode,
             "state": restore_state,
@@ -888,13 +902,34 @@ def build_persistence_status(instance: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
+def is_live_backup_ready(instance: dict[str, Any] | None) -> bool:
+    if instance is None:
+        return False
+    status = str(instance.get("status", "")).upper()
+    if status != "RUNNING":
+        return False
+    return bool(metadata_value(instance, BACKUP_READY_AT_METADATA_KEY).strip())
+
+
+def require_live_backup_ready(instance: dict[str, Any] | None, command: str) -> None:
+    if is_live_backup_ready(instance):
+        return
+    raise ApiError(
+        f'VM is still booting. "{command}" is available only after startup finishes and live backup becomes ready.',
+        409,
+    )
+
+
 def allowed_commands(instance: dict[str, Any] | None) -> list[str]:
     if instance is None:
         return ["create"]
 
     status = str(instance.get("status", "UNKNOWN")).upper()
     if status == "RUNNING":
-        return ["status", "restart", "stop", "delete"]
+        commands = ["status"]
+        if is_live_backup_ready(instance):
+            commands.extend(["restart", "stop", "delete"])
+        return commands
     if status == "TERMINATED":
         return ["status", "start", "delete"]
     return ["status", "delete"]
@@ -1122,6 +1157,7 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
         if current_instance is None:
             raise ApiError("Instance does not exist.", 400)
         if current_status != "TERMINATED":
+            require_live_backup_ready(current_instance, command)
             current_instance, token = request_live_power_action(
                 current_instance,
                 action="stop",
@@ -1155,6 +1191,7 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
         )
         current_instance = get_instance()
         if current_status == "RUNNING":
+            require_live_backup_ready(current_instance, command)
             previous_start_timestamp = str(current_instance.get("lastStartTimestamp", "") or "")
             current_instance, token = request_live_power_action(
                 current_instance,
@@ -1207,6 +1244,8 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
                 timeout_seconds=900,
                 previous_timestamp=previous_backup_ready_at,
             )
+        elif current_status == "RUNNING":
+            require_live_backup_ready(current_instance, command)
 
         current_instance, token = request_live_power_action(
             current_instance,

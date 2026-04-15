@@ -532,6 +532,7 @@
 
     const persistence = payload.persistence || {};
     const dataDisk = persistence.dataDisk || {};
+    const backupReady = persistence.backupReady || {};
     const restore = persistence.restore || {};
     const homeBackup = persistence.homeBackup || {};
     const gamesArchive = persistence.gamesArchive || {};
@@ -540,6 +541,7 @@
         <h3>Persistence</h3>
         <p>Runtime state is split between frequent home backups and a games archive created during delete.</p>
         <p class="access-meta">Data disk: <code>${escapeHtml(dataDisk.label || "unknown")}</code></p>
+        <p class="access-meta">Backup ready: <code>${escapeHtml(backupReady.label || "unknown")}</code></p>
         <p class="access-meta">Restore: <code>${escapeHtml(restore.label || "idle")}</code></p>
         <p class="access-meta">Last home backup: <code>${escapeHtml(homeBackup.lastAt || "n/a")}</code></p>
         <p class="access-meta">Last games archive: <code>${escapeHtml(gamesArchive.lastAt || "n/a")}</code></p>
@@ -653,7 +655,7 @@
       </div>
 
       <p class="access-note">
-        The VM can report <code>RUNNING</code> before the desktop and Sunshine finish booting. On a cold start, give noVNC and Sunshine up to a minute or two to become reachable.
+        The VM can report <code>RUNNING</code> before the desktop and Sunshine finish booting. On a cold start, give noVNC and Sunshine up to a minute or two to become reachable. Restart, Stop, and Delete stay disabled until the VM reports <code>Backup ready</code>.
       </p>
     `;
   }
