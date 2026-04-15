@@ -37,34 +37,42 @@ set_instance_metadata_value() {
   name="$(instance_name || true)"
   [[ -n "$token" && -n "$project" && -n "$zone" && -n "$name" ]] || return 0
 
-  instance_json="$(curl --fail --silent --show-error \
-    -H "Authorization: Bearer ${token}" \
-    "https://compute.googleapis.com/compute/v1/projects/${project}/zones/${zone}/instances/${name}" || true)"
-  [[ -n "$instance_json" ]] || return 0
-  fingerprint="$(printf '%s' "$instance_json" | jq -r '.metadata.fingerprint // empty')"
-  [[ -n "$fingerprint" ]] || return 0
-  items="$(printf '%s' "$instance_json" | jq --arg key "$key" '[.metadata.items // [] | .[] | select(.key != $key)]')"
+  for attempt in 1 2 3 4 5; do
+    instance_json="$(curl --fail --silent --show-error \
+      -H "Authorization: Bearer ${token}" \
+      "https://compute.googleapis.com/compute/v1/projects/${project}/zones/${zone}/instances/${name}" || true)"
+    [[ -n "$instance_json" ]] || return 0
+    fingerprint="$(printf '%s' "$instance_json" | jq -r '.metadata.fingerprint // empty')"
+    [[ -n "$fingerprint" ]] || return 0
+    items="$(printf '%s' "$instance_json" | jq --arg key "$key" '[.metadata.items // [] | .[] | select(.key != $key)]')"
 
-  if [ -n "$value" ]; then
-    payload="$(jq -n \
-      --arg fingerprint "$fingerprint" \
-      --arg key "$key" \
-      --arg value "$value" \
-      --argjson items "$items" \
-      '{fingerprint: $fingerprint, items: ($items + [{key: $key, value: $value}])}')"
-  else
-    payload="$(jq -n \
-      --arg fingerprint "$fingerprint" \
-      --argjson items "$items" \
-      '{fingerprint: $fingerprint, items: $items}')"
-  fi
+    if [ -n "$value" ]; then
+      payload="$(jq -n \
+        --arg fingerprint "$fingerprint" \
+        --arg key "$key" \
+        --arg value "$value" \
+        --argjson items "$items" \
+        '{fingerprint: $fingerprint, items: ($items + [{key: $key, value: $value}])}')"
+    else
+      payload="$(jq -n \
+        --arg fingerprint "$fingerprint" \
+        --argjson items "$items" \
+        '{fingerprint: $fingerprint, items: $items}')"
+    fi
 
-  curl --fail --silent --show-error \
-    -X POST \
-    -H "Authorization: Bearer ${token}" \
-    -H "Content-Type: application/json" \
-    -d "$payload" \
-    "https://compute.googleapis.com/compute/v1/projects/${project}/zones/${zone}/instances/${name}/setMetadata" >/dev/null || true
+    if curl --fail --silent --show-error \
+      -X POST \
+      -H "Authorization: Bearer ${token}" \
+      -H "Content-Type: application/json" \
+      -d "$payload" \
+      "https://compute.googleapis.com/compute/v1/projects/${project}/zones/${zone}/instances/${name}/setMetadata" >/dev/null; then
+      return 0
+    fi
+
+    sleep 2
+  done
+
+  return 0
 }
 
 set_sunshine_status() {
@@ -78,11 +86,15 @@ clear_backup_ready_marker() {
   install -d -m 0755 "$STATE_DIR"
   rm -f "$BACKUP_READY_MARKER"
   rm -f "$BACKUP_COMPLETE_MARKER"
+  set_instance_metadata_value vm-backup-ready-at ""
 }
 
 mark_backup_ready() {
+  local timestamp
   install -d -m 0755 "$STATE_DIR"
-  date -u +"%Y-%m-%dT%H:%M:%SZ" > "$BACKUP_READY_MARKER"
+  timestamp="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+  printf '%s\n' "$timestamp" > "$BACKUP_READY_MARKER"
+  set_instance_metadata_value vm-backup-ready-at "$timestamp"
 }
 
 instance_name() {

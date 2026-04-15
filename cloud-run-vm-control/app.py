@@ -1,4 +1,5 @@
 import base64
+import gzip
 import logging
 import os
 import secrets
@@ -98,6 +99,7 @@ LAST_HOME_BACKUP_AT_METADATA_KEY = "vm-last-home-backup-at"
 LAST_GAMES_ARCHIVE_AT_METADATA_KEY = "vm-last-games-archive-at"
 GAMES_ARCHIVE_STATUS_METADATA_KEY = "vm-games-archive-status"
 GAMES_ARCHIVE_DETAIL_METADATA_KEY = "vm-games-archive-detail"
+BACKUP_READY_AT_METADATA_KEY = "vm-backup-ready-at"
 SUNSHINE_USERNAME = "admin"
 MIN_AUTO_STOP_HOURS = 1
 MAX_AUTO_STOP_HOURS = 24
@@ -187,7 +189,10 @@ def decode_config_b64(name: str) -> str:
     if not raw_value:
         raise ApiError(f"Service is missing required configuration: {name}", 500)
     try:
-        return base64.b64decode(raw_value).decode("utf-8")
+        payload = base64.b64decode(raw_value)
+        if payload.startswith(b"\x1f\x8b"):
+            payload = gzip.decompress(payload)
+        return payload.decode("utf-8")
     except Exception as error:
         raise ApiError(f"Service has invalid base64 configuration for {name}: {error}", 500) from error
 
@@ -996,6 +1001,25 @@ def wait_for_external_ip(timeout_seconds: int = 90) -> dict[str, Any]:
     return last_instance
 
 
+def poll_backup_ready(timeout_seconds: int = 900, previous_timestamp: str = "") -> dict[str, Any]:
+    deadline = time.time() + timeout_seconds
+    last_instance: dict[str, Any] | None = None
+    while time.time() < deadline:
+        last_instance = get_instance()
+        backup_ready_at = metadata_value(last_instance, BACKUP_READY_AT_METADATA_KEY).strip()
+        if (
+            str(last_instance.get("status", "")).upper() == "RUNNING"
+            and backup_ready_at
+            and backup_ready_at != previous_timestamp
+        ):
+            return last_instance
+        time.sleep(5)
+
+    if last_instance:
+        return last_instance
+    raise ApiError("Timed out waiting for VM backup readiness.", 504)
+
+
 def update_duckdns(external_ip: str) -> bool:
     if not external_ip or not CONFIG["duckdns_domains"] or not CONFIG["duckdns_token"]:
         return False
@@ -1168,16 +1192,21 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
             raise ApiError("Delete requires confirmation.", 400)
 
         if current_status == "TERMINATED":
+            previous_backup_ready_at = metadata_value(current_instance, BACKUP_READY_AT_METADATA_KEY).strip()
             set_instance_metadata_values(
                 current_instance,
                 {
+                    BACKUP_READY_AT_METADATA_KEY: None,
                     SUNSHINE_STATUS_METADATA_KEY: "starting",
                     SUNSHINE_STATUS_DETAIL_METADATA_KEY: "VM starting to run the final delete backup.",
                 },
             )
             compute_request("POST", f"{instance_url()}/start")
             poll_instance_status("RUNNING", timeout_seconds=900)
-            current_instance = get_instance()
+            current_instance = poll_backup_ready(
+                timeout_seconds=900,
+                previous_timestamp=previous_backup_ready_at,
+            )
 
         current_instance, token = request_live_power_action(
             current_instance,

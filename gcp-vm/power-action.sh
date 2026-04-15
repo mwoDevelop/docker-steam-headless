@@ -5,7 +5,7 @@ log() {
   echo "[power-action] $*"
 }
 
-METADATA_HDR=( -H "Metadata-Flavor: Google" --fail --silent --show-error )
+METADATA_HDR=( -H "Metadata-Flavor: Google" --silent --show-error )
 STATE_DIR=${STATE_DIR:-/var/lib/vm-state}
 BACKUP_READY_MARKER="${STATE_DIR}/backup-ready"
 BACKUP_COMPLETE_MARKER="${STATE_DIR}/backup-complete"
@@ -16,8 +16,25 @@ POWER_ACTION_STATUS_METADATA_KEY="vm-power-action-status"
 
 metadata_get() {
   local key="$1"
-  curl "${METADATA_HDR[@]}" \
-    "http://metadata/computeMetadata/v1/instance/attributes/${key}" || true
+  local response_code body_file
+  body_file="$(mktemp)"
+  response_code="$(curl "${METADATA_HDR[@]}" \
+    -o "$body_file" \
+    -w '%{http_code}' \
+    "http://metadata/computeMetadata/v1/instance/attributes/${key}" || true)"
+  case "$response_code" in
+    200)
+      cat "$body_file"
+      ;;
+    404)
+      ;;
+    *)
+      if [[ -n "$response_code" ]]; then
+        log "Metadata read for ${key} returned HTTP ${response_code}"
+      fi
+      ;;
+  esac
+  rm -f "$body_file"
 }
 
 metadata_token() {

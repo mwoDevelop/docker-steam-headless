@@ -138,11 +138,11 @@ gcloud projects add-iam-policy-binding "$GCP_PROJECT" \
 PROJECT_NUMBER=$(gcloud projects describe "$GCP_PROJECT" --format='value(projectNumber)')
 DEFAULT_COMPUTE_SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
 VM_SERVICE_ACCOUNT_EMAIL=${VM_SERVICE_ACCOUNT_EMAIL:-${DEFAULT_COMPUTE_SA}}
-VM_STARTUP_SCRIPT_B64=$(base64 -w0 < "${ROOT_DIR}/gcp-vm/startup.sh")
-VM_SHUTDOWN_SCRIPT_B64=$(base64 -w0 < "${ROOT_DIR}/gcp-vm/shutdown.sh")
-VM_PERSIST_SCRIPT_B64=$(base64 -w0 < "${ROOT_DIR}/gcp-vm/persist-state.sh")
-VM_POWER_ACTION_SCRIPT_B64=$(base64 -w0 < "${ROOT_DIR}/gcp-vm/power-action.sh")
-VM_STEAM_ENV_B64=$(render_steam_headless_env | base64 -w0)
+VM_STARTUP_SCRIPT_B64=$(gzip -9c "${ROOT_DIR}/gcp-vm/startup.sh" | base64 -w0)
+VM_SHUTDOWN_SCRIPT_B64=$(gzip -9c "${ROOT_DIR}/gcp-vm/shutdown.sh" | base64 -w0)
+VM_PERSIST_SCRIPT_B64=$(gzip -9c "${ROOT_DIR}/gcp-vm/persist-state.sh" | base64 -w0)
+VM_POWER_ACTION_SCRIPT_B64=$(gzip -9c "${ROOT_DIR}/gcp-vm/power-action.sh" | base64 -w0)
+VM_STEAM_ENV_B64=$(render_steam_headless_env | gzip -9c | base64 -w0)
 if gcloud iam service-accounts describe "$DEFAULT_COMPUTE_SA" --project "$GCP_PROJECT" >/dev/null 2>&1; then
   log "Granting metadata update impersonation on VM service account"
   gcloud iam service-accounts add-iam-policy-binding "$DEFAULT_COMPUTE_SA" \

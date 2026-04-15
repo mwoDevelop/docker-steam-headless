@@ -35,6 +35,10 @@ RESTORE_DETAIL_KEY="vm-restore-detail"
 DATA_DISK_STATUS_KEY="vm-data-disk-status"
 DATA_DISK_DETAIL_KEY="vm-data-disk-detail"
 PERSISTENCE_FORMAT_VERSION="2"
+RCLONE_RETRIES=${RCLONE_RETRIES:-3}
+RCLONE_LOW_LEVEL_RETRIES=${RCLONE_LOW_LEVEL_RETRIES:-2}
+RCLONE_SMALL_TIMEOUT=${RCLONE_SMALL_TIMEOUT:-90s}
+RCLONE_LARGE_TIMEOUT=${RCLONE_LARGE_TIMEOUT:-4h}
 
 metadata_get() {
   local key="$1"
@@ -205,8 +209,32 @@ ensure_tools() {
   command -v mount >/dev/null 2>&1 || { log "mount is required"; return 1; }
   command -v mkfs.ext4 >/dev/null 2>&1 || { log "mkfs.ext4 is required"; return 1; }
   command -v tar >/dev/null 2>&1 || { log "tar is required"; return 1; }
+  command -v timeout >/dev/null 2>&1 || { log "timeout is required"; return 1; }
   command -v zstd >/dev/null 2>&1 || { log "zstd is required"; return 1; }
   command -v rclone >/dev/null 2>&1 || { log "rclone is required"; return 1; }
+}
+
+run_rclone_small() {
+  timeout --foreground "$RCLONE_SMALL_TIMEOUT" \
+    rclone \
+    --config "$RCLONE_CONFIG_PATH" \
+    --retries "$RCLONE_RETRIES" \
+    --low-level-retries "$RCLONE_LOW_LEVEL_RETRIES" \
+    "$@"
+}
+
+run_rclone_large() {
+  timeout --foreground "$RCLONE_LARGE_TIMEOUT" \
+    rclone \
+    --config "$RCLONE_CONFIG_PATH" \
+    --retries "$RCLONE_RETRIES" \
+    --low-level-retries "$RCLONE_LOW_LEVEL_RETRIES" \
+    "$@"
+}
+
+warn_small_rclone_failure() {
+  local description="$1"
+  log "Skipping ${description} after timeout or Drive API failure."
 }
 
 render_rclone_config_oauth() {
@@ -426,7 +454,9 @@ write_root_manifest() {
       backupRoot: $root,
       formatVersion: $version
     }' > "$ROOT_MANIFEST"
-  rclone --config "$RCLONE_CONFIG_PATH" copyto "$ROOT_MANIFEST" "${REMOTE_NAME}:${root}/manifest.json"
+  if ! run_rclone_small copyto "$ROOT_MANIFEST" "${REMOTE_NAME}:${root}/manifest.json"; then
+    warn_small_rclone_failure "root manifest upload"
+  fi
 }
 
 write_home_manifest() {
@@ -443,7 +473,9 @@ write_home_manifest() {
       sourcePath: $source_path,
       formatVersion: $version
     }' > "$HOME_MANIFEST"
-  rclone --config "$RCLONE_CONFIG_PATH" copyto "$HOME_MANIFEST" "${REMOTE_NAME}:${root}/home/manifest.json"
+  if ! run_rclone_small copyto "$HOME_MANIFEST" "${REMOTE_NAME}:${root}/home/manifest.json"; then
+    warn_small_rclone_failure "home manifest upload"
+  fi
 }
 
 write_games_manifest() {
@@ -469,9 +501,11 @@ write_games_manifest() {
       formatVersion: $version,
       publicationStatus: $status
     }' > "$GAMES_MANIFEST_FILE"
-  rclone --config "$RCLONE_CONFIG_PATH" copyto \
+  if ! run_rclone_small copyto \
     "$GAMES_MANIFEST_FILE" \
-    "${REMOTE_NAME}:${root}/games/manifests/${timestamp}.json"
+    "${REMOTE_NAME}:${root}/games/manifests/${timestamp}.json"; then
+    warn_small_rclone_failure "games manifest upload"
+  fi
 }
 
 publish_games_current() {
@@ -491,9 +525,11 @@ publish_games_current() {
       formatVersion: $version,
       published: true
     }' > "$GAMES_CURRENT_FILE"
-  rclone --config "$RCLONE_CONFIG_PATH" copyto \
+  if ! run_rclone_small copyto \
     "$GAMES_CURRENT_FILE" \
-    "${REMOTE_NAME}:${root}/games/current.json"
+    "${REMOTE_NAME}:${root}/games/current.json"; then
+    warn_small_rclone_failure "games current pointer upload"
+  fi
 }
 
 remote_has_state() {
@@ -506,7 +542,7 @@ remote_has_state() {
 
 remote_file_exists() {
   local remote_path="$1"
-  rclone --config "$RCLONE_CONFIG_PATH" lsf "$remote_path" >/dev/null 2>&1
+  run_rclone_small lsf "$remote_path" >/dev/null 2>&1
 }
 
 remote_home_archive_path() {
@@ -554,7 +590,7 @@ backup_home() {
 
   rm -f "$HOME_ARCHIVE"
   tar --zstd -cpf "$HOME_ARCHIVE" -C "$(dirname "$source_dir")" "$(basename "$source_dir")"
-  rclone --config "$RCLONE_CONFIG_PATH" copyto "$HOME_ARCHIVE" "$(remote_home_archive_path "$root")"
+  run_rclone_large copyto "$HOME_ARCHIVE" "$(remote_home_archive_path "$root")"
   write_home_manifest "$root" "$timestamp"
   record_home_backup_time "$timestamp"
 }
@@ -574,10 +610,10 @@ backup_games_archive() {
   set_games_archive_status "running" "Archiving /mnt/games to Google Drive."
   tar -C "$(dirname "$(mount_games_dir)")" -cf - "$(basename "$(mount_games_dir)")" \
     | zstd -T0 \
-    | rclone --config "$RCLONE_CONFIG_PATH" rcat "$archive_remote"
+    | run_rclone_large rcat "$archive_remote"
 
   size_bytes="$(
-    rclone --config "$RCLONE_CONFIG_PATH" lsjson "$archive_remote" \
+    run_rclone_small lsjson "$archive_remote" \
       | jq -r '.[0].Size // 0'
   )"
   write_games_manifest "$root" "$timestamp" "$archive_rel" "$size_bytes"
@@ -610,7 +646,7 @@ restore_home() {
   tar --zstd -xpf "$HOME_ARCHIVE" -C "$(dirname "$mount_home")"
 
   if remote_file_exists "$manifest_remote"; then
-    rclone --config "$RCLONE_CONFIG_PATH" copyto "$manifest_remote" "$HOME_MANIFEST"
+    run_rclone_small copyto "$manifest_remote" "$HOME_MANIFEST"
     manifest_timestamp="$(jq -r '.timestamp // ""' "$HOME_MANIFEST")"
     if [[ -n "$manifest_timestamp" ]]; then
       record_home_backup_time "$manifest_timestamp"
@@ -628,7 +664,7 @@ restore_games_from_archive() {
   stage_dir="${mount_root}/games.restore.${token}"
   current_remote="$(games_current_remote_path "$root")"
 
-  rclone --config "$RCLONE_CONFIG_PATH" copyto "$current_remote" "$GAMES_CURRENT_FILE"
+  run_rclone_small copyto "$current_remote" "$GAMES_CURRENT_FILE"
   archive_rel="$(jq -r '.archivePath // ""' "$GAMES_CURRENT_FILE")"
   if [[ -z "$archive_rel" ]]; then
     log "Games current.json is present but missing archivePath"
@@ -639,7 +675,7 @@ restore_games_from_archive() {
   rm -rf "$stage_dir"
   mkdir -p "$mount_root"
 
-  rclone --config "$RCLONE_CONFIG_PATH" cat "$archive_remote" \
+  run_rclone_large cat "$archive_remote" \
     | zstd -d \
     | tar -C "$mount_root" --transform "s#^games#$(basename "$stage_dir")#" -xf -
 
@@ -667,11 +703,55 @@ restore_games_legacy_sync() {
 
   rm -rf "$stage_dir"
   mkdir -p "$stage_dir"
-  rclone --config "$RCLONE_CONFIG_PATH" sync "$legacy_remote" "$stage_dir"
+  run_rclone_large sync "$legacy_remote" "$stage_dir"
 
   rm -rf "$target_dir"
   mv "$stage_dir" "$target_dir"
   set_games_archive_status "legacy" "Restored legacy games backup directory from Drive."
+  return 0
+}
+
+latest_games_archive_remote_path() {
+  local root="$1"
+  local latest_entry
+  latest_entry="$(
+    run_rclone_small lsf "${REMOTE_NAME}:${root}/games/archives" 2>/dev/null \
+      | grep '\.tar\.zst$' \
+      | sort \
+      | tail -n 1
+  )"
+  [[ -n "$latest_entry" ]] || return 1
+  printf '%s:%s/games/archives/%s\n' "$REMOTE_NAME" "$root" "${latest_entry%/}"
+}
+
+restore_games_from_latest_archive() {
+  local root="$1"
+  local mount_root target_dir stage_dir token archive_remote archive_name timestamp
+
+  mount_root="$(state_mount_root)"
+  target_dir="$(mount_games_dir)"
+  token="$(date +%s)"
+  stage_dir="${mount_root}/games.restore.${token}"
+  archive_remote="$(latest_games_archive_remote_path "$root")" || return 1
+  archive_name="${archive_remote##*/}"
+  timestamp="${archive_name%.tar.zst}"
+
+  rm -rf "$stage_dir"
+  mkdir -p "$mount_root"
+
+  run_rclone_large cat "$archive_remote" \
+    | zstd -d \
+    | tar -C "$mount_root" --transform "s#^games#$(basename "$stage_dir")#" -xf -
+
+  if [[ ! -d "$stage_dir" ]]; then
+    log "Latest games archive restore did not produce ${stage_dir}"
+    return 1
+  fi
+
+  rm -rf "$target_dir"
+  mv "$stage_dir" "$target_dir"
+  record_games_archive_time "$timestamp"
+  set_games_archive_status "ready" "Restored latest games archive ${archive_name}."
   return 0
 }
 
@@ -690,7 +770,12 @@ restore_games() {
     return 0
   fi
 
-  if rclone --config "$RCLONE_CONFIG_PATH" lsf "$(legacy_games_dir_remote_path "$root")" >/dev/null 2>&1; then
+  if latest_games_archive_remote_path "$root" >/dev/null 2>&1; then
+    restore_games_from_latest_archive "$root"
+    return 0
+  fi
+
+  if run_rclone_small lsf "$(legacy_games_dir_remote_path "$root")" >/dev/null 2>&1; then
     restore_games_legacy_sync "$root"
     return 0
   fi
