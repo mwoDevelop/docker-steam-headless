@@ -90,6 +90,7 @@
     const sunshineInput = document.querySelector("#sunshine-password-input");
     if (sunshineInput) {
       sunshineInput.disabled = !canSetSunshine;
+      sunshineInput.placeholder = canSetSunshine ? "Minimum 8 characters" : "Set to update";
     }
   }
 
