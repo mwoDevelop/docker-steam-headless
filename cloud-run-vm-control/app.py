@@ -739,7 +739,7 @@ def is_sunshine_started(
         metadata_value(instance, POWER_ACTION_STATUS_METADATA_KEY)
     )
     backup_ready = bool(metadata_value(instance, BACKUP_READY_AT_METADATA_KEY).strip())
-    if phase in {"applied", "backed-up", "failed"} and backup_ready and not detail.lower().startswith("vm booting"):
+    if phase in {"applied", "backed-up", "completed", "restored", "failed"} and backup_ready and not detail.lower().startswith("vm booting"):
         return True
     return False
 
