@@ -186,6 +186,18 @@ start_stack() {
   "$PERSIST_SCRIPT" start-stack
 }
 
+stop_stack() {
+  local files=()
+  mapfile -t files < <(docker_compose_files)
+  if [[ ! -f "$COMPOSE_GCE" ]]; then
+    return 0
+  fi
+  if ! command -v docker >/dev/null 2>&1; then
+    return 0
+  fi
+  (cd "$COMPOSE_DIR" && docker compose "${files[@]}" stop -t 30) || true
+}
+
 restore_selected_backup() {
   local backup_id
   backup_id="$(metadata_get vm-selected-backup-id || true)"
@@ -344,6 +356,7 @@ restore_manual_backup() {
   log "Restoring manual backup token=${token}"
   set_power_action_status "$action" "$token" "running"
   sync_steam_env_from_metadata || true
+  stop_stack
   if ! restore_selected_backup; then
     start_stack >/dev/null 2>&1 || true
     set_power_action_status "$action" "$token" "failed" ""

@@ -675,6 +675,12 @@ is_dir_empty() {
   return 0
 }
 
+clear_directory_contents() {
+  local dir="$1"
+  mkdir -p "$dir"
+  find "$dir" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+}
+
 backup_home() {
   local root="$1"
   local timestamp="$2"
@@ -807,7 +813,7 @@ restore_home() {
     return 0
   fi
 
-  rm -rf "$mount_home"
+  clear_directory_contents "$mount_home"
   if ! run_rclone_large_resilient copyto "$source_remote" "$HOME_ARCHIVE"; then
     return 1
   fi
@@ -924,7 +930,10 @@ restore_selected_backup_state() {
     set_restore_status "failed" "Home restore failed for backup ${backup_id}."
     return 1
   fi
-  rm -rf "$mount_home"
+  if ! clear_directory_contents "$mount_home"; then
+    set_restore_status "failed" "Could not clear home directory before restoring backup ${backup_id}."
+    return 1
+  fi
   tar --zstd -xpf "$HOME_ARCHIVE" -C "$(dirname "$mount_home")"
 
   if ! run_rclone_large_resilient copyto "$games_remote" "$GAMES_ARCHIVE"; then
@@ -939,9 +948,11 @@ restore_selected_backup_state() {
     set_restore_status "failed" "Games restore did not produce ${stage_games}."
     return 1
   fi
-  rm -rf "$target_games"
-  mv "$stage_games" "$target_games"
+  clear_directory_contents "$target_games"
+  cp -a "${stage_games}/." "$target_games/"
+  rm -rf "$stage_games"
 
+  bind_data_paths
   restore_stack_perms
   record_home_backup_time "$backup_id"
   record_games_archive_time "$backup_id"
