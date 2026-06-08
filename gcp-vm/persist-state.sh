@@ -703,6 +703,51 @@ clear_directory_contents() {
   find "$dir" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
 }
 
+home_archive_tar_args() {
+  cat <<'EOF'
+--exclude=home/.cache/log
+--exclude=home/.cache/sessions
+--exclude=home/.dbus
+--exclude=home/.ICEauthority
+--exclude=home/.Xauthority
+--exclude=home/.local/share/ICEauthority
+EOF
+}
+
+sanitize_restored_home_runtime_state() {
+  local home_dir="$1"
+  [[ -d "$home_dir" ]] || return 0
+
+  log "Removing restored desktop runtime state from ${home_dir}"
+  rm -rf \
+    "${home_dir}/.cache/log" \
+    "${home_dir}/.cache/sessions" \
+    "${home_dir}/.dbus" \
+    "${home_dir}/.ICEauthority" \
+    "${home_dir}/.Xauthority" \
+    "${home_dir}/.local/share/ICEauthority"
+
+  mkdir -p "${home_dir}/.cache/log" "${home_dir}/.config/autostart"
+  cat > "${home_dir}/.config/autostart/light-locker.desktop" <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=Light Locker
+Hidden=true
+EOF
+}
+
+replace_directory_contents_from_stage() {
+  local stage_dir="$1"
+  local target_dir="$2"
+
+  if [[ ! -d "$stage_dir" ]]; then
+    return 1
+  fi
+  clear_directory_contents "$target_dir"
+  cp -a "${stage_dir}/." "$target_dir/"
+  rm -rf "$stage_dir"
+}
+
 backup_home() {
   local root="$1"
   local timestamp="$2"
@@ -716,7 +761,9 @@ backup_home() {
   fi
 
   rm -f "$HOME_ARCHIVE"
-  tar --zstd -cpf "$HOME_ARCHIVE" -C "$(dirname "$source_dir")" "$(basename "$source_dir")"
+  tar --zstd -cpf "$HOME_ARCHIVE" -C "$(dirname "$source_dir")" \
+    $(home_archive_tar_args) \
+    "$(basename "$source_dir")"
   run_rclone_large_resilient copyto "$HOME_ARCHIVE" "$(remote_home_archive_path "$root")"
   write_home_manifest "$root" "$timestamp"
   record_home_backup_time "$timestamp"
@@ -780,7 +827,9 @@ backup_manual_state() {
   stop_stack
 
   rm -f "$HOME_ARCHIVE" "$GAMES_ARCHIVE" "$manifest_file"
-  tar --zstd -cpf "$HOME_ARCHIVE" -C "$(dirname "$(mount_home_dir)")" "$(basename "$(mount_home_dir)")"
+  tar --zstd -cpf "$HOME_ARCHIVE" -C "$(dirname "$(mount_home_dir)")" \
+    $(home_archive_tar_args) \
+    "$(basename "$(mount_home_dir)")"
   if ! tar -C "$(dirname "$(mount_games_dir)")" -cf - "$(basename "$(mount_games_dir)")" \
     | zstd -T0 > "$GAMES_ARCHIVE";
   then
@@ -843,6 +892,7 @@ restore_home() {
     return 1
   fi
   rm -f "$HOME_ARCHIVE"
+  sanitize_restored_home_runtime_state "$mount_home"
 
   if remote_file_exists "$manifest_remote"; then
     run_rclone_small copyto "$manifest_remote" "$HOME_MANIFEST" || true
@@ -894,8 +944,7 @@ restore_games_from_archive() {
     return 1
   fi
 
-  rm -rf "$target_dir"
-  mv "$stage_dir" "$target_dir"
+  replace_directory_contents_from_stage "$stage_dir" "$target_dir"
   record_games_archive_time "$(jq -r '.timestamp // ""' "$GAMES_CURRENT_FILE")"
   set_games_archive_status "ready" "Restored games archive ${archive_rel}."
   return 0
@@ -917,8 +966,7 @@ restore_games_legacy_sync() {
     return 1
   fi
 
-  rm -rf "$target_dir"
-  mv "$stage_dir" "$target_dir"
+  replace_directory_contents_from_stage "$stage_dir" "$target_dir"
   set_games_archive_status "legacy" "Restored legacy games backup directory from Drive."
   return 0
 }
@@ -957,6 +1005,7 @@ restore_selected_backup_state() {
     return 1
   fi
   tar --zstd -xpf "$HOME_ARCHIVE" -C "$(dirname "$mount_home")"
+  sanitize_restored_home_runtime_state "$mount_home"
 
   if ! run_rclone_large_resilient copyto "$games_remote" "$GAMES_ARCHIVE"; then
     set_restore_status "failed" "Games restore failed for backup ${backup_id}."
@@ -970,9 +1019,7 @@ restore_selected_backup_state() {
     set_restore_status "failed" "Games restore did not produce ${stage_games}."
     return 1
   fi
-  clear_directory_contents "$target_games"
-  cp -a "${stage_games}/." "$target_games/"
-  rm -rf "$stage_games"
+  replace_directory_contents_from_stage "$stage_games" "$target_games"
 
   bind_data_paths
   restore_stack_perms
@@ -1026,8 +1073,7 @@ restore_games_from_latest_archive() {
     return 1
   fi
 
-  rm -rf "$target_dir"
-  mv "$stage_dir" "$target_dir"
+  replace_directory_contents_from_stage "$stage_dir" "$target_dir"
   record_games_archive_time "$timestamp"
   set_games_archive_status "ready" "Restored latest games archive ${archive_name}."
   return 0
