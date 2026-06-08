@@ -13,6 +13,11 @@ PERSIST_SCRIPT=/usr/local/bin/vm-persist-state
 POLL_INTERVAL_SECONDS=${POLL_INTERVAL_SECONDS:-5}
 POWER_ACTION_METADATA_KEY="vm-pending-power-action"
 POWER_ACTION_STATUS_METADATA_KEY="vm-power-action-status"
+STEAM_ENV_METADATA_KEY="steam-headless-env"
+ENVF=/opt/container-services/steam-headless/.env
+COMPOSE_DIR=/opt/container-services/steam-headless
+COMPOSE_GCE="${COMPOSE_DIR}/docker-compose.nvidia.privileged.gce.yml"
+COMPOSE_OVERRIDE="${COMPOSE_DIR}/docker-compose.nvidia.privileged.override.yml"
 
 metadata_get() {
   local key="$1"
@@ -35,6 +40,14 @@ metadata_get() {
       ;;
   esac
   rm -f "$body_file"
+}
+
+normalize_metadata_value() {
+  local value="$1"
+  if [[ "$value" == "|-"$'\n'* ]]; then
+    value="${value#|-$'\n'}"
+  fi
+  printf '%s\n' "$value"
 }
 
 metadata_token() {
@@ -165,6 +178,73 @@ run_backup() {
   "$PERSIST_SCRIPT" "$mode"
 }
 
+sync_steam_env_from_metadata() {
+  local env_metadata
+  env_metadata="$(metadata_get "$STEAM_ENV_METADATA_KEY" || true)"
+  env_metadata="$(normalize_metadata_value "$env_metadata")"
+  if [[ -z "$env_metadata" ]]; then
+    log "Steam Headless env metadata is empty; leaving ${ENVF} unchanged."
+    return 1
+  fi
+
+  mkdir -p "$(dirname "$ENVF")"
+  printf '%s\n' "$env_metadata" > "$ENVF"
+  chmod 600 "$ENVF"
+  log "Synced ${ENVF} from instance metadata."
+}
+
+docker_compose_files() {
+  local files=(-f "$COMPOSE_GCE")
+  if [[ -f "$COMPOSE_OVERRIDE" ]]; then
+    files+=(-f "$COMPOSE_OVERRIDE")
+  fi
+  printf '%s\n' "${files[@]}"
+}
+
+apply_sunshine_state_credentials() {
+  local user pass container_id
+  user="$(awk -F= '/^SUNSHINE_USER=/{print substr($0,index($0,"=")+1)}' "$ENVF" | tail -n1)"
+  pass="$(awk -F= '/^SUNSHINE_PASS=/{print substr($0,index($0,"=")+1)}' "$ENVF" | tail -n1)"
+  if [[ -z "$user" || -z "$pass" ]]; then
+    log "Sunshine credentials are missing in ${ENVF}."
+    return 1
+  fi
+
+  container_id="$(docker ps --filter 'name=steam-headless' --format '{{.ID}}' | head -n 1 || true)"
+  if [[ -n "$container_id" ]] && docker exec "$container_id" which sunshine >/dev/null 2>&1; then
+    docker exec "$container_id" sunshine --creds "$user" "$pass" >/dev/null
+  fi
+}
+
+recreate_steam_headless_stack() {
+  local files=()
+  mapfile -t files < <(docker_compose_files)
+  if [[ ! -f "$COMPOSE_GCE" ]]; then
+    log "Compose file ${COMPOSE_GCE} is missing."
+    return 1
+  fi
+  (cd "$COMPOSE_DIR" && docker compose "${files[@]}" up -d --force-recreate)
+}
+
+apply_sunshine_password() {
+  local action="$1"
+  local token="$2"
+
+  log "Applying Sunshine password from metadata"
+  if ! sync_steam_env_from_metadata; then
+    set_power_action_status "$action" "$token" "failed" ""
+    return 1
+  fi
+
+  if ! recreate_steam_headless_stack; then
+    set_power_action_status "$action" "$token" "failed" ""
+    return 1
+  fi
+
+  apply_sunshine_state_credentials || true
+  set_power_action_status "$action" "$token" "applied" ""
+}
+
 perform_action() {
   local action="$1"
   local token="$2"
@@ -179,6 +259,8 @@ perform_action() {
       backup_mode="backup-delete"
       ;;
   esac
+
+  sync_steam_env_from_metadata || true
 
   if ! run_backup "$backup_mode"; then
     "$PERSIST_SCRIPT" start-stack >/dev/null 2>&1 || true
@@ -221,6 +303,9 @@ run_daemon() {
       case "$action" in
         stop|restart|delete)
           perform_action "$action" "$token" "metadata" || true
+          ;;
+        apply-sunshine-password)
+          apply_sunshine_password "$action" "$token" || true
           ;;
       esac
     fi

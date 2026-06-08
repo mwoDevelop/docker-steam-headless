@@ -620,6 +620,7 @@ def request_live_power_action(
     set_instance_metadata_values(
         instance,
         {
+            "vm-power-action-script": decode_config_b64("vm_power_action_script_b64"),
             POWER_ACTION_METADATA_KEY: f"{action}:{token}",
             POWER_ACTION_STATUS_METADATA_KEY: f"requested:{action}:{token}",
             SUNSHINE_STATUS_METADATA_KEY: "starting",
@@ -627,6 +628,32 @@ def request_live_power_action(
         },
     )
     return get_instance(), token
+
+
+def wait_for_power_action_phase(
+    *,
+    action: str,
+    token: str,
+    target_phase: str,
+    timeout_seconds: int = 300,
+) -> dict[str, Any]:
+    deadline = time.time() + timeout_seconds
+    last_instance: dict[str, Any] | None = None
+    while time.time() < deadline:
+        last_instance = get_instance()
+        phase, status_action, status_token = parse_power_action_status(
+            metadata_value(last_instance, POWER_ACTION_STATUS_METADATA_KEY)
+        )
+        if status_action == action and status_token == token:
+            if phase == target_phase:
+                return last_instance
+            if phase == "failed":
+                raise ApiError(f"VM action {action} failed.", 502)
+        time.sleep(4)
+
+    if last_instance:
+        return last_instance
+    raise ApiError(f"Timed out waiting for VM action {action}.", 504)
 
 
 def poll_power_action_backup(
@@ -1437,20 +1464,17 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
         password = parse_sunshine_password(payload)
         current_instance, sunshine_credentials = set_sunshine_password(current_instance, password)
         if str(current_instance.get("status", "")).upper() == "RUNNING":
-            previous_backup_ready_at = metadata_value(current_instance, BACKUP_READY_AT_METADATA_KEY).strip()
-            previous_start_timestamp = str(current_instance.get("lastStartTimestamp") or "").strip()
             current_instance, action_token = request_live_power_action(
                 current_instance,
-                action="restart",
+                action="apply-sunshine-password",
                 status_detail="Applying Sunshine password change.",
             )
-            poll_power_action_backup(action="restart", token=action_token)
-            current_instance = poll_backup_ready(
-                timeout_seconds=900,
-                previous_timestamp=previous_backup_ready_at,
+            current_instance = wait_for_power_action_phase(
+                action="apply-sunshine-password",
+                token=action_token,
+                target_phase="applied",
+                timeout_seconds=300,
             )
-            if previous_start_timestamp:
-                current_instance = poll_instance_restarted(previous_start_timestamp, timeout_seconds=300)
             current_instance = wait_for_external_ip(timeout_seconds=180)
             current_instance = wait_for_sunshine_status("ready", timeout_seconds=240)
             updated = update_duckdns(extract_external_ip(current_instance))

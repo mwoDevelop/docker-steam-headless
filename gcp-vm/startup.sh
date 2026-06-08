@@ -320,7 +320,8 @@ set_env_value() {
   local key="$1"
   local value="$2"
   if grep -q "^${key}=" "$ENVF"; then
-    sed -i -E "s#^${key}=.*#${key}=${value}#" "$ENVF"
+    awk -v key="$key" -v value="$value" 'BEGIN{replaced=0} $0 ~ "^" key "=" {if (!replaced) print key "=" value; replaced=1; next} {print} END{if (!replaced) print key "=" value}' "$ENVF" > "${ENVF}.tmp"
+    mv "${ENVF}.tmp" "$ENVF"
   else
     echo "${key}=${value}" >> "$ENVF"
   fi

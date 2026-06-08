@@ -526,6 +526,18 @@
 
     setBusy(true);
     setBanner("Updating Sunshine password...", "warning");
+    if (state.lastStatus) {
+      state.lastStatus = {
+        ...state.lastStatus,
+        sunshineStatus: {
+          state: "starting",
+          label: "Applying password",
+          detail: "Applying Sunshine password change.",
+        },
+      };
+      renderTargetSummary();
+      renderAccess(state.lastStatus);
+    }
 
     try {
       const data = await fetchApi("/api/command", {
