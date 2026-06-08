@@ -75,7 +75,9 @@ From this example output we can see that the Intel GPU is `/dev/dri/card1` and `
 
 ## CONFIGURE ENV:
 
-Create a Steam Headless `/opt/container-services/steam-headless/.env` file with the contents found in this example [Environment File](./compose-files/.env).
+Create a Steam Headless `/opt/container-services/steam-headless/.env` file by copying this example [Environment File](./compose-files/.env.example).
+
+Keep real passwords only in your local `.env` file and do not commit that file into git.
 
 Edit these variables as required.
 
@@ -86,9 +88,6 @@ Navigate to your compose location and execute it.
 cd /opt/container-services/steam-headless
 sudo docker-compose up -d --force-recreate
 ```
-
-NOTE: On non-headless systems (Desktop versions OS), the active GUI can block the container from accessing the display engine, leading to 'Xorg' crashes. Solution in issue [#200](https://github.com/Steam-Headless/docker-steam-headless/issues/200#issuecomment-3540172221).
-
 
 After container executes successfully, navigate to your docker host URL in your browser on port 8083 and click connect.
 `http://<host-ip>:8083/`

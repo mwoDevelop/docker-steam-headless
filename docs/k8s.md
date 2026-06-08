@@ -9,7 +9,7 @@ Requirements
 Tasks
 1. Configure the statefulset to your liking. Things to note:
     - CPU & Memory
-    - Env vars (see compose-files/.env for documentation)
+    - Env vars (see compose-files/.env.example for documentation; keep real passwords in a local Secret / untracked env)
 2. Change the PVC to your liking. Things to note:
     - Storage Class
     - Size

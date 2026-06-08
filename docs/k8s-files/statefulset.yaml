@@ -28,7 +28,7 @@ spec:
           limits:
             memory: "24G"
             cpu: "6"
-            nvidia.com/gpu: 1 #If you're using a nvidia GPU, add it here
+            nvidia.com/gpu: "1" #If you're using a nvidia GPU, add it here
         volumeMounts:
         - name: home-dir
           mountPath: /home/default/
@@ -58,7 +58,7 @@ spec:
         - name: UMASK
           value: '000'
         - name: USER_PASSWORD
-          value: 'password' #changeme
+          value: 'change-me' # use a Secret / local override, do not commit real passwords
         - name: MODE
           value: 'primary'
         - name: WEB_UI_MODE
@@ -72,9 +72,9 @@ spec:
         - name: ENABLE_SUNSHINE
           value: 'true'
         - name: SUNSHINE_USER
-          value: 'sam'
+          value: 'admin'
         - name: SUNSHINE_PASS
-          value: 'password'
+          value: 'change-me' # use a Secret / local override, do not commit real passwords
         - name: ENABLE_EVDEV_INPUTS
           value: 'true'
         - name: NVIDIA_DRIVER_CAPABILITIES

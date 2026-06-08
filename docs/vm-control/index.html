@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>VM Control</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;700&display=swap"
+      rel="stylesheet"
+    >
+    <link rel="stylesheet" href="./styles.css?v=sunshine-password-20260607h">
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
+  </head>
+  <body>
+    <main class="shell">
+      <section class="hero panel">
+        <div>
+          <p class="eyebrow">GitHub Pages + Cloud Run</p>
+          <h1>VM Control</h1>
+          <p class="hero-copy">
+            Secure control panel for a single GCE VM. The page signs in with Google,
+            then calls a Cloud Run API that starts, stops, restarts, or inspects
+            the instance directly.
+          </p>
+        </div>
+        <div class="hero-note">
+          <p>No GitHub PAT is required in this mode. The page stores only the backend URL and a short-lived Google session token in the browser session.</p>
+          <a href="../cloud-run-vm-control.md">Cloud Run setup guide</a>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Connection</p>
+            <h2>Cloud Run Access</h2>
+          </div>
+          <button id="connect" class="ghost" type="button">Connect API</button>
+        </div>
+
+        <form id="settings-form" class="form-grid" autocomplete="off">
+          <label>
+            <span>Cloud Run API URL</span>
+            <input
+              id="backend-url"
+              name="backend-url"
+              type="url"
+              placeholder="https://your-cloud-run-service.run.app"
+            >
+          </label>
+
+          <div class="auth-status-card">
+            <span class="auth-status-label">Session</span>
+            <div id="auth-status" class="auth-status" data-tone="neutral">
+              Connect the backend, then sign in with Google.
+            </div>
+          </div>
+        </form>
+
+        <div class="auth-grid">
+          <div class="auth-card">
+            <p class="auth-card-label">Google Sign-In</p>
+            <button id="google-sign-in" class="google-sign-in" type="button">Sign in with Google</button>
+            <p class="auth-help">This always opens the Google account chooser instead of a personalized default button.</p>
+            <button id="sign-out" class="ghost hidden" type="button">Sign Out</button>
+          </div>
+
+          <div class="auth-card">
+            <p class="auth-card-label">Target</p>
+            <div id="target-summary" class="connection-summary">
+              <p>Backend not connected yet.</p>
+            </div>
+          </div>
+        </div>
+
+        <p class="hint">
+          Configure the Cloud Run backend once, then use Google login for control.
+          The backend decides which Google accounts are allowed to operate the VM.
+        </p>
+      </section>
+
+      <section class="panel">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Control</p>
+            <h2>Power Actions</h2>
+          </div>
+          <button id="refresh-status" class="ghost" type="button">Refresh Status</button>
+        </div>
+
+        <div class="control-row">
+          <button class="action create" type="button" data-command="create">Create</button>
+          <button class="action start" type="button" data-command="start">Start</button>
+          <button class="action restart" type="button" data-command="restart">Restart</button>
+          <button class="action stop" type="button" data-command="stop">Stop</button>
+          <button class="action status" type="button" data-command="status">Status</button>
+          <button class="action delete" type="button" data-command="delete">Delete</button>
+        </div>
+
+        <div class="start-options">
+          <label>
+            <span>Auto-stop after start</span>
+            <input
+              id="auto-stop-hours"
+              name="auto-stop-hours"
+              type="number"
+              min="1"
+              max="24"
+              step="1"
+              inputmode="numeric"
+              value="3"
+              placeholder="Hours, optional"
+            >
+          </label>
+          <p>Leave empty to run without a scheduled shutdown. Applies when creating a VM or starting a stopped one.</p>
+        </div>
+
+        <div id="banner" class="banner" data-tone="neutral">
+          Connect the Cloud Run backend and sign in with Google to control the VM.
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Access</p>
+            <h2>Live Access</h2>
+          </div>
+          <p class="section-meta">
+            When the VM is running, the panel shows browser and streaming entry points.
+          </p>
+        </div>
+
+        <div id="access" class="access empty">
+          Refresh VM status to load current access details.
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Activity</p>
+            <h2>Local Session History</h2>
+          </div>
+          <p class="section-meta">
+            Recent control results from this browser only. No secrets are written to GitHub or Google Drive.
+          </p>
+        </div>
+
+        <div id="history" class="runs empty">
+          No actions recorded yet.
+        </div>
+      </section>
+    </main>
+
+    <script src="./app.js?v=sunshine-password-20260608a"></script>
+  </body>
+</html>

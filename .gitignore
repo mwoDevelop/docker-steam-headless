@@ -1,1 +1,12 @@
 config
+__pycache__/
+*.pyc
+# Local environment files (keep examples as *.env.example)
+gcp-vm/.env
+gcp-vm/.env.gcp
+gcp-vm/.env.secrets
+gcp-v8s/.env
+gcp-v8s/.env.secrets
+gcp-v8s/.active-profile
+docs/compose-files/.env
+docs/compose-files/.env.secrets
