@@ -719,6 +719,7 @@ EOF
 
 sanitize_restored_home_runtime_state() {
   local home_dir="$1"
+  local owner_group
   [[ -d "$home_dir" ]] || return 0
 
   log "Removing restored desktop runtime state from ${home_dir}"
@@ -745,7 +746,8 @@ Name=xbindkeys
 Hidden=true
 EOF
 
-  chown -R "${STEAM_USER_NAME}:${STEAM_USER_NAME}" "${home_dir}/.cache/log" "${home_dir}/.config/autostart"
+  owner_group="$(stat -c '%u:%g' "$home_dir" 2>/dev/null || printf '1000:1000')"
+  chown -R "$owner_group" "${home_dir}/.cache/log" "${home_dir}/.config/autostart"
 }
 
 replace_directory_contents_from_stage() {
