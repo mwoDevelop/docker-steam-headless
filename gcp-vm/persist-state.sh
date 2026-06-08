@@ -182,6 +182,26 @@ record_games_archive_time() {
   set_metadata_values "$updates"
 }
 
+record_manual_backup_metadata() {
+  local timestamp="$1"
+  local detail="$2"
+  local updates
+  updates="$(jq -n \
+    --arg home_key "$HOME_BACKUP_AT_KEY" \
+    --arg games_key "$GAMES_ARCHIVE_AT_KEY" \
+    --arg games_status_key "$GAMES_ARCHIVE_STATUS_KEY" \
+    --arg games_detail_key "$GAMES_ARCHIVE_DETAIL_KEY" \
+    --arg timestamp "$timestamp" \
+    --arg detail "$detail" \
+    '{
+      ($home_key): $timestamp,
+      ($games_key): $timestamp,
+      ($games_status_key): "ready",
+      ($games_detail_key): $detail
+    }')"
+  set_metadata_values "$updates"
+}
+
 clear_restore_mode() {
   local updates
   updates="$(jq -n \
@@ -763,9 +783,7 @@ backup_manual_state() {
     }' > "$manifest_file"
   run_rclone_small copyto "$manifest_file" "${backup_remote}/manifest.json" || warn_small_rclone_failure "manual backup manifest upload"
 
-  record_home_backup_time "$timestamp"
-  record_games_archive_time "$timestamp"
-  set_games_archive_status "ready" "Published manual backup ${backup_id}."
+  record_manual_backup_metadata "$timestamp" "Published manual backup ${backup_id}."
   refresh_backup_list "$root"
   log "Manual backup completed to ${root}/backups/${backup_id}"
 }
