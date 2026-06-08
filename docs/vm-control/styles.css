@@ -159,7 +159,8 @@ label span {
   font-size: 0.92rem;
 }
 
-input {
+input,
+select {
   width: 100%;
   border: 1px solid var(--line);
   border-radius: 14px;
@@ -169,9 +170,14 @@ input {
   font: inherit;
 }
 
-input:focus {
+input:focus,
+select:focus {
   outline: 2px solid rgba(106, 228, 208, 0.35);
   outline-offset: 2px;
+}
+
+select {
+  appearance: none;
 }
 
 .auth-grid {
@@ -269,10 +275,11 @@ input:focus {
 .control-row {
   display: grid;
   gap: 12px;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(8, minmax(0, 1fr));
 }
 
-.start-options {
+.start-options,
+.backup-options {
   display: grid;
   gap: 12px;
   grid-template-columns: minmax(220px, 320px) minmax(0, 1fr);
@@ -282,7 +289,8 @@ input:focus {
   border-top: 1px solid var(--line);
 }
 
-.start-options p {
+.start-options p,
+.backup-options p {
   margin: 0 0 4px;
   color: var(--muted);
   line-height: 1.5;
@@ -330,6 +338,14 @@ button:disabled {
 
 .action.status {
   background: linear-gradient(135deg, #8fd8ff, #56a8e8);
+}
+
+.action.backup {
+  background: linear-gradient(135deg, #d7f8a8, #86d66d);
+}
+
+.action.restore {
+  background: linear-gradient(135deg, #c7b8ff, #7aa0ff);
 }
 
 .action.delete {
@@ -631,6 +647,7 @@ code,
   .form-grid,
   .control-row,
   .start-options,
+  .backup-options,
   .access-grid,
   .auth-grid {
     grid-template-columns: 1fr;

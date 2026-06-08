@@ -233,9 +233,8 @@ if ! gcloud compute instances describe "$GCE_NAME" --zone="$GCP_ZONE" --project=
   )
   CREATE_METADATA_VALUES=(
     "${METADATA_VALUES[@]}"
-    "vm-restore-mode=create"
-    "vm-restore-status=pending"
-    "vm-restore-detail=Waiting for create-time restore."
+    "vm-restore-status=idle"
+    "vm-restore-detail=No restore requested."
     "vm-data-disk-status=pending"
     "vm-data-disk-detail=Waiting for shared data disk mount."
   )

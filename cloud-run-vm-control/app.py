@@ -1,5 +1,6 @@
 import base64
 import gzip
+import json
 import logging
 import os
 import secrets
@@ -96,6 +97,8 @@ POWER_ACTION_STATUS_METADATA_KEY = "vm-power-action-status"
 RESTORE_MODE_METADATA_KEY = "vm-restore-mode"
 RESTORE_STATUS_METADATA_KEY = "vm-restore-status"
 RESTORE_DETAIL_METADATA_KEY = "vm-restore-detail"
+SELECTED_BACKUP_METADATA_KEY = "vm-selected-backup-id"
+BACKUPS_JSON_METADATA_KEY = "vm-backups-json"
 DATA_DISK_STATUS_METADATA_KEY = "vm-data-disk-status"
 DATA_DISK_DETAIL_METADATA_KEY = "vm-data-disk-detail"
 LAST_HOME_BACKUP_AT_METADATA_KEY = "vm-last-home-backup-at"
@@ -298,6 +301,8 @@ def options_passthrough():
             "restart",
             "create",
             "delete",
+            "create-backup",
+            "restore-backup",
             "set-sunshine-password",
         }:
             raise ApiError("Unsupported command.", 400)
@@ -656,6 +661,18 @@ def wait_for_power_action_phase(
     raise ApiError(f"Timed out waiting for VM action {action}.", 504)
 
 
+def parse_backup_id(payload: dict[str, Any]) -> str:
+    raw = str(payload.get("backupId", "") or "").strip()
+    if not raw:
+        raise ApiError("backupId is required.", 400)
+    if "/" in raw or "\\" in raw or raw.startswith(".") or ".." in raw:
+        raise ApiError("backupId is invalid.", 400)
+    allowed = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._:-TZ")
+    if any(ch not in allowed for ch in raw):
+        raise ApiError("backupId contains unsupported characters.", 400)
+    return raw
+
+
 def poll_power_action_backup(
     *,
     action: str,
@@ -792,6 +809,9 @@ def build_instance_metadata_items(
         items.append({"key": RESTORE_MODE_METADATA_KEY, "value": restore_mode})
         items.append({"key": RESTORE_STATUS_METADATA_KEY, "value": "pending"})
         items.append({"key": RESTORE_DETAIL_METADATA_KEY, "value": "Waiting for create-time restore."})
+    else:
+        items.append({"key": RESTORE_STATUS_METADATA_KEY, "value": "idle"})
+        items.append({"key": RESTORE_DETAIL_METADATA_KEY, "value": "No restore requested."})
 
     if CONFIG["gdrive_folder_id"]:
         items.append({"key": "gdrive-folder-id", "value": CONFIG["gdrive_folder_id"]})
@@ -863,13 +883,12 @@ def build_instance_create_request(
             "onHostMaintenance": "TERMINATE",
             "automaticRestart": True,
         },
-        "metadata": {
-            "items": build_instance_metadata_items(
-                auto_stop_hours=auto_stop_hours,
-                sunshine_credentials=sunshine_credentials,
-                restore_mode="create",
-            )
-        },
+            "metadata": {
+                "items": build_instance_metadata_items(
+                    auto_stop_hours=auto_stop_hours,
+                    sunshine_credentials=sunshine_credentials,
+                )
+            },
     }
 
     if CONFIG["vm_tags"]:
@@ -934,7 +953,7 @@ def build_sunshine_status(instance: dict[str, Any] | None) -> dict[str, str]:
     phase, power_action, _ = parse_power_action_status(
         metadata_value(instance, POWER_ACTION_STATUS_METADATA_KEY)
     )
-    if power_action in {"delete", "stop"} and phase in {"requested", "running", "backed-up"}:
+    if power_action in {"delete", "stop", "create-backup", "restore-backup"} and phase in {"requested", "running", "backed-up", "stopping"}:
         return {
             "state": "stopping",
             "label": "Stopping",
@@ -1002,12 +1021,22 @@ def build_persistence_status(instance: dict[str, Any] | None) -> dict[str, Any]:
                 "label": "",
                 "detail": "",
             },
+            "backups": [],
         }
 
     data_disk_state = metadata_value(instance, DATA_DISK_STATUS_METADATA_KEY).strip().lower()
     restore_mode = metadata_value(instance, RESTORE_MODE_METADATA_KEY).strip().lower()
     restore_state = metadata_value(instance, RESTORE_STATUS_METADATA_KEY).strip().lower()
     games_archive_state = metadata_value(instance, GAMES_ARCHIVE_STATUS_METADATA_KEY).strip().lower()
+    backups: list[dict[str, Any]] = []
+    raw_backups = metadata_value(instance, BACKUPS_JSON_METADATA_KEY).strip()
+    if raw_backups:
+        try:
+            parsed_backups = json.loads(raw_backups)
+            if isinstance(parsed_backups, list):
+                backups = [item for item in parsed_backups if isinstance(item, dict)]
+        except Exception:
+            backups = []
 
     data_disk_labels = {
         "ready": "Ready",
@@ -1063,6 +1092,7 @@ def build_persistence_status(instance: dict[str, Any] | None) -> dict[str, Any]:
             ),
             "detail": metadata_value(instance, GAMES_ARCHIVE_DETAIL_METADATA_KEY),
         },
+        "backups": backups,
     }
 
 
@@ -1092,7 +1122,7 @@ def allowed_commands(instance: dict[str, Any] | None) -> list[str]:
     if status == "RUNNING":
         commands = ["status", "set-sunshine-password"]
         if is_live_backup_ready(instance):
-            commands.extend(["restart", "stop", "delete"])
+            commands.extend(["restart", "stop", "delete", "create-backup", "restore-backup"])
         return commands
     if status == "TERMINATED":
         return ["status", "start", "delete", "set-sunshine-password"]
@@ -1118,6 +1148,9 @@ def build_power_action_status(instance: dict[str, Any] | None) -> dict[str, str]
         "running": "Running",
         "backed-up": "Backed up",
         "applied": "Applied",
+        "completed": "Completed",
+        "restored": "Restored",
+        "stopping": "Stopping",
         "failed": "Failed",
     }
     return {
@@ -1451,50 +1484,71 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
         if not confirmed:
             raise ApiError("Delete requires confirmation.", 400)
 
-        if current_status == "TERMINATED":
-            previous_backup_ready_at = metadata_value(current_instance, BACKUP_READY_AT_METADATA_KEY).strip()
-            set_instance_metadata_values(
-                current_instance,
-                {
-                    BACKUP_READY_AT_METADATA_KEY: None,
-                    DELETE_SKIP_HOME_BACKUP_METADATA_KEY: (
-                        "true"
-                        if metadata_value(current_instance, LAST_HOME_BACKUP_AT_METADATA_KEY).strip()
-                        else None
-                    ),
-                    SUNSHINE_STATUS_METADATA_KEY: "starting",
-                    SUNSHINE_STATUS_DETAIL_METADATA_KEY: "VM starting to run the final delete backup.",
-                },
-            )
-            compute_request("POST", f"{instance_url()}/start")
-            poll_instance_status("RUNNING", timeout_seconds=900)
-            current_instance = poll_backup_ready(
-                timeout_seconds=900,
-                previous_timestamp=previous_backup_ready_at,
-            )
-        elif current_status == "RUNNING":
-            set_instance_metadata_values(
-                current_instance,
-                {
-                    DELETE_SKIP_HOME_BACKUP_METADATA_KEY: None,
-                },
-            )
-            current_instance = get_instance()
+        if current_status == "RUNNING":
             require_live_backup_ready(current_instance, command)
-
-        current_instance, token = request_live_power_action(
-            current_instance,
-            action="delete",
-            status_detail="VM deleting after a live backup and games archive.",
-        )
-        poll_power_action_backup(action="delete", token=token)
-        poll_instance_status("TERMINATED", timeout_seconds=900)
+            current_instance, _ = request_live_power_action(
+                current_instance,
+                action="delete",
+                status_detail="VM deleting without creating a backup.",
+            )
+            poll_instance_status("TERMINATED", timeout_seconds=900)
+        elif current_status != "TERMINATED":
+            poll_instance_status("TERMINATED", timeout_seconds=900)
         operation = compute_request("DELETE", instance_url())
         if not isinstance(operation, dict):
             raise ApiError("Failed to delete instance.", 502)
         wait_for_zone_operation(operation, timeout_seconds=180)
         poll_instance_deleted(timeout_seconds=120)
         return build_status_payload(None, user=user, command=command)
+
+    if command == "create-backup":
+        if current_instance is None:
+            raise ApiError("Instance does not exist. Create it first.", 400)
+        if current_status != "RUNNING":
+            raise ApiError("Create Backup requires a running VM.", 400)
+        require_live_backup_ready(current_instance, command)
+        current_instance, token = request_live_power_action(
+            current_instance,
+            action="create-backup",
+            status_detail="Creating a manual backup. Sunshine is temporarily stopped.",
+        )
+        final_instance = wait_for_power_action_phase(
+            action="create-backup",
+            token=token,
+            target_phase="completed",
+            timeout_seconds=3600,
+        )
+        return build_status_payload(final_instance, user=user, command=command)
+
+    if command == "restore-backup":
+        if current_instance is None:
+            raise ApiError("Instance does not exist. Create it first.", 400)
+        if current_status != "RUNNING":
+            raise ApiError("Restore Backup requires a running VM.", 400)
+        require_live_backup_ready(current_instance, command)
+        backup_id = parse_backup_id(payload)
+        set_instance_metadata_values(
+            current_instance,
+            {
+                SELECTED_BACKUP_METADATA_KEY: backup_id,
+                RESTORE_STATUS_METADATA_KEY: "running",
+                RESTORE_DETAIL_METADATA_KEY: f"Restoring backup {backup_id}.",
+            },
+        )
+        current_instance = get_instance()
+        current_instance, token = request_live_power_action(
+            current_instance,
+            action="restore-backup",
+            status_detail="Restoring selected backup. Sunshine is temporarily stopped.",
+        )
+        final_instance = wait_for_power_action_phase(
+            action="restore-backup",
+            token=token,
+            target_phase="restored",
+            timeout_seconds=3600,
+        )
+        final_instance = wait_for_external_ip(timeout_seconds=180)
+        return build_status_payload(final_instance, user=user, command=command)
 
     if command == "set-sunshine-password":
         if "set-sunshine-password" not in allowed_commands(current_instance):

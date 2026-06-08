@@ -13,6 +13,7 @@ WORK_DIR="${STATE_DIR}/work"
 BACKUP_READY_MARKER="${STATE_DIR}/backup-ready"
 BACKUP_COMPLETE_MARKER="${STATE_DIR}/backup-complete"
 HOME_ARCHIVE="${WORK_DIR}/home.tar.zst"
+GAMES_ARCHIVE="${WORK_DIR}/games.tar.zst"
 HOME_MANIFEST="${WORK_DIR}/home-manifest.json"
 ROOT_MANIFEST="${WORK_DIR}/manifest.json"
 GAMES_CURRENT_FILE="${WORK_DIR}/games-current.json"
@@ -32,12 +33,19 @@ GAMES_ARCHIVE_DETAIL_KEY="vm-games-archive-detail"
 RESTORE_MODE_KEY="vm-restore-mode"
 RESTORE_STATUS_KEY="vm-restore-status"
 RESTORE_DETAIL_KEY="vm-restore-detail"
+SELECTED_BACKUP_KEY="vm-selected-backup-id"
+BACKUPS_JSON_KEY="vm-backups-json"
 DATA_DISK_STATUS_KEY="vm-data-disk-status"
 DATA_DISK_DETAIL_KEY="vm-data-disk-detail"
 DELETE_SKIP_HOME_BACKUP_KEY="vm-delete-skip-home-backup"
 PERSISTENCE_FORMAT_VERSION="2"
-RCLONE_RETRIES=${RCLONE_RETRIES:-3}
-RCLONE_LOW_LEVEL_RETRIES=${RCLONE_LOW_LEVEL_RETRIES:-2}
+RCLONE_RETRIES=${RCLONE_RETRIES:-6}
+RCLONE_LOW_LEVEL_RETRIES=${RCLONE_LOW_LEVEL_RETRIES:-10}
+RCLONE_RETRIES_SLEEP=${RCLONE_RETRIES_SLEEP:-30s}
+RCLONE_TPSLIMIT=${RCLONE_TPSLIMIT:-1}
+RCLONE_TPSLIMIT_BURST=${RCLONE_TPSLIMIT_BURST:-1}
+RCLONE_LARGE_OUTER_RETRIES=${RCLONE_LARGE_OUTER_RETRIES:-6}
+RCLONE_LARGE_OUTER_SLEEP=${RCLONE_LARGE_OUTER_SLEEP:-120}
 RCLONE_SMALL_TIMEOUT=${RCLONE_SMALL_TIMEOUT:-90s}
 RCLONE_LARGE_TIMEOUT=${RCLONE_LARGE_TIMEOUT:-4h}
 
@@ -182,6 +190,16 @@ clear_restore_mode() {
   set_metadata_values "$updates"
 }
 
+set_backups_json() {
+  local backups_json="$1"
+  local updates
+  updates="$(jq -n \
+    --arg key "$BACKUPS_JSON_KEY" \
+    --arg value "$backups_json" \
+    '{($key): $value}')"
+  set_metadata_values "$updates"
+}
+
 secret_payload() {
   local secret_name="$1"
   local token project payload encoded
@@ -221,6 +239,9 @@ run_rclone_small() {
     --config "$RCLONE_CONFIG_PATH" \
     --retries "$RCLONE_RETRIES" \
     --low-level-retries "$RCLONE_LOW_LEVEL_RETRIES" \
+    --retries-sleep "$RCLONE_RETRIES_SLEEP" \
+    --tpslimit "$RCLONE_TPSLIMIT" \
+    --tpslimit-burst "$RCLONE_TPSLIMIT_BURST" \
     "$@"
 }
 
@@ -230,7 +251,28 @@ run_rclone_large() {
     --config "$RCLONE_CONFIG_PATH" \
     --retries "$RCLONE_RETRIES" \
     --low-level-retries "$RCLONE_LOW_LEVEL_RETRIES" \
+    --retries-sleep "$RCLONE_RETRIES_SLEEP" \
+    --tpslimit "$RCLONE_TPSLIMIT" \
+    --tpslimit-burst "$RCLONE_TPSLIMIT_BURST" \
+    --transfers 1 \
+    --checkers 1 \
     "$@"
+}
+
+run_rclone_large_resilient() {
+  local attempt=1
+  while true; do
+    log "Running rclone large transfer attempt ${attempt}/${RCLONE_LARGE_OUTER_RETRIES}: $*"
+    if run_rclone_large "$@"; then
+      return 0
+    fi
+    if (( attempt >= RCLONE_LARGE_OUTER_RETRIES )); then
+      return 1
+    fi
+    log "rclone large transfer failed; retrying after ${RCLONE_LARGE_OUTER_SLEEP}s to recover from Drive API quota limits."
+    sleep "$RCLONE_LARGE_OUTER_SLEEP"
+    attempt=$((attempt + 1))
+  done
 }
 
 warn_small_rclone_failure() {
@@ -561,9 +603,38 @@ games_current_remote_path() {
   printf '%s:%s/games/current.json\n' "$REMOTE_NAME" "$root"
 }
 
+manual_backups_remote_path() {
+  local root="$1"
+  printf '%s:%s/backups\n' "$REMOTE_NAME" "$root"
+}
+
 legacy_games_dir_remote_path() {
   local root="$1"
   printf '%s:%s/games\n' "$REMOTE_NAME" "$root"
+}
+
+refresh_backup_list() {
+  local root="$1"
+  local entries json
+  entries="$(
+    run_rclone_small lsf "$(manual_backups_remote_path "$root")" 2>/dev/null \
+      | sed 's#/$##' \
+      | awk 'NF { print }' \
+      | sort -r || true
+  )"
+  if [[ -z "$entries" ]]; then
+    json="[]"
+  else
+    json="$(
+      printf '%s\n' "$entries" \
+        | jq -R -s '
+            split("\n")
+            | map(select(length > 0))
+            | map({id: ., label: ., createdAt: .})
+          '
+    )"
+  fi
+  set_backups_json "$json"
 }
 
 backup_is_ready() {
@@ -598,7 +669,7 @@ backup_home() {
 
   rm -f "$HOME_ARCHIVE"
   tar --zstd -cpf "$HOME_ARCHIVE" -C "$(dirname "$source_dir")" "$(basename "$source_dir")"
-  run_rclone_large copyto "$HOME_ARCHIVE" "$(remote_home_archive_path "$root")"
+  run_rclone_large_resilient copyto "$HOME_ARCHIVE" "$(remote_home_archive_path "$root")"
   write_home_manifest "$root" "$timestamp"
   record_home_backup_time "$timestamp"
 }
@@ -616,9 +687,18 @@ backup_games_archive() {
   fi
 
   set_games_archive_status "running" "Archiving /mnt/games to Google Drive."
-  tar -C "$(dirname "$(mount_games_dir)")" -cf - "$(basename "$(mount_games_dir)")" \
-    | zstd -T0 \
-    | run_rclone_large rcat "$archive_remote"
+  rm -f "$GAMES_ARCHIVE"
+  if ! tar -C "$(dirname "$(mount_games_dir)")" -cf - "$(basename "$(mount_games_dir)")" \
+    | zstd -T0 > "$GAMES_ARCHIVE";
+  then
+    set_games_archive_status "failed" "Games archive creation failed."
+    return 1
+  fi
+
+  if ! run_rclone_large_resilient copyto "$GAMES_ARCHIVE" "$archive_remote"; then
+    set_games_archive_status "failed" "Games archive upload failed; Drive API quota may be exhausted."
+    return 1
+  fi
 
   size_bytes="$(
     run_rclone_small lsjson "$archive_remote" \
@@ -628,6 +708,66 @@ backup_games_archive() {
   publish_games_current "$root" "$timestamp" "$archive_rel"
   record_games_archive_time "$timestamp"
   set_games_archive_status "ready" "Published games archive ${archive_rel}."
+}
+
+backup_manual_state() {
+  local root timestamp backup_id backup_remote home_remote games_remote manifest_file size_bytes
+  root="$(remote_root)"
+  timestamp="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+  backup_id="$timestamp"
+  backup_remote="${REMOTE_NAME}:${root}/backups/${backup_id}"
+  home_remote="${backup_remote}/home.tar.zst"
+  games_remote="${backup_remote}/games.tar.zst"
+  manifest_file="${WORK_DIR}/backup-manifest.json"
+
+  ensure_tools
+  ensure_rclone_remote || return 0
+  prepare_data_disk
+  bind_data_paths
+  if ! backup_is_ready; then
+    log "Backup readiness marker is missing; skipping backup."
+    return 1
+  fi
+
+  stop_stack
+
+  rm -f "$HOME_ARCHIVE" "$GAMES_ARCHIVE" "$manifest_file"
+  tar --zstd -cpf "$HOME_ARCHIVE" -C "$(dirname "$(mount_home_dir)")" "$(basename "$(mount_home_dir)")"
+  if ! tar -C "$(dirname "$(mount_games_dir)")" -cf - "$(basename "$(mount_games_dir)")" \
+    | zstd -T0 > "$GAMES_ARCHIVE";
+  then
+    set_games_archive_status "failed" "Manual backup games archive creation failed."
+    return 1
+  fi
+
+  run_rclone_large_resilient copyto "$HOME_ARCHIVE" "$home_remote"
+  run_rclone_large_resilient copyto "$GAMES_ARCHIVE" "$games_remote"
+
+  size_bytes="$(wc -c < "$GAMES_ARCHIVE" | tr -d ' ')"
+  jq -n \
+    --arg id "$backup_id" \
+    --arg timestamp "$timestamp" \
+    --arg root "$root" \
+    --arg home_path "backups/${backup_id}/home.tar.zst" \
+    --arg games_path "backups/${backup_id}/games.tar.zst" \
+    --arg version "$PERSISTENCE_FORMAT_VERSION" \
+    --argjson games_size_bytes "$size_bytes" \
+    '{
+      id: $id,
+      timestamp: $timestamp,
+      backupRoot: $root,
+      homeArchivePath: $home_path,
+      gamesArchivePath: $games_path,
+      gamesSizeBytes: $games_size_bytes,
+      formatVersion: $version
+    }' > "$manifest_file"
+  run_rclone_small copyto "$manifest_file" "${backup_remote}/manifest.json" || warn_small_rclone_failure "manual backup manifest upload"
+
+  record_home_backup_time "$timestamp"
+  record_games_archive_time "$timestamp"
+  set_games_archive_status "ready" "Published manual backup ${backup_id}."
+  refresh_backup_list "$root"
+  log "Manual backup completed to ${root}/backups/${backup_id}"
 }
 
 restore_home() {
@@ -650,7 +790,7 @@ restore_home() {
   fi
 
   rm -rf "$mount_home"
-  if ! run_rclone_large copyto "$source_remote" "$HOME_ARCHIVE"; then
+  if ! run_rclone_large_resilient copyto "$source_remote" "$HOME_ARCHIVE"; then
     return 1
   fi
   if ! tar --zstd -xpf "$HOME_ARCHIVE" -C "$(dirname "$mount_home")"; then
@@ -690,8 +830,13 @@ restore_games_from_archive() {
   rm -rf "$stage_dir"
   mkdir -p "$mount_root"
 
-  if ! run_rclone_large cat "$archive_remote" \
-    | zstd -d \
+  rm -f "$GAMES_ARCHIVE"
+  if ! run_rclone_large_resilient copyto "$archive_remote" "$GAMES_ARCHIVE"; then
+    log "Games archive download failed for ${archive_remote}"
+    return 1
+  fi
+
+  if ! zstd -dc "$GAMES_ARCHIVE" \
     | tar -C "$mount_root" --transform "s#^games#$(basename "$stage_dir")#" -xf -;
   then
     log "Games archive restore failed for ${archive_remote}"
@@ -732,6 +877,61 @@ restore_games_legacy_sync() {
   return 0
 }
 
+restore_selected_backup_state() {
+  local root backup_id backup_remote home_remote games_remote mount_root mount_home target_games stage_games token
+  root="$(remote_root)"
+  backup_id="${1:-$(metadata_get "$SELECTED_BACKUP_KEY")}"
+  if [[ -z "$backup_id" || "$backup_id" == *"/"* || "$backup_id" == *".."* ]]; then
+    set_restore_status "failed" "Selected backup id is invalid."
+    return 1
+  fi
+
+  backup_remote="${REMOTE_NAME}:${root}/backups/${backup_id}"
+  home_remote="${backup_remote}/home.tar.zst"
+  games_remote="${backup_remote}/games.tar.zst"
+  mount_root="$(state_mount_root)"
+  mount_home="$(mount_home_dir)"
+  target_games="$(mount_games_dir)"
+  token="$(date +%s)"
+  stage_games="${mount_root}/games.restore.${token}"
+
+  ensure_tools
+  ensure_rclone_remote || return 1
+  prepare_data_disk
+  bind_data_paths
+  set_restore_status "running" "Restoring backup ${backup_id}."
+
+  rm -f "$HOME_ARCHIVE" "$GAMES_ARCHIVE"
+  if ! run_rclone_large_resilient copyto "$home_remote" "$HOME_ARCHIVE"; then
+    set_restore_status "failed" "Home restore failed for backup ${backup_id}."
+    return 1
+  fi
+  rm -rf "$mount_home"
+  tar --zstd -xpf "$HOME_ARCHIVE" -C "$(dirname "$mount_home")"
+
+  if ! run_rclone_large_resilient copyto "$games_remote" "$GAMES_ARCHIVE"; then
+    set_restore_status "failed" "Games restore failed for backup ${backup_id}."
+    return 1
+  fi
+  rm -rf "$stage_games"
+  mkdir -p "$mount_root"
+  zstd -dc "$GAMES_ARCHIVE" \
+    | tar -C "$mount_root" --transform "s#^games#$(basename "$stage_games")#" -xf -
+  if [[ ! -d "$stage_games" ]]; then
+    set_restore_status "failed" "Games restore did not produce ${stage_games}."
+    return 1
+  fi
+  rm -rf "$target_games"
+  mv "$stage_games" "$target_games"
+
+  restore_stack_perms
+  record_home_backup_time "$backup_id"
+  record_games_archive_time "$backup_id"
+  set_games_archive_status "ready" "Restored manual backup ${backup_id}."
+  set_restore_status "restored" "Restored backup ${backup_id}."
+  refresh_backup_list "$root"
+}
+
 latest_games_archive_remote_path() {
   local root="$1"
   local latest_entry
@@ -760,8 +960,13 @@ restore_games_from_latest_archive() {
   rm -rf "$stage_dir"
   mkdir -p "$mount_root"
 
-  if ! run_rclone_large cat "$archive_remote" \
-    | zstd -d \
+  rm -f "$GAMES_ARCHIVE"
+  if ! run_rclone_large_resilient copyto "$archive_remote" "$GAMES_ARCHIVE"; then
+    log "Latest games archive download failed for ${archive_remote}"
+    return 1
+  fi
+
+  if ! zstd -dc "$GAMES_ARCHIVE" \
     | tar -C "$mount_root" --transform "s#^games#$(basename "$stage_dir")#" -xf -;
   then
     log "Latest games archive restore failed for ${archive_remote}"
@@ -863,6 +1068,7 @@ restore_create_state() {
   ensure_tools
   ensure_rclone_remote || return 0
   prepare_data_disk
+  refresh_backup_list "$root"
 
   if [[ "$(metadata_get "$RESTORE_MODE_KEY")" != "create" ]]; then
     log "Restore gate is closed; skipping create-time restore."
@@ -928,6 +1134,9 @@ case "$cmd" in
   backup)
     backup_runtime_state
     ;;
+  backup-manual|manual-backup)
+    backup_manual_state
+    ;;
   backup-runtime)
     backup_runtime_state
     ;;
@@ -940,6 +1149,9 @@ case "$cmd" in
   restore-create)
     restore_create_state
     ;;
+  restore-backup)
+    restore_selected_backup_state "${2:-}"
+    ;;
   start-stack)
     start_stack
     ;;
@@ -950,7 +1162,7 @@ case "$cmd" in
     status_state
     ;;
   *)
-    echo "Usage: $0 {prepare-disk|bind-mounts|backup|backup-runtime|backup-delete|restore|restore-create|start-stack|clear-restore-mode|status}" >&2
+    echo "Usage: $0 {prepare-disk|bind-mounts|backup|backup-runtime|backup-delete|backup-manual|restore|restore-create|restore-backup|start-stack|clear-restore-mode|status}" >&2
     exit 1
     ;;
 esac

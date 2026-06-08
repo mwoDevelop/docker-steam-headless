@@ -19,6 +19,8 @@
     targetSummary: document.querySelector("#target-summary"),
     refreshStatus: document.querySelector("#refresh-status"),
     autoStopHours: document.querySelector("#auto-stop-hours"),
+    backupSelect: document.querySelector("#backup-select"),
+    backupOptionsStatus: document.querySelector("#backup-options-status"),
     banner: document.querySelector("#banner"),
     access: document.querySelector("#access"),
     history: document.querySelector("#history"),
@@ -49,6 +51,7 @@
       : defaultAutoStopHours;
     renderHistory();
     renderTargetSummary();
+    renderBackupOptions(null);
     renderAccess(null);
     updateAuthUi();
   }
@@ -117,8 +120,15 @@
       elements.refreshStatus.disabled = state.isBusy || !state.user || !allowed.has("status");
     }
     elements.autoStopHours.disabled = state.isBusy || !state.user || (!allowed.has("start") && !allowed.has("create"));
+    if (elements.backupSelect) {
+      const hasBackups = getAvailableBackups(state.lastStatus).length > 0;
+      elements.backupSelect.disabled = state.isBusy || !state.user || !allowed.has("restore-backup") || !hasBackups;
+    }
     elements.actionButtons.forEach((button) => {
-      button.disabled = state.isBusy || !state.user || !allowed.has(button.dataset.command);
+      const command = button.dataset.command;
+      const needsBackup = command === "restore-backup";
+      const hasSelectedBackup = Boolean(elements.backupSelect && elements.backupSelect.value);
+      button.disabled = state.isBusy || !state.user || !allowed.has(command) || (needsBackup && !hasSelectedBackup);
     });
   }
 
@@ -230,6 +240,46 @@
         ? ` VM action "${powerActionName}" is still running.`
         : "";
     return `Command "${command}" completed. Final VM state: ${vmState}, Sunshine state: ${sunshineState}.${powerActionSuffix}`;
+  }
+
+  function getAvailableBackups(payload) {
+    const backups = payload && payload.persistence && Array.isArray(payload.persistence.backups)
+      ? payload.persistence.backups
+      : [];
+    return backups.filter((backup) => backup && backup.id);
+  }
+
+  function renderBackupOptions(payload) {
+    if (!elements.backupSelect) {
+      return;
+    }
+
+    const previousValue = elements.backupSelect.value;
+    const backups = getAvailableBackups(payload);
+    if (!backups.length) {
+      elements.backupSelect.innerHTML = '<option value="">No manual backups available</option>';
+      if (elements.backupOptionsStatus) {
+        elements.backupOptionsStatus.textContent = "No manual backups found yet. Use Create Backup after the VM is ready.";
+      }
+      updateActionAvailability();
+      return;
+    }
+
+    elements.backupSelect.innerHTML = [
+      '<option value="">Select backup...</option>',
+      ...backups.map((backup) => {
+        const id = String(backup.id || "");
+        const label = String(backup.label || backup.createdAt || id);
+        return `<option value="${escapeHtml(id)}">${escapeHtml(label)}</option>`;
+      }),
+    ].join("");
+    if (previousValue && backups.some((backup) => String(backup.id) === previousValue)) {
+      elements.backupSelect.value = previousValue;
+    }
+    if (elements.backupOptionsStatus) {
+      elements.backupOptionsStatus.textContent = `${backups.length} manual backup${backups.length === 1 ? "" : "s"} available.`;
+    }
+    updateActionAvailability();
   }
 
   async function waitForSunshineReady() {
@@ -470,9 +520,21 @@
     }
 
     if (command === "delete") {
-      const confirmed = window.confirm("Delete will stop the VM, back up state, and remove the instance. Continue?");
+      const confirmed = window.confirm("Delete will stop and remove the VM without creating a backup. Continue?");
       if (!confirmed) {
         setBanner("Delete cancelled.", "warning");
+        return;
+      }
+    }
+
+    if (command === "restore-backup") {
+      const backupId = String(elements.backupSelect && elements.backupSelect.value || "").trim();
+      if (!backupId) {
+        throw new Error("Select a backup before running Restore Backup.");
+      }
+      const confirmed = window.confirm(`Restore backup "${backupId}"? This replaces current VM home and games data.`);
+      if (!confirmed) {
+        setBanner("Restore Backup cancelled.", "warning");
         return;
       }
     }
@@ -485,6 +547,9 @@
       if (command === "delete") {
         body.confirmDelete = true;
       }
+      if (command === "restore-backup") {
+        body.backupId = String(elements.backupSelect && elements.backupSelect.value || "").trim();
+      }
       const autoStopHours = readAutoStopHours(command);
       if (autoStopHours) {
         body.autoStopHours = autoStopHours;
@@ -496,6 +561,7 @@
       });
       state.lastStatus = data;
       renderTargetSummary();
+      renderBackupOptions(data);
       renderAccess(data);
 
       const suffix = data.duckdnsUpdated
@@ -690,6 +756,7 @@
       const data = await fetchApi("/api/status", { method: "GET" });
       state.lastStatus = data;
       renderTargetSummary();
+      renderBackupOptions(data);
       renderAccess(data);
       updateActionAvailability();
       if (!silent) {
@@ -729,6 +796,7 @@
         <p class="access-meta">Restore: <code>${escapeHtml(restore.label || "idle")}</code></p>
         <p class="access-meta">Last home backup: <code>${escapeHtml(homeBackup.lastAt || "n/a")}</code></p>
         <p class="access-meta">Last games archive: <code>${escapeHtml(gamesArchive.lastAt || "n/a")}</code></p>
+        <p class="access-meta">Manual backups: <code>${escapeHtml(String(getAvailableBackups(payload).length))}</code></p>
       </article>
     `;
 
@@ -738,7 +806,7 @@
         <div class="access-grid">
           <article class="access-card">
             <h3>VM not created</h3>
-            <p>No Compute Engine instance exists yet for <code>${escapeHtml(target)}</code>. Use <code>Create</code> to provision a new VM and restore state from backup when available.</p>
+            <p>No Compute Engine instance exists yet for <code>${escapeHtml(target)}</code>. Use <code>Create</code> to provision a clean VM, then run <code>Restore Backup</code> if needed.</p>
           </article>
           ${persistenceMeta}
         </div>
@@ -966,6 +1034,10 @@
       }
     });
   });
+
+  if (elements.backupSelect) {
+    elements.backupSelect.addEventListener("change", updateActionAvailability);
+  }
 
   loadConfig();
   setBusy(false);

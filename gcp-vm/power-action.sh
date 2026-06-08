@@ -178,6 +178,24 @@ run_backup() {
   "$PERSIST_SCRIPT" "$mode"
 }
 
+start_stack() {
+  if ! ensure_persist_script; then
+    log "Persist script is unavailable."
+    return 1
+  fi
+  "$PERSIST_SCRIPT" start-stack
+}
+
+restore_selected_backup() {
+  local backup_id
+  backup_id="$(metadata_get vm-selected-backup-id || true)"
+  if [[ -z "$backup_id" ]]; then
+    log "Selected backup id is missing."
+    return 1
+  fi
+  "$PERSIST_SCRIPT" restore-backup "$backup_id"
+}
+
 sync_steam_env_from_metadata() {
   local env_metadata
   env_metadata="$(metadata_get "$STEAM_ENV_METADATA_KEY" || true)"
@@ -262,6 +280,14 @@ perform_action() {
 
   sync_steam_env_from_metadata || true
 
+  if [[ "$action" == "delete" ]]; then
+    touch "$BACKUP_COMPLETE_MARKER"
+    set_power_action_status "$action" "$token" "stopping" ""
+    log "Powering off for delete without creating a backup"
+    /sbin/poweroff
+    return 0
+  fi
+
   if ! run_backup "$backup_mode"; then
     "$PERSIST_SCRIPT" start-stack >/dev/null 2>&1 || true
     set_power_action_status "$action" "$token" "failed" ""
@@ -292,6 +318,44 @@ perform_action() {
   esac
 }
 
+create_manual_backup() {
+  local action="$1"
+  local token="$2"
+
+  log "Creating manual backup token=${token}"
+  set_power_action_status "$action" "$token" "running"
+  sync_steam_env_from_metadata || true
+  if ! run_backup "backup-manual"; then
+    start_stack >/dev/null 2>&1 || true
+    set_power_action_status "$action" "$token" "failed" ""
+    return 1
+  fi
+  if ! start_stack; then
+    set_power_action_status "$action" "$token" "failed" ""
+    return 1
+  fi
+  set_power_action_status "$action" "$token" "completed" ""
+}
+
+restore_manual_backup() {
+  local action="$1"
+  local token="$2"
+
+  log "Restoring manual backup token=${token}"
+  set_power_action_status "$action" "$token" "running"
+  sync_steam_env_from_metadata || true
+  if ! restore_selected_backup; then
+    start_stack >/dev/null 2>&1 || true
+    set_power_action_status "$action" "$token" "failed" ""
+    return 1
+  fi
+  if ! start_stack; then
+    set_power_action_status "$action" "$token" "failed" ""
+    return 1
+  fi
+  set_power_action_status "$action" "$token" "restored" ""
+}
+
 run_daemon() {
   log "Starting power action daemon"
   while true; do
@@ -303,6 +367,12 @@ run_daemon() {
       case "$action" in
         stop|restart|delete)
           perform_action "$action" "$token" "metadata" || true
+          ;;
+        create-backup)
+          create_manual_backup "$action" "$token" || true
+          ;;
+        restore-backup)
+          restore_manual_backup "$action" "$token" || true
           ;;
         apply-sunshine-password)
           apply_sunshine_password "$action" "$token" || true
