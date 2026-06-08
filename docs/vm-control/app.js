@@ -113,7 +113,9 @@
           : [],
     );
 
-    elements.refreshStatus.disabled = state.isBusy || !state.user || !allowed.has("status");
+    if (elements.refreshStatus) {
+      elements.refreshStatus.disabled = state.isBusy || !state.user || !allowed.has("status");
+    }
     elements.autoStopHours.disabled = state.isBusy || !state.user || (!allowed.has("start") && !allowed.has("create"));
     elements.actionButtons.forEach((button) => {
       button.disabled = state.isBusy || !state.user || !allowed.has(button.dataset.command);
@@ -753,6 +755,9 @@
     const displayHost = primaryDuckDns && primaryDuckDns.domain
       ? escapeHtml(primaryDuckDns.domain)
       : ip;
+    const displayHostLabel = primaryDuckDns && primaryDuckDns.domain
+      ? "DNS Host"
+      : "Host/IP";
     const novncUrl = String(payload.urls && payload.urls.novnc ? payload.urls.novnc : "");
     const sunshineUrl = String(payload.urls && payload.urls.sunshine ? payload.urls.sunshine : "");
     const sunshineOpenUrl = primaryDuckDns && primaryDuckDns.sunshine ? primaryDuckDns.sunshine : sunshineUrl;
@@ -768,9 +773,6 @@
     const sunshineDnsMeta = primaryDuckDns && primaryDuckDns.sunshine
       ? `<p class="access-meta">DNS URL: <code>${escapeHtml(primaryDuckDns.sunshine)}</code></p>`
       : "";
-    const dnsHostMeta = primaryDuckDns && primaryDuckDns.domain
-      ? `<p class="access-meta">DNS Host: <code>${escapeHtml(primaryDuckDns.domain)}</code></p>`
-      : "";
     const sunshineUserMeta = sunshineCredentials.username
       ? `<p class="access-meta">Username: <code>${escapeHtml(sunshineCredentials.username)}</code></p>`
       : "";
@@ -783,8 +785,7 @@
         <article class="access-card">
           <h3>Moonlight / Sunshine Client</h3>
           <p>Add this host in Moonlight or another Sunshine-compatible client, then pair with the PIN shown by Sunshine.</p>
-          <p class="access-meta">Host/IP: <code>${displayHost}</code></p>
-          ${dnsHostMeta}
+          <p class="access-meta">${displayHostLabel}: <code>${displayHost}</code></p>
         </article>
 
         <article class="access-card accent">
@@ -826,7 +827,6 @@
           <h3>Steam Link / Steam Client</h3>
           <p>After Steam inside the VM signs in, the host should appear in Steam Link or Steam Remote Play. First-time setup is usually easiest through noVNC.</p>
           <p class="access-meta">Target: <code>${escapeHtml(target)}</code></p>
-          ${dnsHostMeta}
         </article>
 
         <article class="access-card accent">
@@ -913,13 +913,15 @@
     setBanner("Google session cleared from this browser session.", "success");
   });
 
-  elements.refreshStatus.addEventListener("click", async () => {
-    try {
-      await refreshStatus();
-    } catch (error) {
-      handleError(error);
-    }
-  });
+  if (elements.refreshStatus) {
+    elements.refreshStatus.addEventListener("click", async () => {
+      try {
+        await refreshStatus();
+      } catch (error) {
+        handleError(error);
+      }
+    });
+  }
 
   elements.actionButtons.forEach((button) => {
     button.addEventListener("click", async () => {
