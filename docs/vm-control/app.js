@@ -78,14 +78,29 @@
     elements.googleSignIn.disabled = nextBusy || !state.backendConfig;
     updateActionAvailability();
 
+    const canSetSunshine = canSetSunshinePassword(state.lastStatus);
     const sunshineSubmit = document.querySelector("#sunshine-password-submit");
     if (sunshineSubmit) {
-      const canSetSunshine = Boolean(state.user)
-        && Boolean(state.lastStatus)
-        && Boolean(state.lastStatus.instanceExists)
-        && !nextBusy;
       sunshineSubmit.disabled = !canSetSunshine;
+      sunshineSubmit.title = canSetSunshine
+        ? "Update Sunshine password"
+        : "Sign in and wait until the VM is reachable";
     }
+
+    const sunshineInput = document.querySelector("#sunshine-password-input");
+    if (sunshineInput) {
+      sunshineInput.disabled = !canSetSunshine;
+    }
+  }
+
+  function canSetSunshinePassword(payload) {
+    if (!state.user || state.isBusy || !payload) {
+      return false;
+    }
+    const hasInstance = Boolean(payload.instanceExists);
+    const hasPermission = !Array.isArray(payload.allowedCommands)
+      || payload.allowedCommands.includes("set-sunshine-password");
+    return hasInstance && hasPermission;
   }
 
   function updateActionAvailability() {
@@ -752,10 +767,7 @@
     const sunshineUserMeta = sunshineCredentials.username
       ? `<p class="access-meta">Username: <code>${escapeHtml(sunshineCredentials.username)}</code></p>`
       : "";
-    const canSetSunshinePassword =
-      Boolean(state.user)
-      && Boolean(payload && payload.instanceExists)
-      && !state.isBusy;
+    const canSetSunshinePasswordForAccess = canSetSunshinePassword(payload);
     const sunshineStatusMeta = renderSunshineStatusMeta(payload);
 
     elements.access.className = "access";
@@ -793,9 +805,9 @@
                   inputmode="text"
                   spellcheck="false"
                   placeholder="Minimum 8 characters"
-                  ${canSetSunshinePassword ? "" : "disabled"}
+                  ${canSetSunshinePasswordForAccess ? "" : "disabled"}
                 >
-            <button id="sunshine-password-submit" type="submit" class="action status" ${canSetSunshinePassword ? "" : "disabled"}>
+            <button id="sunshine-password-submit" type="submit" class="action status" ${canSetSunshinePasswordForAccess ? "" : "disabled"}>
               Update Sunshine password
             </button>
               </div>
