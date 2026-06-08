@@ -1089,6 +1089,36 @@ def allowed_commands(instance: dict[str, Any] | None) -> list[str]:
     return ["status", "delete"]
 
 
+def build_power_action_status(instance: dict[str, Any] | None) -> dict[str, str]:
+    if instance is None:
+        return {
+            "phase": "",
+            "action": "",
+            "token": "",
+            "pending": "",
+            "label": "",
+        }
+
+    phase, action, token = parse_power_action_status(
+        metadata_value(instance, POWER_ACTION_STATUS_METADATA_KEY)
+    )
+    pending = metadata_value(instance, POWER_ACTION_METADATA_KEY).strip()
+    labels = {
+        "requested": "Requested",
+        "running": "Running",
+        "backed-up": "Backed up",
+        "applied": "Applied",
+        "failed": "Failed",
+    }
+    return {
+        "phase": phase,
+        "action": action,
+        "token": token,
+        "pending": pending,
+        "label": labels.get(phase, phase.title() if phase else ""),
+    }
+
+
 def build_status_payload(
     instance: dict[str, Any] | None,
     *,
@@ -1119,6 +1149,7 @@ def build_status_payload(
             },
             "sunshineStatus": build_sunshine_status(None),
             "persistence": build_persistence_status(None),
+            "powerAction": build_power_action_status(None),
         }
         if duckdns_updated is not None:
             payload["duckdnsUpdated"] = duckdns_updated
@@ -1150,6 +1181,7 @@ def build_status_payload(
         "sunshineCredentials": normalize_sunshine_credentials_for_response(credentials),
         "sunshineStatus": build_sunshine_status(instance),
         "persistence": build_persistence_status(instance),
+        "powerAction": build_power_action_status(instance),
     }
     if duckdns_updated is not None:
         payload["duckdnsUpdated"] = duckdns_updated

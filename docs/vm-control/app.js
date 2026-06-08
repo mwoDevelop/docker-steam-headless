@@ -221,7 +221,15 @@
     const sunshineState = String(
       payload && payload.sunshineStatus && payload.sunshineStatus.state ? payload.sunshineStatus.state : "unknown",
     ).toLowerCase();
-    return `Command "${command}" completed. Final VM state: ${vmState}, Sunshine state: ${sunshineState}.`;
+    const powerAction = payload && payload.powerAction ? payload.powerAction : null;
+    const powerActionPhase = String(powerAction && powerAction.phase ? powerAction.phase : "").toLowerCase();
+    const powerActionName = String(powerAction && powerAction.action ? powerAction.action : "");
+    const powerActionSuffix = powerActionPhase === "failed" && powerActionName
+      ? ` Last VM action "${powerActionName}" failed; check backup/delete logs before retrying.`
+      : powerActionPhase === "running" && powerActionName
+        ? ` VM action "${powerActionName}" is still running.`
+        : "";
+    return `Command "${command}" completed. Final VM state: ${vmState}, Sunshine state: ${sunshineState}.${powerActionSuffix}`;
   }
 
   async function waitForSunshineReady() {
@@ -496,7 +504,9 @@
       const autoStop = data.autoStopHours
         ? ` Auto-stop scheduled after ${data.autoStopHours}h.`
         : "";
-      setBanner(`${commandCompletionMessage(command, data)}${suffix}${autoStop}`, "success");
+      const powerActionPhase = String(data.powerAction && data.powerAction.phase ? data.powerAction.phase : "").toLowerCase();
+      const bannerTone = powerActionPhase === "failed" ? "warning" : "success";
+      setBanner(`${commandCompletionMessage(command, data)}${suffix}${autoStop}`, bannerTone);
       pushHistory({
         at: new Date().toISOString(),
         command,
@@ -597,6 +607,9 @@
     }
     if (data.sunshineStatus && data.sunshineStatus.label) {
       parts.push(`Sunshine: ${data.sunshineStatus.label}`);
+    }
+    if (data.powerAction && data.powerAction.phase && data.powerAction.action) {
+      parts.push(`VM action: ${data.powerAction.action} ${data.powerAction.phase}`);
     }
     return parts.join(" · ");
   }
