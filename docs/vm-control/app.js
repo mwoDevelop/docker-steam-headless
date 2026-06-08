@@ -762,15 +762,21 @@
     const sunshineUrl = String(payload.urls && payload.urls.sunshine ? payload.urls.sunshine : "");
     const sunshineOpenUrl = primaryDuckDns && primaryDuckDns.sunshine ? primaryDuckDns.sunshine : sunshineUrl;
     const novncOpenUrl = primaryDuckDns && primaryDuckDns.novnc ? primaryDuckDns.novnc : novncUrl;
+    const sunshineUrlLabel = primaryDuckDns && primaryDuckDns.sunshine === sunshineUrl
+      ? "DNS URL"
+      : "URL";
+    const novncUrlLabel = primaryDuckDns && primaryDuckDns.novnc === novncUrl
+      ? "DNS URL"
+      : "URL";
     const sunshineUrlEscaped = escapeHtml(sunshineUrl);
     const sunshineOpenUrlEscaped = escapeHtml(sunshineOpenUrl);
     const novncUrlEscaped = escapeHtml(novncUrl);
     const novncOpenUrlEscaped = escapeHtml(novncOpenUrl);
     const sunshineCredentials = payload.sunshineCredentials || {};
-    const novncDnsMeta = primaryDuckDns && primaryDuckDns.novnc
+    const novncDnsMeta = primaryDuckDns && primaryDuckDns.novnc && primaryDuckDns.novnc !== novncUrl
       ? `<p class="access-meta">DNS URL: <code>${escapeHtml(primaryDuckDns.novnc)}</code></p>`
       : "";
-    const sunshineDnsMeta = primaryDuckDns && primaryDuckDns.sunshine
+    const sunshineDnsMeta = primaryDuckDns && primaryDuckDns.sunshine && primaryDuckDns.sunshine !== sunshineUrl
       ? `<p class="access-meta">DNS URL: <code>${escapeHtml(primaryDuckDns.sunshine)}</code></p>`
       : "";
     const sunshineUserMeta = sunshineCredentials.username
@@ -794,7 +800,7 @@
           <div class="access-links">
             <a href="${sunshineOpenUrlEscaped}" target="_blank" rel="noreferrer">Open Sunshine UI</a>
           </div>
-          <p class="access-meta">URL: <code>${sunshineUrlEscaped}</code></p>
+          <p class="access-meta">${sunshineUrlLabel}: <code>${sunshineUrlEscaped}</code></p>
           ${sunshineDnsMeta}
           ${sunshineStatusMeta}
           ${sunshineUserMeta}
@@ -835,7 +841,7 @@
           <div class="access-links">
               <a href="${novncOpenUrlEscaped}" target="_blank" rel="noreferrer">Open noVNC</a>
           </div>
-          <p class="access-meta">URL: <code>${novncUrlEscaped}</code></p>
+          <p class="access-meta">${novncUrlLabel}: <code>${novncUrlEscaped}</code></p>
           ${novncDnsMeta}
         </article>
 
