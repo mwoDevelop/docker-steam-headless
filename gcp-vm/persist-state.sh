@@ -202,6 +202,28 @@ record_manual_backup_metadata() {
   set_metadata_values "$updates"
 }
 
+record_manual_restore_metadata() {
+  local backup_id="$1"
+  local updates
+  updates="$(jq -n \
+    --arg home_key "$HOME_BACKUP_AT_KEY" \
+    --arg games_key "$GAMES_ARCHIVE_AT_KEY" \
+    --arg games_status_key "$GAMES_ARCHIVE_STATUS_KEY" \
+    --arg games_detail_key "$GAMES_ARCHIVE_DETAIL_KEY" \
+    --arg restore_status_key "$RESTORE_STATUS_KEY" \
+    --arg restore_detail_key "$RESTORE_DETAIL_KEY" \
+    --arg backup_id "$backup_id" \
+    '{
+      ($home_key): $backup_id,
+      ($games_key): $backup_id,
+      ($games_status_key): "ready",
+      ($games_detail_key): ("Restored manual backup " + $backup_id + "."),
+      ($restore_status_key): "restored",
+      ($restore_detail_key): ("Restored backup " + $backup_id + ".")
+    }')"
+  set_metadata_values "$updates"
+}
+
 clear_restore_mode() {
   local updates
   updates="$(jq -n \
@@ -954,10 +976,7 @@ restore_selected_backup_state() {
 
   bind_data_paths
   restore_stack_perms
-  record_home_backup_time "$backup_id"
-  record_games_archive_time "$backup_id"
-  set_games_archive_status "ready" "Restored manual backup ${backup_id}."
-  set_restore_status "restored" "Restored backup ${backup_id}."
+  record_manual_restore_metadata "$backup_id"
   refresh_backup_list "$root"
 }
 
