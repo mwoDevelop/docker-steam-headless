@@ -13,11 +13,14 @@ PERSIST_SCRIPT=/usr/local/bin/vm-persist-state
 POLL_INTERVAL_SECONDS=${POLL_INTERVAL_SECONDS:-5}
 POWER_ACTION_METADATA_KEY="vm-pending-power-action"
 POWER_ACTION_STATUS_METADATA_KEY="vm-power-action-status"
+SUNSHINE_STATUS_METADATA_KEY="vm-sunshine-status"
+SUNSHINE_STATUS_DETAIL_METADATA_KEY="vm-sunshine-status-detail"
 STEAM_ENV_METADATA_KEY="steam-headless-env"
 ENVF=/opt/container-services/steam-headless/.env
 COMPOSE_DIR=/opt/container-services/steam-headless
 COMPOSE_GCE="${COMPOSE_DIR}/docker-compose.nvidia.privileged.gce.yml"
 COMPOSE_OVERRIDE="${COMPOSE_DIR}/docker-compose.nvidia.privileged.override.yml"
+COMPOSE_IMAGE_OVERRIDE="${COMPOSE_DIR}/docker-compose.image.override.yml"
 
 metadata_get() {
   local key="$1"
@@ -142,6 +145,33 @@ set_power_action_status() {
   set_instance_metadata_values "$updates"
 }
 
+set_sunshine_status() {
+  local state="$1"
+  local detail="${2-}"
+  local updates
+  updates="$(jq -n \
+    --arg state_key "$SUNSHINE_STATUS_METADATA_KEY" \
+    --arg state_value "$state" \
+    --arg detail_key "$SUNSHINE_STATUS_DETAIL_METADATA_KEY" \
+    --arg detail_value "$detail" \
+    '{($state_key): $state_value, ($detail_key): $detail_value}')"
+  set_instance_metadata_values "$updates"
+}
+
+wait_for_local_sunshine_ready() {
+  local http_code
+  for _ in $(seq 1 90); do
+    http_code="$(curl -k --silent --output /dev/null --write-out '%{http_code}' --max-time 5 https://127.0.0.1:47990/ || true)"
+    if [[ "$http_code" == "200" || "$http_code" == "401" || "$http_code" == "403" ]]; then
+      set_sunshine_status "ready" "Sunshine Web UI responded locally with HTTP ${http_code}."
+      return 0
+    fi
+    sleep 2
+  done
+  set_sunshine_status "starting" "Sunshine Web UI did not respond locally yet."
+  return 1
+}
+
 schedule_auto_shutdown() {
   local hours
   local next_at
@@ -228,6 +258,9 @@ docker_compose_files() {
   if [[ -f "$COMPOSE_OVERRIDE" ]]; then
     files+=(-f "$COMPOSE_OVERRIDE")
   fi
+  if [[ -f "$COMPOSE_IMAGE_OVERRIDE" ]]; then
+    files+=(-f "$COMPOSE_IMAGE_OVERRIDE")
+  fi
   printf '%s\n' "${files[@]}"
 }
 
@@ -272,6 +305,7 @@ apply_sunshine_password() {
   fi
 
   apply_sunshine_state_credentials || true
+  wait_for_local_sunshine_ready || true
   set_power_action_status "$action" "$token" "applied" ""
 }
 
@@ -346,6 +380,7 @@ create_manual_backup() {
     set_power_action_status "$action" "$token" "failed" ""
     return 1
   fi
+  wait_for_local_sunshine_ready || true
   set_power_action_status "$action" "$token" "completed" ""
 }
 
@@ -366,6 +401,7 @@ restore_manual_backup() {
     set_power_action_status "$action" "$token" "failed" ""
     return 1
   fi
+  wait_for_local_sunshine_ready || true
   set_power_action_status "$action" "$token" "restored" ""
 }
 

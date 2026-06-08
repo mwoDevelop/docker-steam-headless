@@ -475,6 +475,9 @@ compose_files() {
   if [[ -f "${STACK_DIR}/docker-compose.nvidia.privileged.override.yml" ]]; then
     files+=("${STACK_DIR}/docker-compose.nvidia.privileged.override.yml")
   fi
+  if [[ -f "${STACK_DIR}/docker-compose.image.override.yml" ]]; then
+    files+=("${STACK_DIR}/docker-compose.image.override.yml")
+  fi
   printf '%s\n' "${files[@]}"
 }
 
@@ -734,6 +737,15 @@ Type=Application
 Name=Light Locker
 Hidden=true
 EOF
+
+  cat > "${home_dir}/.config/autostart/xbindkeys.desktop" <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=xbindkeys
+Hidden=true
+EOF
+
+  chown -R "${STEAM_USER_NAME}:${STEAM_USER_NAME}" "${home_dir}/.cache/log" "${home_dir}/.config/autostart"
 }
 
 replace_directory_contents_from_stage() {

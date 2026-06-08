@@ -922,12 +922,6 @@
           </form>
         </article>
 
-        <article class="access-card">
-          <h3>Steam Link / Steam Client</h3>
-          <p>After Steam inside the VM signs in, the host should appear in Steam Link or Steam Remote Play. First-time setup is usually easiest through noVNC.</p>
-          <p class="access-meta">Target: <code>${escapeHtml(target)}</code></p>
-        </article>
-
         <article class="access-card accent">
           <h3>Browser Desktop</h3>
           <p>Best for first login, Steam setup, and recovery when streaming clients are not paired yet.</p>

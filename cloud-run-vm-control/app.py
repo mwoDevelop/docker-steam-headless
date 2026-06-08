@@ -86,7 +86,7 @@ CONFIG = {
     "sunshine_port": os.environ.get("VM_SUNSHINE_PORT", "47990"),
 }
 
-SUNSHINE_HEALTHCHECK_TIMEOUT_SECONDS: Final = 2
+SUNSHINE_HEALTHCHECK_TIMEOUT_SECONDS: Final = 8
 
 AUTO_STOP_METADATA_KEY = "vm-auto-shutdown-hours"
 STEAM_ENV_METADATA_KEY = "steam-headless-env"

@@ -476,6 +476,7 @@ cd /opt/container-services/steam-headless
 COMPOSE_BASE=/opt/container-services/steam-headless/docker-compose.nvidia.privileged.yml
 COMPOSE_GCE=/opt/container-services/steam-headless/docker-compose.nvidia.privileged.gce.yml
 COMPOSE_OVERRIDE=/opt/container-services/steam-headless/docker-compose.nvidia.privileged.override.yml
+COMPOSE_IMAGE_OVERRIDE=/opt/container-services/steam-headless/docker-compose.image.override.yml
 curl -fsSL \
   https://raw.githubusercontent.com/Steam-Headless/docker-steam-headless/master/docs/compose-files/docker-compose.nvidia.privileged.yml \
   -o "$COMPOSE_BASE"
@@ -531,6 +532,7 @@ ensure_env_key_missing PORT_NOVNC_WEB "8083"
 ensure_env_key_missing NEKO_NAT1TO1 ""
 ensure_env_key_missing ENABLE_STEAM "true"
 ensure_env_key_missing STEAM_ARGS "-silent"
+ensure_env_key_missing STEAM_HEADLESS_IMAGE "josh5/steam-headless:debian-dev-frontend-revamp"
 ensure_env_key_missing ENABLE_SUNSHINE "true"
 ensure_env_key_missing SUNSHINE_USER "admin"
 ensure_env_key_missing SUNSHINE_PASS "change-me"
@@ -546,6 +548,18 @@ ensure_env_key_missing NVIDIA_DRIVER_VERSION ""
 ensure_sunshine_credentials
 chmod 600 "$ENVF"
 sync_env_metadata
+
+STEAM_HEADLESS_IMAGE_VALUE="$(awk -F= '/^STEAM_HEADLESS_IMAGE=/{print substr($0,index($0,"=")+1)}' "$ENVF" | tail -n1)"
+STEAM_HEADLESS_IMAGE_VALUE="${STEAM_HEADLESS_IMAGE_VALUE:-josh5/steam-headless:debian-dev-frontend-revamp}"
+cat > "$COMPOSE_IMAGE_OVERRIDE" <<EOF
+---
+version: "3.8"
+
+services:
+  steam-headless:
+    image: ${STEAM_HEADLESS_IMAGE_VALUE}
+EOF
+COMPOSE_FILES+=(-f "$COMPOSE_IMAGE_OVERRIDE")
 
 if [ -x /usr/local/bin/vm-persist-state ]; then
   if ! /usr/local/bin/vm-persist-state restore-create; then
