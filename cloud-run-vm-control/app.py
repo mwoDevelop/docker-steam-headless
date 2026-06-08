@@ -1541,12 +1541,23 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
             action="restore-backup",
             status_detail="Restoring selected backup. Sunshine is temporarily stopped.",
         )
-        final_instance = wait_for_power_action_phase(
-            action="restore-backup",
-            token=token,
-            target_phase="restored",
-            timeout_seconds=3600,
-        )
+        try:
+            final_instance = wait_for_power_action_phase(
+                action="restore-backup",
+                token=token,
+                target_phase="restored",
+                timeout_seconds=3600,
+            )
+        except ApiError:
+            failed_instance = get_instance()
+            set_instance_metadata_values(
+                failed_instance,
+                {
+                    RESTORE_STATUS_METADATA_KEY: "failed",
+                    RESTORE_DETAIL_METADATA_KEY: f"Restore backup {backup_id} failed.",
+                },
+            )
+            raise
         final_instance = wait_for_external_ip(timeout_seconds=180)
         return build_status_payload(final_instance, user=user, command=command)
 
