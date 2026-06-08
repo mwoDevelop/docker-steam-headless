@@ -931,12 +931,22 @@ def build_sunshine_status(instance: dict[str, Any] | None) -> dict[str, str]:
 
     state = metadata_value(instance, SUNSHINE_STATUS_METADATA_KEY).strip().lower() or "starting"
     detail = metadata_value(instance, SUNSHINE_STATUS_DETAIL_METADATA_KEY).strip()
+    phase, power_action, _ = parse_power_action_status(
+        metadata_value(instance, POWER_ACTION_STATUS_METADATA_KEY)
+    )
+    if power_action in {"delete", "stop"} and phase in {"requested", "running", "backed-up"}:
+        return {
+            "state": "stopping",
+            "label": "Stopping",
+            "detail": detail or "Steam Headless and Sunshine are stopping for the requested VM action.",
+        }
     if is_sunshine_started(instance, state, detail):
         state = "ready"
         detail = "Sunshine Web UI is available."
     labels = {
         "ready": "Ready",
         "starting": "Starting",
+        "stopping": "Stopping",
         "error": "Error",
     }
     return {
