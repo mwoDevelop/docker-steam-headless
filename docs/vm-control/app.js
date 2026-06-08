@@ -752,8 +752,14 @@
     const displayHost = primaryDuckDns && primaryDuckDns.domain
       ? escapeHtml(primaryDuckDns.domain)
       : ip;
-    const novncUrl = escapeHtml(payload.urls && payload.urls.novnc ? payload.urls.novnc : "");
-    const sunshineUrl = escapeHtml(payload.urls && payload.urls.sunshine ? payload.urls.sunshine : "");
+    const novncUrl = String(payload.urls && payload.urls.novnc ? payload.urls.novnc : "");
+    const sunshineUrl = String(payload.urls && payload.urls.sunshine ? payload.urls.sunshine : "");
+    const sunshineOpenUrl = primaryDuckDns && primaryDuckDns.sunshine ? primaryDuckDns.sunshine : sunshineUrl;
+    const novncOpenUrl = primaryDuckDns && primaryDuckDns.novnc ? primaryDuckDns.novnc : novncUrl;
+    const sunshineUrlEscaped = escapeHtml(sunshineUrl);
+    const sunshineOpenUrlEscaped = escapeHtml(sunshineOpenUrl);
+    const novncUrlEscaped = escapeHtml(novncUrl);
+    const novncOpenUrlEscaped = escapeHtml(novncOpenUrl);
     const sunshineCredentials = payload.sunshineCredentials || {};
     const novncDnsMeta = primaryDuckDns && primaryDuckDns.novnc
       ? `<p class="access-meta">DNS URL: <code>${escapeHtml(primaryDuckDns.novnc)}</code></p>`
@@ -784,9 +790,9 @@
           <h3>Sunshine Web UI</h3>
           <p>Use this to manage Sunshine, pair clients, and inspect streaming settings. Expect a browser certificate warning on first open.</p>
           <div class="access-links">
-            <a href="${sunshineUrl}" target="_blank" rel="noreferrer">Open Sunshine UI</a>
+            <a href="${sunshineOpenUrlEscaped}" target="_blank" rel="noreferrer">Open Sunshine UI</a>
           </div>
-          <p class="access-meta">URL: <code>${sunshineUrl}</code></p>
+          <p class="access-meta">URL: <code>${sunshineUrlEscaped}</code></p>
           ${sunshineDnsMeta}
           ${sunshineStatusMeta}
           ${sunshineUserMeta}
@@ -826,9 +832,9 @@
           <h3>Browser Desktop</h3>
           <p>Best for first login, Steam setup, and recovery when streaming clients are not paired yet.</p>
           <div class="access-links">
-            <a href="${novncUrl}" target="_blank" rel="noreferrer">Open noVNC</a>
+              <a href="${novncOpenUrlEscaped}" target="_blank" rel="noreferrer">Open noVNC</a>
           </div>
-          <p class="access-meta">URL: <code>${novncUrl}</code></p>
+          <p class="access-meta">URL: <code>${novncUrlEscaped}</code></p>
           ${novncDnsMeta}
         </article>
 
@@ -839,7 +845,7 @@
         The VM can report <code>RUNNING</code> before the desktop and Sunshine finish booting. On a cold start, give noVNC and Sunshine up to a minute or two to become reachable. Restart, Stop, and Delete stay disabled until the VM reports <code>Backup ready</code>.
       </p>
     `;
-    bindSunshinePasswordForm(canSetSunshinePassword);
+    bindSunshinePasswordForm(canSetSunshinePasswordForAccess);
   }
 
   function escapeToken(value) {
