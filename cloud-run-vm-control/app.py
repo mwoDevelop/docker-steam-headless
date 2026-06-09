@@ -66,6 +66,9 @@ CONFIG = {
     "vm_network": os.environ.get("VM_NETWORK", "default"),
     "vm_subnet": os.environ.get("VM_SUBNET", ""),
     "vm_tags": csv_env("VM_TAGS") or csv_env("TAGS"),
+    "firewall_source_ranges": csv_env("FIREWALL_SOURCE_RANGES") or csv_env("ALLOW_CIDR") or ["0.0.0.0/0"],
+    "firewall_rule_web": os.environ.get("FIREWALL_RULE_WEB", "allow-steam-headless-web"),
+    "firewall_rule_sunshine": os.environ.get("FIREWALL_RULE_SUNSHINE", "allow-sunshine"),
     "vm_service_account_email": os.environ.get("VM_SERVICE_ACCOUNT_EMAIL", ""),
     "gdrive_folder_id": os.environ.get("GDRIVE_FOLDER_ID", ""),
     "gdrive_state_root": os.environ.get("GDRIVE_STATE_ROOT", "steam-vm-state"),
@@ -113,6 +116,11 @@ SUNSHINE_PASSWORD_MAX_LENGTH = 128
 MIN_AUTO_STOP_HOURS = 1
 MAX_AUTO_STOP_HOURS = 24
 STATUS_NOT_FOUND = "NOT_FOUND"
+FIREWALL_WEB_ALLOWED: Final = [{"IPProtocol": "tcp", "ports": ["22", "8083"]}]
+FIREWALL_SUNSHINE_ALLOWED: Final = [
+    {"IPProtocol": "tcp", "ports": ["47984", "47989", "47990", "48010", "27036-27037"]},
+    {"IPProtocol": "udp", "ports": ["47998", "47999", "48000", "48002", "48010", "27031-27036"]},
+]
 
 
 def require_env(name: str) -> str:
@@ -142,6 +150,15 @@ def instances_collection_url() -> str:
     project = require_env("project")
     zone = require_env("zone")
     return f"https://compute.googleapis.com/compute/v1/projects/{project}/zones/{zone}/instances"
+
+
+def firewalls_collection_url() -> str:
+    project = require_env("project")
+    return f"https://compute.googleapis.com/compute/v1/projects/{project}/global/firewalls"
+
+
+def firewall_url(name: str) -> str:
+    return f"{firewalls_collection_url()}/{name}"
 
 
 def zone_region(zone: str) -> str:
@@ -400,6 +417,28 @@ def wait_for_zone_operation(operation: dict[str, Any], timeout_seconds: int = 90
     url = (
         "https://compute.googleapis.com/compute/v1/"
         f"projects/{CONFIG['project']}/zones/{CONFIG['zone']}/operations/{operation_name}"
+    )
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        data = compute_request("GET", url)
+        if data is None:
+            raise ApiError(f"Operation {operation_name} was not found.", 404)
+        if str(data.get("status", "")).upper() == "DONE":
+            if data.get("error"):
+                raise ApiError(str(data["error"]), 502)
+            return
+        time.sleep(2)
+    raise ApiError(f"Timed out waiting for operation {operation_name}.", 504)
+
+
+def wait_for_global_operation(operation: dict[str, Any], timeout_seconds: int = 90) -> None:
+    operation_name = str(operation.get("name", "") or "")
+    if not operation_name:
+        return
+
+    url = (
+        "https://compute.googleapis.com/compute/v1/"
+        f"projects/{CONFIG['project']}/global/operations/{operation_name}"
     )
     deadline = time.time() + timeout_seconds
     while time.time() < deadline:
@@ -827,6 +866,34 @@ def build_instance_metadata_items(
     if auto_stop_hours is not None:
         items.append({"key": AUTO_STOP_METADATA_KEY, "value": str(auto_stop_hours)})
     return items
+
+
+def firewall_rule_body(name: str, allowed: list[dict[str, Any]]) -> dict[str, Any]:
+    tags = CONFIG["vm_tags"] or ["steam-headless"]
+    return {
+        "name": name,
+        "network": network_path(),
+        "direction": "INGRESS",
+        "allowed": allowed,
+        "sourceRanges": CONFIG["firewall_source_ranges"],
+        "targetTags": tags,
+    }
+
+
+def ensure_firewall_rule(name: str, allowed: list[dict[str, Any]]) -> None:
+    body = firewall_rule_body(name, allowed)
+    existing = compute_request("GET", firewall_url(name), allow_404=True)
+    if existing is None:
+        operation = compute_request("POST", firewalls_collection_url(), json=body)
+    else:
+        operation = compute_request("PATCH", firewall_url(name), json=body)
+    if isinstance(operation, dict):
+        wait_for_global_operation(operation, timeout_seconds=120)
+
+
+def ensure_firewall_rules() -> None:
+    ensure_firewall_rule(CONFIG["firewall_rule_web"], FIREWALL_WEB_ALLOWED)
+    ensure_firewall_rule(CONFIG["firewall_rule_sunshine"], FIREWALL_SUNSHINE_ALLOWED)
 
 
 def build_instance_create_request(
@@ -1349,6 +1416,7 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
             "username": SUNSHINE_USERNAME,
             "password": generate_sunshine_password(),
         }
+        ensure_firewall_rules()
         operation = compute_request(
             "POST",
             instances_collection_url(),
