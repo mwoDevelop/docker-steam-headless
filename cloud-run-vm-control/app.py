@@ -1060,6 +1060,24 @@ def build_sunshine_status(instance: dict[str, Any] | None) -> dict[str, str]:
             "label": "Restore in progress",
             "detail": detail or "Steam Headless and Sunshine are temporarily stopped while the selected backup is restored.",
         }
+    if power_action == "restart" and phase in {"requested", "running", "rebooting"}:
+        return {
+            "state": "starting",
+            "label": "Restarting",
+            "detail": detail or "VM is restarting. Waiting for Sunshine Web UI.",
+        }
+    if power_action == "apply-sunshine-password" and phase in {"requested", "running"}:
+        return {
+            "state": "starting",
+            "label": "Applying password",
+            "detail": detail or "Applying Sunshine password change.",
+        }
+    if power_action in {"install-app", "uninstall-app"} and phase in {"requested", "running"}:
+        return {
+            "state": "starting",
+            "label": "Updating application",
+            "detail": detail or "Updating Sunshine application list.",
+        }
     if power_action in {"delete", "stop"} and phase in {"requested", "running", "backed-up", "stopping"}:
         return {
             "state": "stopping",

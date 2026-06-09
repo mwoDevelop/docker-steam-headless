@@ -9,9 +9,10 @@ On the `steam-headless` container this was caused by incompatible legacy librari
 ```text
 ./Worms W.M.Dx64: error while loading shared libraries: libidn.so.11: cannot open shared object file: No such file or directory
 ./Worms W.M.Dx64: .../lib/libstdc++.so.6: version `GLIBCXX_3.4.30' not found
+./Worms W.M.Dx64: error while loading shared libraries: libwavpack.so.1: cannot open shared object file: No such file or directory
 ```
 
-The container runs Debian 12, which provides `libidn.so.12` and a newer system `libstdc++`. The game expects the older `libidn.so.11`, then loads its own old `libstdc++.so.6`, which conflicts with current system libraries.
+The container runs Debian 12, which provides `libidn.so.12` and a newer system `libstdc++`. The game expects the older `libidn.so.11`, then loads its own old `libstdc++.so.6`, which conflicts with current system libraries. Steam's runtime can also fail to expose `libwavpack.so.1` to the game, even when the library is available in the container.
 
 ## Fix on a running VM
 
@@ -34,6 +35,12 @@ sudo docker exec "$CID" bash -lc "
   if [ -f lib/libstdc++.so.6 ]; then
     mv lib/libstdc++.so.6 lib/libstdc++.so.6.bundled-disabled
   fi
+
+  if [ ! -e lib/libwavpack.so.1 ]; then
+    cp -L /lib/x86_64-linux-gnu/libwavpack.so.1 lib/libwavpack.so.1
+    chown default:default lib/libwavpack.so.1 || true
+    chmod 0755 lib/libwavpack.so.1
+  fi
 "
 '
 ```
@@ -52,7 +59,7 @@ gcloud compute ssh steam-gpu \
 CID=$(sudo docker ps -qf name=steam-headless | head -n1)
 sudo docker exec "$CID" bash -lc "
   cd /mnt/games/GameLibrary/Steam/steamapps/common/WormsWMD
-  ldd \"Worms W.M.Dx64\" 2>&1 | grep -E \"libidn|GLIBCXX\" || true
+  ldd \"Worms W.M.Dx64\" 2>&1 | grep -E \"libidn|libwavpack|GLIBCXX\" || true
 "
 '
 ```
@@ -67,7 +74,7 @@ gcloud compute ssh steam-gpu \
 CID=$(sudo docker ps -qf name=steam-headless | head -n1)
 sudo docker exec "$CID" bash -lc "
   cd /mnt/games/GameLibrary/Steam/steamapps/common/WormsWMD
-  ls -l lib/libidn.so.11 lib/libstdc++.so.6.bundled-disabled
+  ls -l lib/libidn.so.11 lib/libstdc++.so.6.bundled-disabled lib/libwavpack.so.1
 "
 '
 ```
@@ -91,7 +98,8 @@ sudo docker exec "$CID" bash -lc "
   if [ -f lib/libstdc++.so.6.bundled-disabled ] && [ ! -e lib/libstdc++.so.6 ]; then
     mv lib/libstdc++.so.6.bundled-disabled lib/libstdc++.so.6
   fi
+
+  rm -f lib/libwavpack.so.1
 "
 '
 ```
-

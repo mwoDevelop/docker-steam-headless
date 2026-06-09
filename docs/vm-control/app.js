@@ -9,6 +9,63 @@
   };
   const SUNSHINE_POLL_INTERVAL_MS = 3000;
   const SUNSHINE_POLL_TIMEOUT_MS = 180000;
+  const COMMAND_STATUS_POLL_TIMEOUT_MS = 300000;
+  const COMMAND_SUNSHINE_TRANSITIONS = {
+    create: {
+      state: "starting",
+      label: "Creating VM",
+      detail: "VM creation requested. Waiting for Sunshine Web UI.",
+    },
+    start: {
+      state: "starting",
+      label: "Starting",
+      detail: "VM start requested. Waiting for Sunshine Web UI.",
+    },
+    restart: {
+      state: "starting",
+      label: "Restarting",
+      detail: "VM restart requested. Waiting for Sunshine Web UI.",
+    },
+    stop: {
+      state: "stopping",
+      label: "Stopping",
+      detail: "VM stop requested. Sunshine is stopping.",
+    },
+    delete: {
+      state: "stopping",
+      label: "Stopping",
+      detail: "VM delete requested. Sunshine is stopping.",
+    },
+    "create-backup": {
+      state: "backup",
+      label: "Backup in progress",
+      detail: "Steam Headless and Sunshine can be temporarily stopped while the manual backup runs.",
+    },
+    "restore-backup": {
+      state: "restore",
+      label: "Restore in progress",
+      detail: "Steam Headless and Sunshine can be temporarily stopped while the selected backup is restored.",
+    },
+    "install-app": {
+      state: "starting",
+      label: "Updating application",
+      detail: "Updating Sunshine application list.",
+    },
+    "uninstall-app": {
+      state: "starting",
+      label: "Updating application",
+      detail: "Updating Sunshine application list.",
+    },
+  };
+  const COMMANDS_TO_POLL_AFTER_RESPONSE = new Set([
+    "create",
+    "start",
+    "restart",
+    "create-backup",
+    "restore-backup",
+    "install-app",
+    "uninstall-app",
+  ]);
 
   const elements = {
     backendUrl: document.querySelector("#backend-url"),
@@ -352,6 +409,69 @@
     updateActionAvailability();
   }
 
+  function renderStatusPayload(payload) {
+    state.lastStatus = payload;
+    renderTargetSummary();
+    renderBackupOptions(payload);
+    renderApplicationOptions(payload);
+    renderAccess(payload);
+    updateActionAvailability();
+  }
+
+  function withSunshineStatus(payload, sunshineStatus) {
+    if (!payload) {
+      return payload;
+    }
+    return {
+      ...payload,
+      sunshineStatus: {
+        ...(payload.sunshineStatus || {}),
+        ...sunshineStatus,
+      },
+    };
+  }
+
+  function applyCommandTransition(command) {
+    const sunshineStatus = COMMAND_SUNSHINE_TRANSITIONS[command];
+    if (!sunshineStatus || !state.lastStatus) {
+      return;
+    }
+    renderStatusPayload(withSunshineStatus(state.lastStatus, sunshineStatus));
+  }
+
+  function isTransitionalStatus(payload) {
+    if (!payload) {
+      return false;
+    }
+
+    const powerAction = payload.powerAction || {};
+    const powerActionPhase = String(powerAction.phase || "").trim().toLowerCase();
+    if (["requested", "running", "rebooting", "stopping", "backed-up"].includes(powerActionPhase)) {
+      return true;
+    }
+
+    const sunshineState = String(payload.sunshineStatus && payload.sunshineStatus.state || "")
+      .trim()
+      .toLowerCase();
+    return ["starting", "stopping", "backup", "restore"].includes(sunshineState);
+  }
+
+  async function waitForStatusSettled(command, initialPayload) {
+    if (!COMMANDS_TO_POLL_AFTER_RESPONSE.has(command)) {
+      return initialPayload;
+    }
+
+    const deadline = Date.now() + COMMAND_STATUS_POLL_TIMEOUT_MS;
+    let payload = initialPayload;
+
+    while (Date.now() < deadline && isTransitionalStatus(payload)) {
+      await wait(SUNSHINE_POLL_INTERVAL_MS);
+      payload = await refreshStatus({ silent: true });
+    }
+
+    return payload;
+  }
+
   async function waitForSunshineReady() {
     const deadline = Date.now() + SUNSHINE_POLL_TIMEOUT_MS;
     let payload = state.lastStatus;
@@ -636,6 +756,7 @@
       ? ` for ${selectedApplicationLabel()}`
       : "";
     setBanner(`Running "${command}"${appLabel} on the VM...`, "warning");
+    applyCommandTransition(command);
 
     try {
       const body = { command };
@@ -657,15 +778,16 @@
         body.autoStopHours = autoStopHours;
       }
 
-      const data = await fetchApi("/api/command", {
+      let data = await fetchApi("/api/command", {
         method: "POST",
         body: JSON.stringify(body),
       });
-      state.lastStatus = data;
-      renderTargetSummary();
-      renderBackupOptions(data);
-      renderApplicationOptions(data);
-      renderAccess(data);
+      renderStatusPayload(data);
+      if (COMMANDS_TO_POLL_AFTER_RESPONSE.has(command) && isTransitionalStatus(data)) {
+        setBanner(`Command "${command}" accepted. Waiting for current VM and Sunshine status...`, "warning");
+        data = await waitForStatusSettled(command, data);
+        renderStatusPayload(data);
+      }
 
       const suffix = data.duckdnsUpdated
         ? " DuckDNS refreshed."
@@ -859,12 +981,7 @@
 
     try {
       const data = await fetchApi("/api/status", { method: "GET" });
-      state.lastStatus = data;
-      renderTargetSummary();
-      renderBackupOptions(data);
-      renderApplicationOptions(data);
-      renderAccess(data);
-      updateActionAvailability();
+      renderStatusPayload(data);
       if (!silent) {
         setBanner(`VM status loaded. Current state: ${data.status}.`, "success");
       }
