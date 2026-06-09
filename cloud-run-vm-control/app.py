@@ -1514,7 +1514,6 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
         )
         current_instance = get_instance()
         if current_status == "RUNNING":
-            previous_start_timestamp = str(current_instance.get("lastStartTimestamp", "") or "")
             current_instance, token = request_live_power_action(
                 current_instance,
                 action="restart",
@@ -1526,7 +1525,6 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
                 target_phase="rebooting",
                 timeout_seconds=120,
             )
-            poll_instance_restarted(previous_start_timestamp, timeout_seconds=600)
             final_instance = wait_for_external_ip(timeout_seconds=180)
             final_instance = wait_for_sunshine_status("ready", timeout_seconds=240)
             set_instance_metadata_values(
