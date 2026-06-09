@@ -556,6 +556,12 @@ code,
   background: rgba(242, 198, 109, 0.08);
 }
 
+.service-status.backup,
+.service-status.restore {
+  border-color: rgba(242, 198, 109, 0.28);
+  background: rgba(242, 198, 109, 0.08);
+}
+
 .service-status.error {
   border-color: rgba(255, 131, 105, 0.28);
   background: rgba(255, 131, 105, 0.08);

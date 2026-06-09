@@ -1048,7 +1048,19 @@ def build_sunshine_status(instance: dict[str, Any] | None) -> dict[str, str]:
     phase, power_action, _ = parse_power_action_status(
         metadata_value(instance, POWER_ACTION_STATUS_METADATA_KEY)
     )
-    if power_action in {"delete", "stop", "create-backup", "restore-backup"} and phase in {"requested", "running", "backed-up", "stopping"}:
+    if power_action == "create-backup" and phase in {"requested", "running"}:
+        return {
+            "state": "backup",
+            "label": "Backup in progress",
+            "detail": detail or "Steam Headless and Sunshine are temporarily stopped while the manual backup is running.",
+        }
+    if power_action == "restore-backup" and phase in {"requested", "running"}:
+        return {
+            "state": "restore",
+            "label": "Restore in progress",
+            "detail": detail or "Steam Headless and Sunshine are temporarily stopped while the selected backup is restored.",
+        }
+    if power_action in {"delete", "stop"} and phase in {"requested", "running", "backed-up", "stopping"}:
         return {
             "state": "stopping",
             "label": "Stopping",
@@ -1061,6 +1073,8 @@ def build_sunshine_status(instance: dict[str, Any] | None) -> dict[str, str]:
         "ready": "Ready",
         "starting": "Starting",
         "stopping": "Stopping",
+        "backup": "Backup in progress",
+        "restore": "Restore in progress",
         "error": "Error",
     }
     return {

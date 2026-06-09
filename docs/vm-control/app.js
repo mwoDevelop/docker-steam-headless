@@ -244,7 +244,11 @@
   function commandCompletionMessage(command, payload) {
     const vmState = payload && payload.instanceExists === false ? "deleted" : String(payload && payload.status ? payload.status : "UNKNOWN");
     const sunshineState = String(
-      payload && payload.sunshineStatus && payload.sunshineStatus.state ? payload.sunshineStatus.state : "unknown",
+      payload && payload.sunshineStatus && payload.sunshineStatus.label
+        ? payload.sunshineStatus.label
+        : payload && payload.sunshineStatus && payload.sunshineStatus.state
+          ? payload.sunshineStatus.state
+          : "unknown",
     ).toLowerCase();
     const powerAction = payload && payload.powerAction ? payload.powerAction : null;
     const powerActionPhase = String(powerAction && powerAction.phase ? powerAction.phase : "").toLowerCase();
