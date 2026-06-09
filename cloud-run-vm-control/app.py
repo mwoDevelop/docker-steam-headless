@@ -1512,19 +1512,21 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
         )
         current_instance = get_instance()
         if current_status == "RUNNING":
-            require_live_backup_ready(current_instance, command)
-            previous_backup_ready_at = metadata_value(current_instance, BACKUP_READY_AT_METADATA_KEY).strip()
+            previous_start_timestamp = str(current_instance.get("lastStartTimestamp", "") or "")
             current_instance, token = request_live_power_action(
                 current_instance,
                 action="restart",
-                status_detail="VM restarting after a live backup.",
+                status_detail="VM restarting without creating a backup.",
             )
-            poll_power_action_backup(action="restart", token=token)
-            current_instance = poll_backup_ready(
-                timeout_seconds=900,
-                previous_timestamp=previous_backup_ready_at,
+            wait_for_power_action_phase(
+                action="restart",
+                token=token,
+                target_phase="rebooting",
+                timeout_seconds=120,
             )
+            poll_instance_restarted(previous_start_timestamp, timeout_seconds=600)
             final_instance = wait_for_external_ip(timeout_seconds=180)
+            final_instance = wait_for_sunshine_status("ready", timeout_seconds=240)
             updated = update_duckdns(extract_external_ip(final_instance))
             return build_status_payload(
                 final_instance,

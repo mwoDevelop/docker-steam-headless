@@ -334,6 +334,17 @@ perform_action() {
     return 0
   fi
 
+  if [[ "$action" == "restart" ]]; then
+    touch "$BACKUP_COMPLETE_MARKER"
+    set_power_action_status "$action" "$token" "rebooting" ""
+    set_sunshine_status "starting" "VM rebooting. Waiting for Sunshine Web UI."
+    log "Restarting without creating a backup"
+    stop_stack
+    schedule_auto_shutdown "restart"
+    /sbin/reboot
+    return 0
+  fi
+
   if ! run_backup "$backup_mode"; then
     "$PERSIST_SCRIPT" start-stack >/dev/null 2>&1 || true
     set_power_action_status "$action" "$token" "failed" ""
@@ -347,11 +358,6 @@ perform_action() {
     stop|delete)
       log "Powering off after backup"
       /sbin/poweroff
-      ;;
-    restart)
-      log "Rebooting after backup"
-      schedule_auto_shutdown "restart"
-      /sbin/reboot
       ;;
     auto-stop)
       log "Auto-stop powering off after backup"
