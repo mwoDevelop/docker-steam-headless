@@ -455,6 +455,20 @@ restore_manual_backup() {
   set_power_action_status "$action" "$token" "restored" ""
 }
 
+remove_manual_backup() {
+  local action="$1"
+  local token="$2"
+
+  log "Removing manual backup token=${token}"
+  set_power_action_status "$action" "$token" "running"
+  if ! "$PERSIST_SCRIPT" "remove-backup"; then
+    set_power_action_status "$action" "$token" "failed" ""
+    return 1
+  fi
+  wait_for_local_sunshine_ready || true
+  set_power_action_status "$action" "$token" "removed" ""
+}
+
 run_application_action() {
   local action="$1"
   local token="$2"
@@ -615,6 +629,9 @@ run_daemon() {
           ;;
         restore-backup)
           restore_manual_backup "$action" "$token" || true
+          ;;
+        remove-backup)
+          remove_manual_backup "$action" "$token" || true
           ;;
         apply-sunshine-password)
           apply_sunshine_password "$action" "$token" || true

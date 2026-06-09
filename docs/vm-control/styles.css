@@ -275,22 +275,33 @@ select {
 .control-row {
   display: grid;
   gap: 12px;
-  grid-template-columns: repeat(8, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
 }
 
 .start-options,
 .backup-options {
   display: grid;
   gap: 12px;
-  grid-template-columns: minmax(220px, 320px) minmax(0, 1fr);
+  grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
   align-items: end;
   margin-top: 14px;
   padding-top: 14px;
   border-top: 1px solid var(--line);
 }
 
+.inline-action-group {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+}
+
+.app-action-group {
+  grid-template-columns: repeat(2, minmax(104px, 1fr));
+}
+
 .start-options p,
 .backup-options p {
+  grid-column: 1 / -1;
   margin: 0 0 4px;
   color: var(--muted);
   line-height: 1.5;
@@ -318,6 +329,7 @@ button:disabled {
 .action {
   min-height: 58px;
   color: #051015;
+  white-space: normal;
 }
 
 .action.create {

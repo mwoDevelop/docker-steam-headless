@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;700&display=swap"
       rel="stylesheet"
     >
-    <link rel="stylesheet" href="./styles.css?v=applications-20260609">
+    <link rel="stylesheet" href="./styles.css?v=backup-remove-20260609">
     <script src="https://accounts.google.com/gsi/client" async defer></script>
   </head>
   <body>
@@ -95,8 +95,6 @@
           <button class="action restart" type="button" data-command="restart">Restart</button>
           <button class="action stop" type="button" data-command="stop">Stop</button>
           <button class="action status" type="button" data-command="status">Status</button>
-          <button class="action backup" type="button" data-command="create-backup">Create Backup</button>
-          <button class="action restore" type="button" data-command="restore-backup">Restore Backup</button>
           <button class="action delete" type="button" data-command="delete">Delete</button>
         </div>
 
@@ -125,6 +123,11 @@
               <option value="">No backups loaded</option>
             </select>
           </label>
+          <div class="inline-action-group">
+            <button class="action backup" type="button" data-command="create-backup">Create Backup</button>
+            <button class="action restore" type="button" data-command="restore-backup">Restore Backup</button>
+            <button class="action delete" type="button" data-command="remove-backup">Remove Backup</button>
+          </div>
           <p id="backup-options-status">Create a manual backup, then select it here before running Restore Backup.</p>
         </div>
 
@@ -135,9 +138,9 @@
               <option value="">No applications loaded</option>
             </select>
           </label>
-          <div class="control-row">
-            <button class="action status" type="button" data-command="install-app">Install Application</button>
-            <button class="action delete" type="button" data-command="uninstall-app">Uninstall Application</button>
+          <div class="inline-action-group app-action-group">
+            <button class="action status" type="button" data-command="install-app">Install</button>
+            <button class="action delete" type="button" data-command="uninstall-app">Uninstall</button>
           </div>
           <p id="application-options-status">Connect the backend to load supported applications.</p>
         </div>
@@ -180,6 +183,6 @@
       </section>
     </main>
 
-    <script src="./app.js?v=applications-20260609"></script>
+    <script src="./app.js?v=backup-remove-20260609"></script>
   </body>
 </html>

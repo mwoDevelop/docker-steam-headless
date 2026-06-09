@@ -1041,6 +1041,24 @@ restore_selected_backup_state() {
   refresh_backup_list "$root"
 }
 
+remove_selected_backup_state() {
+  local root backup_id backup_remote
+  root="$(remote_root)"
+  backup_id="${1:-$(metadata_get "$SELECTED_BACKUP_KEY")}"
+  if [[ -z "$backup_id" || "$backup_id" == *"/"* || "$backup_id" == *".."* ]]; then
+    log "Selected backup id is invalid."
+    return 1
+  fi
+
+  ensure_tools
+  ensure_rclone_remote || return 1
+  backup_remote="${REMOTE_NAME}:${root}/backups/${backup_id}"
+  log "Removing manual backup ${backup_id}"
+  run_rclone_large_resilient purge "$backup_remote"
+  refresh_backup_list "$root"
+  log "Removed manual backup ${backup_id}"
+}
+
 latest_games_archive_remote_path() {
   local root="$1"
   local latest_entry
@@ -1260,6 +1278,9 @@ case "$cmd" in
   restore-backup)
     restore_selected_backup_state "${2:-}"
     ;;
+  remove-backup)
+    remove_selected_backup_state "${2:-}"
+    ;;
   start-stack)
     start_stack
     ;;
@@ -1270,7 +1291,7 @@ case "$cmd" in
     status_state
     ;;
   *)
-    echo "Usage: $0 {prepare-disk|bind-mounts|backup|backup-runtime|backup-delete|backup-manual|restore|restore-create|restore-backup|start-stack|clear-restore-mode|status}" >&2
+    echo "Usage: $0 {prepare-disk|bind-mounts|backup|backup-runtime|backup-delete|backup-manual|restore|restore-create|restore-backup|remove-backup|start-stack|clear-restore-mode|status}" >&2
     exit 1
     ;;
 esac

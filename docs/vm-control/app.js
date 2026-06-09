@@ -125,7 +125,8 @@
     elements.autoStopHours.disabled = state.isBusy || !state.user || (!allowed.has("start") && !allowed.has("create"));
     if (elements.backupSelect) {
       const hasBackups = getAvailableBackups(state.lastStatus).length > 0;
-      elements.backupSelect.disabled = state.isBusy || !state.user || !allowed.has("restore-backup") || !hasBackups;
+      const canUseBackupSelection = allowed.has("restore-backup") || allowed.has("remove-backup");
+      elements.backupSelect.disabled = state.isBusy || !state.user || !canUseBackupSelection || !hasBackups;
     }
     if (elements.applicationSelect) {
       const hasApplications = getApplicationCatalog(state.lastStatus).length > 0;
@@ -134,7 +135,7 @@
     }
     elements.actionButtons.forEach((button) => {
       const command = button.dataset.command;
-      const needsBackup = command === "restore-backup";
+      const needsBackup = command === "restore-backup" || command === "remove-backup";
       const needsApplication = command === "install-app" || command === "uninstall-app";
       const hasSelectedBackup = Boolean(elements.backupSelect && elements.backupSelect.value);
       const hasSelectedApplication = Boolean(elements.applicationSelect && elements.applicationSelect.value);
@@ -605,6 +606,18 @@
       }
     }
 
+    if (command === "remove-backup") {
+      const backupId = String(elements.backupSelect && elements.backupSelect.value || "").trim();
+      if (!backupId) {
+        throw new Error("Select a backup before running Remove Backup.");
+      }
+      const confirmed = window.confirm(`Remove backup "${backupId}" from Google Drive? This cannot be undone.`);
+      if (!confirmed) {
+        setBanner("Remove Backup cancelled.", "warning");
+        return;
+      }
+    }
+
     if (command === "uninstall-app") {
       const appLabel = selectedApplicationLabel();
       const confirmed = window.confirm(`Uninstall "${appLabel}" and remove it from Sunshine applications?`);
@@ -625,7 +638,7 @@
       if (command === "delete") {
         body.confirmDelete = true;
       }
-      if (command === "restore-backup") {
+      if (command === "restore-backup" || command === "remove-backup") {
         body.backupId = String(elements.backupSelect && elements.backupSelect.value || "").trim();
       }
       if (command === "install-app" || command === "uninstall-app") {

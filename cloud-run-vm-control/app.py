@@ -335,6 +335,7 @@ def options_passthrough():
             "delete",
             "create-backup",
             "restore-backup",
+            "remove-backup",
             "set-sunshine-password",
             "install-app",
             "uninstall-app",
@@ -1222,6 +1223,7 @@ def allowed_commands(instance: dict[str, Any] | None) -> list[str]:
                 "delete",
                 "create-backup",
                 "restore-backup",
+                "remove-backup",
                 "install-app",
                 "uninstall-app",
             ])
@@ -1253,6 +1255,7 @@ def build_power_action_status(instance: dict[str, Any] | None) -> dict[str, str]
         "completed": "Completed",
         "installed": "Installed",
         "uninstalled": "Uninstalled",
+        "removed": "Removed",
         "rebooting": "Rebooting",
         "restarted": "Restarted",
         "restored": "Restored",
@@ -1682,6 +1685,33 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
             )
             raise
         final_instance = wait_for_external_ip(timeout_seconds=180)
+        return build_status_payload(final_instance, user=user, command=command)
+
+    if command == "remove-backup":
+        if current_instance is None:
+            raise ApiError("Instance does not exist. Create it first.", 400)
+        if current_status != "RUNNING":
+            raise ApiError("Remove Backup requires a running VM.", 400)
+        require_live_backup_ready(current_instance, command)
+        backup_id = parse_backup_id(payload)
+        set_instance_metadata_values(
+            current_instance,
+            {
+                SELECTED_BACKUP_METADATA_KEY: backup_id,
+            },
+        )
+        current_instance = get_instance()
+        current_instance, token = request_live_power_action(
+            current_instance,
+            action="remove-backup",
+            status_detail=f"Removing manual backup {backup_id}.",
+        )
+        final_instance = wait_for_power_action_phase(
+            action="remove-backup",
+            token=token,
+            target_phase="removed",
+            timeout_seconds=900,
+        )
         return build_status_payload(final_instance, user=user, command=command)
 
     if command in {"install-app", "uninstall-app"}:
