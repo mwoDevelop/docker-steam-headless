@@ -16,6 +16,7 @@ POWER_ACTION_STATUS_METADATA_KEY="vm-power-action-status"
 SUNSHINE_STATUS_METADATA_KEY="vm-sunshine-status"
 SUNSHINE_STATUS_DETAIL_METADATA_KEY="vm-sunshine-status-detail"
 STEAM_ENV_METADATA_KEY="steam-headless-env"
+SELECTED_APPLICATION_METADATA_KEY="vm-selected-application-id"
 ENVF=/opt/container-services/steam-headless/.env
 COMPOSE_DIR=/opt/container-services/steam-headless
 COMPOSE_GCE="${COMPOSE_DIR}/docker-compose.nvidia.privileged.gce.yml"
@@ -454,6 +455,149 @@ restore_manual_backup() {
   set_power_action_status "$action" "$token" "restored" ""
 }
 
+run_application_action() {
+  local action="$1"
+  local token="$2"
+  local app_id container_id target_phase
+
+  app_id="$(metadata_get "$SELECTED_APPLICATION_METADATA_KEY" || true)"
+  case "$app_id" in
+    prism|chrome)
+      ;;
+    *)
+      log "Unsupported application id: ${app_id:-<empty>}"
+      set_power_action_status "$action" "$token" "failed" ""
+      return 1
+      ;;
+  esac
+
+  container_id="$(docker ps --filter 'name=steam-headless' --format '{{.ID}}' | head -n 1 || true)"
+  if [[ -z "$container_id" ]]; then
+    log "steam-headless container not found."
+    set_power_action_status "$action" "$token" "failed" ""
+    return 1
+  fi
+
+  log "Running ${action} for application ${app_id}"
+  set_power_action_status "$action" "$token" "running"
+  set_sunshine_status "starting" "Updating application ${app_id}."
+
+  if ! docker exec -i "$container_id" bash -s -- "$action" "$app_id" <<'PAYLOAD'
+set -euo pipefail
+
+action="$1"
+app_id="$2"
+apps_file=/home/default/.config/sunshine/apps.json
+
+ensure_apps_file() {
+  mkdir -p "$(dirname "$apps_file")"
+  [ -s "$apps_file" ] || echo '{"apps":[]}' > "$apps_file"
+}
+
+update_sunshine_apps() {
+  local mode="$1"
+  local app_name="$2"
+  local command_line="$3"
+  ensure_apps_file
+  python3 - "$apps_file" "$mode" "$app_name" "$command_line" <<'PY'
+import json
+import sys
+
+path, mode, app_name, command_line = sys.argv[1:5]
+try:
+    with open(path, "r", encoding="utf-8") as handle:
+        data = json.load(handle)
+except Exception:
+    data = {}
+
+apps = [item for item in list(data.get("apps") or []) if isinstance(item, dict)]
+apps = [item for item in apps if item.get("name") != app_name]
+
+if mode == "install":
+    apps.append({
+        "name": app_name,
+        "exclude-global-prep-cmd": "true",
+        "detached": [command_line],
+        "prep-cmd": [
+            {"do": "", "undo": "/usr/bin/sunshine-stop"},
+            {"do": "", "undo": "/usr/bin/xfce4-close-all-windows"},
+        ],
+    })
+
+data["apps"] = apps
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(data, handle)
+PY
+}
+
+install_prism() {
+  install -d -m 0755 -o default -g default /home/default /home/default/.local /home/default/.var /home/default/.config
+  if ! command -v flatpak >/dev/null 2>&1; then
+    apt-get update -y
+    apt-get install -y flatpak
+  fi
+  sudo -u default env HOME=/home/default flatpak --user remote-add --if-not-exists flathub \
+    https://flathub.org/repo/flathub.flatpakrepo || true
+  sudo -u default env HOME=/home/default flatpak --user install -y flathub org.prismlauncher.PrismLauncher
+  update_sunshine_apps install PrismLauncher "/usr/bin/flatpak run org.prismlauncher.PrismLauncher//stable"
+}
+
+uninstall_prism() {
+  if command -v flatpak >/dev/null 2>&1; then
+    sudo -u default env HOME=/home/default flatpak --user uninstall -y org.prismlauncher.PrismLauncher || true
+  fi
+  update_sunshine_apps uninstall PrismLauncher ""
+}
+
+install_chrome() {
+  if ! command -v google-chrome >/dev/null 2>&1; then
+    apt-get update -y
+    apt-get install -y wget gnupg ca-certificates
+    install -d -m 0755 /etc/apt/keyrings
+    if [ ! -f /etc/apt/keyrings/google-chrome.gpg ]; then
+      wget -qO- https://dl.google.com/linux/linux_signing_key.pub | \
+        gpg --dearmor > /etc/apt/keyrings/google-chrome.gpg
+    fi
+    echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" \
+      > /etc/apt/sources.list.d/google-chrome.list
+    apt-get update -y
+    apt-get install -y google-chrome-stable
+  fi
+  update_sunshine_apps install "Google Chrome" "/usr/bin/google-chrome-stable --no-first-run --password-store=basic"
+}
+
+uninstall_chrome() {
+  if command -v apt-get >/dev/null 2>&1; then
+    apt-get remove -y google-chrome-stable || true
+    rm -f /etc/apt/sources.list.d/google-chrome.list || true
+  fi
+  update_sunshine_apps uninstall "Google Chrome" ""
+}
+
+case "${action}:${app_id}" in
+  install-app:prism) install_prism ;;
+  uninstall-app:prism) uninstall_prism ;;
+  install-app:chrome) install_chrome ;;
+  uninstall-app:chrome) uninstall_chrome ;;
+  *) exit 2 ;;
+esac
+
+chown default:default "$apps_file" || true
+supervisorctl restart sunshine || true
+PAYLOAD
+  then
+    set_power_action_status "$action" "$token" "failed" ""
+    return 1
+  fi
+
+  wait_for_local_sunshine_ready || true
+  target_phase="installed"
+  if [[ "$action" == "uninstall-app" ]]; then
+    target_phase="uninstalled"
+  fi
+  set_power_action_status "$action" "$token" "$target_phase" ""
+}
+
 run_daemon() {
   log "Starting power action daemon"
   while true; do
@@ -474,6 +618,9 @@ run_daemon() {
           ;;
         apply-sunshine-password)
           apply_sunshine_password "$action" "$token" || true
+          ;;
+        install-app|uninstall-app)
+          run_application_action "$action" "$token" || true
           ;;
       esac
     fi

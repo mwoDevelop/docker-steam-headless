@@ -101,6 +101,7 @@ RESTORE_MODE_METADATA_KEY = "vm-restore-mode"
 RESTORE_STATUS_METADATA_KEY = "vm-restore-status"
 RESTORE_DETAIL_METADATA_KEY = "vm-restore-detail"
 SELECTED_BACKUP_METADATA_KEY = "vm-selected-backup-id"
+SELECTED_APPLICATION_METADATA_KEY = "vm-selected-application-id"
 BACKUPS_JSON_METADATA_KEY = "vm-backups-json"
 DATA_DISK_STATUS_METADATA_KEY = "vm-data-disk-status"
 DATA_DISK_DETAIL_METADATA_KEY = "vm-data-disk-detail"
@@ -121,6 +122,19 @@ FIREWALL_SUNSHINE_ALLOWED: Final = [
     {"IPProtocol": "tcp", "ports": ["47984", "47989", "47990", "48010", "27036-27037"]},
     {"IPProtocol": "udp", "ports": ["47998", "47999", "48000", "48002", "48010", "27031-27036"]},
 ]
+APPLICATION_CATALOG: Final = [
+    {
+        "id": "prism",
+        "label": "PrismLauncher",
+        "description": "Minecraft launcher installed via Flatpak and added to Sunshine applications.",
+    },
+    {
+        "id": "chrome",
+        "label": "Google Chrome",
+        "description": "Google Chrome browser installed in the Steam Headless container and added to Sunshine applications.",
+    },
+]
+APPLICATION_IDS: Final = {str(app["id"]) for app in APPLICATION_CATALOG}
 
 
 def require_env(name: str) -> str:
@@ -286,6 +300,7 @@ def options_passthrough():
             {
                 "service": "cloud-run-vm-control",
                 "googleClientId": CONFIG["google_client_ids"][0] if CONFIG["google_client_ids"] else "",
+                "applicationCatalog": APPLICATION_CATALOG,
                 "target": {
                     "project": CONFIG["project"],
                     "zone": CONFIG["zone"],
@@ -321,6 +336,8 @@ def options_passthrough():
             "create-backup",
             "restore-backup",
             "set-sunshine-password",
+            "install-app",
+            "uninstall-app",
         }:
             raise ApiError("Unsupported command.", 400)
         result = execute_command(command, user, payload)
@@ -659,18 +676,19 @@ def request_live_power_action(
     *,
     action: str,
     status_detail: str,
+    extra_metadata: dict[str, str | None] | None = None,
 ) -> tuple[dict[str, Any], str]:
     token = generate_action_token()
-    set_instance_metadata_values(
-        instance,
-        {
-            "vm-power-action-script": decode_config_b64("vm_power_action_script_b64"),
-            POWER_ACTION_METADATA_KEY: f"{action}:{token}",
-            POWER_ACTION_STATUS_METADATA_KEY: f"requested:{action}:{token}",
-            SUNSHINE_STATUS_METADATA_KEY: "starting",
-            SUNSHINE_STATUS_DETAIL_METADATA_KEY: status_detail,
-        },
-    )
+    updates: dict[str, str | None] = {
+        "vm-power-action-script": decode_config_b64("vm_power_action_script_b64"),
+        POWER_ACTION_METADATA_KEY: f"{action}:{token}",
+        POWER_ACTION_STATUS_METADATA_KEY: f"requested:{action}:{token}",
+        SUNSHINE_STATUS_METADATA_KEY: "starting",
+        SUNSHINE_STATUS_DETAIL_METADATA_KEY: status_detail,
+    }
+    if extra_metadata:
+        updates.update(extra_metadata)
+    set_instance_metadata_values(instance, updates)
     return get_instance(), token
 
 
@@ -709,6 +727,15 @@ def parse_backup_id(payload: dict[str, Any]) -> str:
     allowed = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._:-TZ")
     if any(ch not in allowed for ch in raw):
         raise ApiError("backupId contains unsupported characters.", 400)
+    return raw
+
+
+def parse_application_id(payload: dict[str, Any]) -> str:
+    raw = str(payload.get("applicationId", "") or "").strip().lower()
+    if not raw:
+        raise ApiError("applicationId is required.", 400)
+    if raw not in APPLICATION_IDS:
+        raise ApiError("applicationId is not supported.", 400)
     return raw
 
 
@@ -1189,7 +1216,15 @@ def allowed_commands(instance: dict[str, Any] | None) -> list[str]:
     if status == "RUNNING":
         commands = ["status", "set-sunshine-password"]
         if is_live_backup_ready(instance):
-            commands.extend(["restart", "stop", "delete", "create-backup", "restore-backup"])
+            commands.extend([
+                "restart",
+                "stop",
+                "delete",
+                "create-backup",
+                "restore-backup",
+                "install-app",
+                "uninstall-app",
+            ])
         return commands
     if status == "TERMINATED":
         return ["status", "start", "delete", "set-sunshine-password"]
@@ -1216,6 +1251,8 @@ def build_power_action_status(instance: dict[str, Any] | None) -> dict[str, str]
         "backed-up": "Backed up",
         "applied": "Applied",
         "completed": "Completed",
+        "installed": "Installed",
+        "uninstalled": "Uninstalled",
         "rebooting": "Rebooting",
         "restarted": "Restarted",
         "restored": "Restored",
@@ -1262,6 +1299,10 @@ def build_status_payload(
             "sunshineStatus": build_sunshine_status(None),
             "persistence": build_persistence_status(None),
             "powerAction": build_power_action_status(None),
+            "applications": {
+                "catalog": APPLICATION_CATALOG,
+                "selected": "",
+            },
         }
         if duckdns_updated is not None:
             payload["duckdnsUpdated"] = duckdns_updated
@@ -1294,6 +1335,10 @@ def build_status_payload(
         "sunshineStatus": build_sunshine_status(instance),
         "persistence": build_persistence_status(instance),
         "powerAction": build_power_action_status(instance),
+        "applications": {
+            "catalog": APPLICATION_CATALOG,
+            "selected": metadata_value(instance, SELECTED_APPLICATION_METADATA_KEY),
+        },
     }
     if duckdns_updated is not None:
         payload["duckdnsUpdated"] = duckdns_updated
@@ -1637,6 +1682,33 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
             )
             raise
         final_instance = wait_for_external_ip(timeout_seconds=180)
+        return build_status_payload(final_instance, user=user, command=command)
+
+    if command in {"install-app", "uninstall-app"}:
+        if current_instance is None:
+            raise ApiError("Instance does not exist. Create it first.", 400)
+        if current_status != "RUNNING":
+            raise ApiError("Application changes require a running VM.", 400)
+        require_live_backup_ready(current_instance, command)
+        application_id = parse_application_id(payload)
+        verb = "Installing" if command == "install-app" else "Uninstalling"
+        target_phase = "installed" if command == "install-app" else "uninstalled"
+        current_instance, token = request_live_power_action(
+            current_instance,
+            action=command,
+            status_detail=f"{verb} application {application_id}. Sunshine is temporarily refreshed.",
+            extra_metadata={
+                SELECTED_APPLICATION_METADATA_KEY: application_id,
+            },
+        )
+        final_instance = wait_for_power_action_phase(
+            action=command,
+            token=token,
+            target_phase=target_phase,
+            timeout_seconds=1800,
+        )
+        final_instance = wait_for_external_ip(timeout_seconds=180)
+        final_instance = wait_for_sunshine_status("ready", timeout_seconds=240)
         return build_status_payload(final_instance, user=user, command=command)
 
     if command == "set-sunshine-password":

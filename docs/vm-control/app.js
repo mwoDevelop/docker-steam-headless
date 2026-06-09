@@ -21,6 +21,8 @@
     autoStopHours: document.querySelector("#auto-stop-hours"),
     backupSelect: document.querySelector("#backup-select"),
     backupOptionsStatus: document.querySelector("#backup-options-status"),
+    applicationSelect: document.querySelector("#application-select"),
+    applicationOptionsStatus: document.querySelector("#application-options-status"),
     banner: document.querySelector("#banner"),
     access: document.querySelector("#access"),
     history: document.querySelector("#history"),
@@ -52,6 +54,7 @@
     renderHistory();
     renderTargetSummary();
     renderBackupOptions(null);
+    renderApplicationOptions(null);
     renderAccess(null);
     updateAuthUi();
   }
@@ -124,11 +127,22 @@
       const hasBackups = getAvailableBackups(state.lastStatus).length > 0;
       elements.backupSelect.disabled = state.isBusy || !state.user || !allowed.has("restore-backup") || !hasBackups;
     }
+    if (elements.applicationSelect) {
+      const hasApplications = getApplicationCatalog(state.lastStatus).length > 0;
+      const canChangeApps = allowed.has("install-app") || allowed.has("uninstall-app");
+      elements.applicationSelect.disabled = state.isBusy || !state.user || !canChangeApps || !hasApplications;
+    }
     elements.actionButtons.forEach((button) => {
       const command = button.dataset.command;
       const needsBackup = command === "restore-backup";
+      const needsApplication = command === "install-app" || command === "uninstall-app";
       const hasSelectedBackup = Boolean(elements.backupSelect && elements.backupSelect.value);
-      button.disabled = state.isBusy || !state.user || !allowed.has(command) || (needsBackup && !hasSelectedBackup);
+      const hasSelectedApplication = Boolean(elements.applicationSelect && elements.applicationSelect.value);
+      button.disabled = state.isBusy
+        || !state.user
+        || !allowed.has(command)
+        || (needsBackup && !hasSelectedBackup)
+        || (needsApplication && !hasSelectedApplication);
     });
   }
 
@@ -249,6 +263,23 @@
     return backups.filter((backup) => backup && backup.id);
   }
 
+  function getApplicationCatalog(payload) {
+    const fromPayload = payload && payload.applications && Array.isArray(payload.applications.catalog)
+      ? payload.applications.catalog
+      : [];
+    const fromConfig = state.backendConfig && Array.isArray(state.backendConfig.applicationCatalog)
+      ? state.backendConfig.applicationCatalog
+      : [];
+    const catalog = fromPayload.length ? fromPayload : fromConfig;
+    return catalog.filter((item) => item && item.id && item.label);
+  }
+
+  function selectedApplicationLabel() {
+    const appId = String(elements.applicationSelect && elements.applicationSelect.value || "").trim();
+    const app = getApplicationCatalog(state.lastStatus).find((item) => String(item.id) === appId);
+    return app ? String(app.label || app.id) : appId;
+  }
+
   function renderBackupOptions(payload) {
     if (!elements.backupSelect) {
       return;
@@ -278,6 +309,40 @@
     }
     if (elements.backupOptionsStatus) {
       elements.backupOptionsStatus.textContent = `${backups.length} manual backup${backups.length === 1 ? "" : "s"} available.`;
+    }
+    updateActionAvailability();
+  }
+
+  function renderApplicationOptions(payload) {
+    if (!elements.applicationSelect) {
+      return;
+    }
+
+    const previousValue = elements.applicationSelect.value;
+    const applications = getApplicationCatalog(payload);
+    if (!applications.length) {
+      elements.applicationSelect.innerHTML = '<option value="">No applications available</option>';
+      if (elements.applicationOptionsStatus) {
+        elements.applicationOptionsStatus.textContent = "No supported applications are defined by the backend.";
+      }
+      updateActionAvailability();
+      return;
+    }
+
+    elements.applicationSelect.innerHTML = [
+      '<option value="">Select application...</option>',
+      ...applications.map((app) => {
+        const id = String(app.id || "");
+        const label = String(app.label || id);
+        return `<option value="${escapeHtml(id)}">${escapeHtml(label)}</option>`;
+      }),
+    ].join("");
+    if (previousValue && applications.some((app) => String(app.id) === previousValue)) {
+      elements.applicationSelect.value = previousValue;
+    }
+    if (elements.applicationOptionsStatus) {
+      const labels = applications.map((app) => String(app.label || app.id)).join(", ");
+      elements.applicationOptionsStatus.textContent = `Supported applications: ${labels}.`;
     }
     updateActionAvailability();
   }
@@ -376,6 +441,7 @@
     const config = await response.json();
     state.backendConfig = config;
     renderTargetSummary();
+    renderApplicationOptions(state.lastStatus);
     updateAuthUi();
 
     if (!config.googleClientId) {
@@ -539,8 +605,20 @@
       }
     }
 
+    if (command === "uninstall-app") {
+      const appLabel = selectedApplicationLabel();
+      const confirmed = window.confirm(`Uninstall "${appLabel}" and remove it from Sunshine applications?`);
+      if (!confirmed) {
+        setBanner("Uninstall Application cancelled.", "warning");
+        return;
+      }
+    }
+
     setBusy(true);
-    setBanner(`Running "${command}" on the VM...`, "warning");
+    const appLabel = command === "install-app" || command === "uninstall-app"
+      ? ` for ${selectedApplicationLabel()}`
+      : "";
+    setBanner(`Running "${command}"${appLabel} on the VM...`, "warning");
 
     try {
       const body = { command };
@@ -549,6 +627,13 @@
       }
       if (command === "restore-backup") {
         body.backupId = String(elements.backupSelect && elements.backupSelect.value || "").trim();
+      }
+      if (command === "install-app" || command === "uninstall-app") {
+        const applicationId = String(elements.applicationSelect && elements.applicationSelect.value || "").trim();
+        if (!applicationId) {
+          throw new Error("Select an application first.");
+        }
+        body.applicationId = applicationId;
       }
       const autoStopHours = readAutoStopHours(command);
       if (autoStopHours) {
@@ -562,6 +647,7 @@
       state.lastStatus = data;
       renderTargetSummary();
       renderBackupOptions(data);
+      renderApplicationOptions(data);
       renderAccess(data);
 
       const suffix = data.duckdnsUpdated
@@ -579,7 +665,9 @@
         status: data.status,
         tone: "success",
         userEmail: state.user.email,
-        message: historyMessage(data),
+        message: command === "install-app" || command === "uninstall-app"
+          ? `${historyMessage(data)} · Application: ${selectedApplicationLabel()}`.replace(/^ · /, "")
+          : historyMessage(data),
         duckdnsDomains: data.duckdnsDomains || [],
       });
     } finally {
@@ -757,6 +845,7 @@
       state.lastStatus = data;
       renderTargetSummary();
       renderBackupOptions(data);
+      renderApplicationOptions(data);
       renderAccess(data);
       updateActionAvailability();
       if (!silent) {
@@ -1031,6 +1120,10 @@
 
   if (elements.backupSelect) {
     elements.backupSelect.addEventListener("change", updateActionAvailability);
+  }
+
+  if (elements.applicationSelect) {
+    elements.applicationSelect.addEventListener("change", updateActionAvailability);
   }
 
   loadConfig();
