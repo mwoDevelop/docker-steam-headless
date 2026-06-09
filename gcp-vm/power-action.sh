@@ -77,42 +77,75 @@ zone_name() {
 
 set_instance_metadata_values() {
   local updates_json="$1"
-  local token project zone name instance_json fingerprint items payload
+  local token project zone name attempt instance_json fingerprint items payload response_file response_code operation_name
   token="$(metadata_token || true)"
   project="$(project_id || true)"
   zone="$(zone_name || true)"
   name="$(instance_name || true)"
   [[ -n "$token" && -n "$project" && -n "$zone" && -n "$name" ]] || return 1
 
-  instance_json="$(curl --fail --silent --show-error \
-    -H "Authorization: Bearer ${token}" \
-    "https://compute.googleapis.com/compute/v1/projects/${project}/zones/${zone}/instances/${name}")"
-  fingerprint="$(printf '%s' "$instance_json" | jq -r '.metadata.fingerprint // empty')"
-  [[ -n "$fingerprint" ]] || return 1
-  items="$(printf '%s' "$instance_json" | jq '[.metadata.items // [] | .[]]')"
-  payload="$(jq -n \
-    --arg fingerprint "$fingerprint" \
-    --argjson existing "$items" \
-    --argjson updates "$updates_json" \
-    '
-      def update_items($existing; $updates):
-        reduce ($updates | to_entries[]) as $entry (
-          $existing;
-          map(select(.key != $entry.key))
-          + (if $entry.value == null then [] else [{key: $entry.key, value: $entry.value}] end)
-        );
-      {
-        fingerprint: $fingerprint,
-        items: update_items($existing; $updates)
+  for attempt in $(seq 1 8); do
+    instance_json="$(curl --fail --silent --show-error \
+      -H "Authorization: Bearer ${token}" \
+      "https://compute.googleapis.com/compute/v1/projects/${project}/zones/${zone}/instances/${name}")" || {
+        sleep "$attempt"
+        continue
       }
-    ')"
+    fingerprint="$(printf '%s' "$instance_json" | jq -r '.metadata.fingerprint // empty')"
+    [[ -n "$fingerprint" ]] || return 1
+    items="$(printf '%s' "$instance_json" | jq '[.metadata.items // [] | .[]]')"
+    payload="$(jq -n \
+      --arg fingerprint "$fingerprint" \
+      --argjson existing "$items" \
+      --argjson updates "$updates_json" \
+      '
+        def update_items($existing; $updates):
+          reduce ($updates | to_entries[]) as $entry (
+            $existing;
+            map(select(.key != $entry.key))
+            + (if $entry.value == null then [] else [{key: $entry.key, value: $entry.value}] end)
+          );
+        {
+          fingerprint: $fingerprint,
+          items: update_items($existing; $updates)
+        }
+      ')"
 
-  curl --fail --silent --show-error \
-    -X POST \
-    -H "Authorization: Bearer ${token}" \
-    -H "Content-Type: application/json" \
-    -d "$payload" \
-    "https://compute.googleapis.com/compute/v1/projects/${project}/zones/${zone}/instances/${name}/setMetadata" >/dev/null
+    response_file="$(mktemp)"
+    response_code="$(curl --silent --show-error \
+      -o "$response_file" \
+      -w '%{http_code}' \
+      -X POST \
+      -H "Authorization: Bearer ${token}" \
+      -H "Content-Type: application/json" \
+      -d "$payload" \
+      "https://compute.googleapis.com/compute/v1/projects/${project}/zones/${zone}/instances/${name}/setMetadata" || true)"
+
+    if [[ "$response_code" == "200" ]]; then
+      operation_name="$(jq -r '.name // empty' "$response_file")"
+      rm -f "$response_file"
+      if [[ -n "$operation_name" ]]; then
+        curl --fail --silent --show-error \
+          -X POST \
+          -H "Authorization: Bearer ${token}" \
+          "https://compute.googleapis.com/compute/v1/projects/${project}/zones/${zone}/operations/${operation_name}/wait" >/dev/null || true
+      fi
+      return 0
+    fi
+
+    if [[ "$response_code" == "412" ]]; then
+      rm -f "$response_file"
+      sleep "$attempt"
+      continue
+    fi
+
+    cat "$response_file" >&2 || true
+    rm -f "$response_file"
+    return 1
+  done
+
+  log "Failed to update instance metadata after retries."
+  return 1
 }
 
 set_power_action_status() {
@@ -143,6 +176,16 @@ set_power_action_status() {
   fi
 
   set_instance_metadata_values "$updates"
+
+  if [[ "$pending_value" == "" ]]; then
+    for _ in $(seq 1 20); do
+      if [[ -z "$(metadata_get "$POWER_ACTION_METADATA_KEY")" ]]; then
+        return 0
+      fi
+      sleep 1
+    done
+    log "Pending power action metadata did not clear yet."
+  fi
 }
 
 set_sunshine_status() {
