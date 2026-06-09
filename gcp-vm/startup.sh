@@ -536,7 +536,7 @@ ensure_env_key_missing STEAM_HEADLESS_IMAGE "josh5/steam-headless:debian-dev-fro
 ensure_env_key_missing ENABLE_SUNSHINE "true"
 ensure_env_key_missing SUNSHINE_USER "admin"
 ensure_env_key_missing SUNSHINE_PASS "change-me"
-ensure_env_key_missing ENABLE_EVDEV_INPUTS "true"
+set_env_value ENABLE_EVDEV_INPUTS "true"
 ensure_env_key_missing FORCE_X11_DUMMY_CONFIG "true"
 ensure_env_key_missing DISPLAY_SIZEW "1920"
 ensure_env_key_missing DISPLAY_SIZEH "1080"
