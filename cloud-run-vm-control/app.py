@@ -1216,6 +1216,8 @@ def build_power_action_status(instance: dict[str, Any] | None) -> dict[str, str]
         "backed-up": "Backed up",
         "applied": "Applied",
         "completed": "Completed",
+        "rebooting": "Rebooting",
+        "restarted": "Restarted",
         "restored": "Restored",
         "stopping": "Stopping",
         "failed": "Failed",
@@ -1527,6 +1529,14 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
             poll_instance_restarted(previous_start_timestamp, timeout_seconds=600)
             final_instance = wait_for_external_ip(timeout_seconds=180)
             final_instance = wait_for_sunshine_status("ready", timeout_seconds=240)
+            set_instance_metadata_values(
+                final_instance,
+                {
+                    POWER_ACTION_STATUS_METADATA_KEY: f"restarted:restart:{token}",
+                    POWER_ACTION_METADATA_KEY: None,
+                },
+            )
+            final_instance = get_instance()
             updated = update_duckdns(extract_external_ip(final_instance))
             return build_status_payload(
                 final_instance,
