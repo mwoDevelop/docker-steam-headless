@@ -240,7 +240,7 @@ select {
 
 .google-sign-in:disabled {
   opacity: 0.6;
-  cursor: progress;
+  cursor: not-allowed;
 }
 
 .auth-help {
@@ -323,7 +323,7 @@ button:hover:not(:disabled) {
 
 button:disabled {
   opacity: 0.45;
-  cursor: wait;
+  cursor: not-allowed;
 }
 
 .action {
