@@ -9,6 +9,7 @@
   };
   const SUNSHINE_POLL_INTERVAL_MS = 3000;
   const SUNSHINE_POLL_TIMEOUT_MS = 180000;
+  const POST_COMMAND_STATUS_REFRESH_DELAY_MS = 2000;
   const COMMAND_STATUS_POLL_TIMEOUT_MS = 300000;
   const COMMAND_SUNSHINE_TRANSITIONS = {
     create: {
@@ -96,6 +97,7 @@
     user: null,
     lastStatus: null,
     isBusy: false,
+    commandStatusRefreshTimer: null,
     history: [],
   };
 
@@ -216,6 +218,34 @@
   function setBanner(message, tone) {
     elements.banner.textContent = message;
     elements.banner.dataset.tone = tone || "neutral";
+  }
+
+  function schedulePostCommandStatusRefresh(command) {
+    if (command === "status" || !state.user) {
+      return;
+    }
+
+    if (state.commandStatusRefreshTimer) {
+      window.clearTimeout(state.commandStatusRefreshTimer);
+    }
+
+    state.commandStatusRefreshTimer = window.setTimeout(async () => {
+      state.commandStatusRefreshTimer = null;
+      if (!state.user) {
+        return;
+      }
+
+      try {
+        const data = await refreshStatus({ silent: true });
+        if (!state.isBusy) {
+          setBanner(`VM status loaded. Current state: ${data.status}.`, "success");
+        }
+      } catch (error) {
+        if (!state.isBusy) {
+          handleError(error);
+        }
+      }
+    }, POST_COMMAND_STATUS_REFRESH_DELAY_MS);
   }
 
   function setAuthStatus(message, tone) {
@@ -757,6 +787,7 @@
       : "";
     setBanner(`Running "${command}"${appLabel} on the VM...`, "warning");
     applyCommandTransition(command);
+    schedulePostCommandStatusRefresh(command);
 
     try {
       const body = { command };
@@ -829,6 +860,7 @@
 
     setBusy(true);
     setBanner("Updating Sunshine password...", "warning");
+    schedulePostCommandStatusRefresh("set-sunshine-password");
     if (state.lastStatus) {
       state.lastStatus = {
         ...state.lastStatus,
