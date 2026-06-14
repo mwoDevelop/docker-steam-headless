@@ -237,13 +237,12 @@
 
       try {
         const data = await refreshStatus({ silent: true });
-        if (!state.isBusy) {
-          setBanner(`VM status loaded. Current state: ${data.status}.`, "success");
-        }
+        const sunshine = data.sunshineStatus && data.sunshineStatus.label
+          ? `, Sunshine: ${data.sunshineStatus.label}`
+          : "";
+        setBanner(`VM status refreshed. Current state: ${data.status}${sunshine}.`, state.isBusy ? "warning" : "success");
       } catch (error) {
-        if (!state.isBusy) {
-          handleError(error);
-        }
+        handleError(error);
       }
     }, POST_COMMAND_STATUS_REFRESH_DELAY_MS);
   }
