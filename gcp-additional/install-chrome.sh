@@ -12,19 +12,14 @@ run_payload() {
   bash -s <<'PAYLOAD'
 set -euo pipefail
 
-if ! command -v google-chrome >/dev/null 2>&1; then
+install -d -m 0755 -o default -g default /home/default /home/default/.local /home/default/.var /home/default/.config
+if ! command -v flatpak >/dev/null 2>&1; then
   apt-get update -y
-  apt-get install -y wget gnupg ca-certificates
-  install -d -m 0755 /etc/apt/keyrings
-  if [ ! -f /etc/apt/keyrings/google-chrome.gpg ]; then
-    wget -qO- https://dl.google.com/linux/linux_signing_key.pub | \
-      gpg --dearmor > /etc/apt/keyrings/google-chrome.gpg
-  fi
-  echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" \
-    > /etc/apt/sources.list.d/google-chrome.list
-  apt-get update -y
-  apt-get install -y google-chrome-stable
+  apt-get install -y flatpak
 fi
+sudo -u default env HOME=/home/default flatpak --user remote-add --if-not-exists flathub \
+  https://flathub.org/repo/flathub.flatpakrepo || true
+sudo -u default env HOME=/home/default flatpak --user install -y flathub com.google.Chrome
 
 apps_file=/home/default/.config/sunshine/apps.json
 mkdir -p "$(dirname "$apps_file")"
@@ -43,7 +38,7 @@ new_entry = {
     "name": "Google Chrome",
     "exclude-global-prep-cmd": "true",
     "detached": [
-        "/usr/bin/google-chrome-stable --no-first-run --password-store=basic"
+        "/usr/bin/flatpak run com.google.Chrome//stable --no-first-run --password-store=basic"
     ],
     "prep-cmd": [
         {"do": "", "undo": "/usr/bin/sunshine-stop"},
@@ -74,19 +69,14 @@ run_in_docker() {
   "$docker_bin" exec -i "$container_id" bash -s <<'PAYLOAD'
 set -euo pipefail
 
-if ! command -v google-chrome >/dev/null 2>&1; then
+install -d -m 0755 -o default -g default /home/default /home/default/.local /home/default/.var /home/default/.config
+if ! command -v flatpak >/dev/null 2>&1; then
   apt-get update -y
-  apt-get install -y wget gnupg ca-certificates
-  install -d -m 0755 /etc/apt/keyrings
-  if [ ! -f /etc/apt/keyrings/google-chrome.gpg ]; then
-    wget -qO- https://dl.google.com/linux/linux_signing_key.pub | \
-      gpg --dearmor > /etc/apt/keyrings/google-chrome.gpg
-  fi
-  echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" \
-    > /etc/apt/sources.list.d/google-chrome.list
-  apt-get update -y
-  apt-get install -y google-chrome-stable
+  apt-get install -y flatpak
 fi
+sudo -u default env HOME=/home/default flatpak --user remote-add --if-not-exists flathub \
+  https://flathub.org/repo/flathub.flatpakrepo || true
+sudo -u default env HOME=/home/default flatpak --user install -y flathub com.google.Chrome
 
 apps_file=/home/default/.config/sunshine/apps.json
 mkdir -p "$(dirname "$apps_file")"
@@ -105,7 +95,7 @@ new_entry = {
     "name": "Google Chrome",
     "exclude-global-prep-cmd": "true",
     "detached": [
-        "/usr/bin/google-chrome-stable --no-first-run --password-store=basic"
+        "/usr/bin/flatpak run com.google.Chrome//stable --no-first-run --password-store=basic"
     ],
     "prep-cmd": [
         {"do": "", "undo": "/usr/bin/sunshine-stop"},

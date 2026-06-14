@@ -131,7 +131,7 @@ APPLICATION_CATALOG: Final = [
     {
         "id": "chrome",
         "label": "Google Chrome",
-        "description": "Google Chrome browser installed in the Steam Headless container and added to Sunshine applications.",
+        "description": "Google Chrome browser installed as a user Flatpak and added to Sunshine applications.",
     },
 ]
 APPLICATION_IDS: Final = {str(app["id"]) for app in APPLICATION_CATALOG}

@@ -179,7 +179,7 @@
     );
 
     if (elements.refreshStatus) {
-      elements.refreshStatus.disabled = state.isBusy || !state.user || !allowed.has("status");
+      elements.refreshStatus.disabled = !state.user || !allowed.has("status");
     }
     elements.autoStopHours.disabled = state.isBusy || !state.user || (!allowed.has("start") && !allowed.has("create"));
     if (elements.backupSelect) {
@@ -198,7 +198,7 @@
       const needsApplication = command === "install-app" || command === "uninstall-app";
       const hasSelectedBackup = Boolean(elements.backupSelect && elements.backupSelect.value);
       const hasSelectedApplication = Boolean(elements.applicationSelect && elements.applicationSelect.value);
-      button.disabled = state.isBusy
+      button.disabled = (state.isBusy && command !== "status")
         || !state.user
         || !allowed.has(command)
         || (needsBackup && !hasSelectedBackup)
@@ -1263,7 +1263,8 @@
   if (elements.refreshStatus) {
     elements.refreshStatus.addEventListener("click", async () => {
       try {
-        await refreshStatus();
+        const data = await refreshStatus({ silent: true });
+        setBanner(`VM status loaded. Current state: ${data.status}.`, state.isBusy ? "warning" : "success");
       } catch (error) {
         handleError(error);
       }
@@ -1272,11 +1273,21 @@
 
   elements.actionButtons.forEach((button) => {
     button.addEventListener("click", async () => {
+      const command = button.dataset.command;
+      if (command === "status") {
+        try {
+          const data = await refreshStatus({ silent: true });
+          setBanner(`VM status loaded. Current state: ${data.status}.`, state.isBusy ? "warning" : "success");
+        } catch (error) {
+          handleError(error);
+        }
+        return;
+      }
       if (state.isBusy) {
         return;
       }
       try {
-        await dispatchCommand(button.dataset.command);
+        await dispatchCommand(command);
       } catch (error) {
         handleError(error);
       }

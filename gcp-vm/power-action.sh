@@ -564,26 +564,20 @@ uninstall_prism() {
 }
 
 install_chrome() {
-  if ! command -v google-chrome >/dev/null 2>&1; then
+  install -d -m 0755 -o default -g default /home/default /home/default/.local /home/default/.var /home/default/.config
+  if ! command -v flatpak >/dev/null 2>&1; then
     apt-get update -y
-    apt-get install -y wget gnupg ca-certificates
-    install -d -m 0755 /etc/apt/keyrings
-    if [ ! -f /etc/apt/keyrings/google-chrome.gpg ]; then
-      wget -qO- https://dl.google.com/linux/linux_signing_key.pub | \
-        gpg --dearmor > /etc/apt/keyrings/google-chrome.gpg
-    fi
-    echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" \
-      > /etc/apt/sources.list.d/google-chrome.list
-    apt-get update -y
-    apt-get install -y google-chrome-stable
+    apt-get install -y flatpak
   fi
-  update_sunshine_apps install "Google Chrome" "/usr/bin/google-chrome-stable --no-first-run --password-store=basic"
+  sudo -u default env HOME=/home/default flatpak --user remote-add --if-not-exists flathub \
+    https://flathub.org/repo/flathub.flatpakrepo || true
+  sudo -u default env HOME=/home/default flatpak --user install -y flathub com.google.Chrome
+  update_sunshine_apps install "Google Chrome" "/usr/bin/flatpak run com.google.Chrome//stable --no-first-run --password-store=basic"
 }
 
 uninstall_chrome() {
-  if command -v apt-get >/dev/null 2>&1; then
-    apt-get remove -y google-chrome-stable || true
-    rm -f /etc/apt/sources.list.d/google-chrome.list || true
+  if command -v flatpak >/dev/null 2>&1; then
+    sudo -u default env HOME=/home/default flatpak --user uninstall -y com.google.Chrome || true
   fi
   update_sunshine_apps uninstall "Google Chrome" ""
 }
