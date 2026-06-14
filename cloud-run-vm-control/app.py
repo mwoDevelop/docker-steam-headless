@@ -1241,12 +1241,59 @@ def require_live_backup_ready(instance: dict[str, Any] | None, command: str) -> 
     )
 
 
+ACTIVE_POWER_ACTION_PHASES = {"requested", "running", "rebooting", "stopping", "backed-up"}
+
+
+def active_power_action(instance: dict[str, Any] | None) -> dict[str, str] | None:
+    if instance is None:
+        return None
+
+    phase, action, token = parse_power_action_status(
+        metadata_value(instance, POWER_ACTION_STATUS_METADATA_KEY)
+    )
+    pending = metadata_value(instance, POWER_ACTION_METADATA_KEY).strip()
+
+    if action and phase in ACTIVE_POWER_ACTION_PHASES:
+        return {
+            "phase": phase,
+            "action": action,
+            "token": token,
+            "pending": pending,
+        }
+
+    if pending:
+        pending_action = pending.split(":", 1)[0]
+        return {
+            "phase": "requested",
+            "action": pending_action,
+            "token": pending.split(":", 1)[1] if ":" in pending else "",
+            "pending": pending,
+        }
+
+    return None
+
+
+def require_no_active_power_action(instance: dict[str, Any] | None, command: str) -> None:
+    active = active_power_action(instance)
+    if not active:
+        return
+
+    action = active.get("action") or "unknown"
+    phase = active.get("phase") or "active"
+    raise ApiError(
+        f'VM action "{action}" is still {phase}. Wait for it to finish before running "{command}".',
+        409,
+    )
+
+
 def allowed_commands(instance: dict[str, Any] | None) -> list[str]:
     if instance is None:
         return ["create"]
 
     status = str(instance.get("status", "UNKNOWN")).upper()
     if status == "RUNNING":
+        if active_power_action(instance):
+            return ["status"]
         commands = ["status", "set-sunshine-password"]
         if is_live_backup_ready(instance):
             commands.extend([
@@ -1489,6 +1536,8 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
 
     if command == "status":
         return build_status_payload(current_instance, user=user, command=command)
+
+    require_no_active_power_action(current_instance, command)
 
     if command == "create":
         if current_instance is not None:
