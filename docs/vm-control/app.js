@@ -220,6 +220,17 @@
     elements.banner.dataset.tone = tone || "neutral";
   }
 
+  function statusBannerMessage(prefix, data) {
+    const parts = [`${prefix}. Current VM state: ${data.status || "UNKNOWN"}`];
+    if (data.sunshineStatus && data.sunshineStatus.label) {
+      parts.push(`Sunshine: ${data.sunshineStatus.label}`);
+    }
+    if (data.powerAction && data.powerAction.action && data.powerAction.phase) {
+      parts.push(`VM action: ${data.powerAction.action} ${data.powerAction.phase}`);
+    }
+    return `${parts.join(", ")}.`;
+  }
+
   function schedulePostCommandStatusRefresh(command) {
     if (command === "status" || !state.user) {
       return;
@@ -237,10 +248,7 @@
 
       try {
         const data = await refreshStatus({ silent: true });
-        const sunshine = data.sunshineStatus && data.sunshineStatus.label
-          ? `, Sunshine: ${data.sunshineStatus.label}`
-          : "";
-        setBanner(`VM status refreshed. Current state: ${data.status}${sunshine}.`, state.isBusy ? "warning" : "success");
+        setBanner(statusBannerMessage("VM status refreshed", data), state.isBusy ? "warning" : "success");
       } catch (error) {
         handleError(error);
       }
@@ -1014,7 +1022,7 @@
       const data = await fetchApi("/api/status", { method: "GET" });
       renderStatusPayload(data);
       if (!silent) {
-        setBanner(`VM status loaded. Current state: ${data.status}.`, "success");
+        setBanner(statusBannerMessage("VM status loaded", data), "success");
       }
       return data;
     } finally {
@@ -1264,7 +1272,7 @@
     elements.refreshStatus.addEventListener("click", async () => {
       try {
         const data = await refreshStatus({ silent: true });
-        setBanner(`VM status loaded. Current state: ${data.status}.`, state.isBusy ? "warning" : "success");
+        setBanner(statusBannerMessage("VM status loaded", data), state.isBusy ? "warning" : "success");
       } catch (error) {
         handleError(error);
       }
@@ -1277,7 +1285,7 @@
       if (command === "status") {
         try {
           const data = await refreshStatus({ silent: true });
-          setBanner(`VM status loaded. Current state: ${data.status}.`, state.isBusy ? "warning" : "success");
+          setBanner(statusBannerMessage("VM status loaded", data), state.isBusy ? "warning" : "success");
         } catch (error) {
           handleError(error);
         }
