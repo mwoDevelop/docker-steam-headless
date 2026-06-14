@@ -1248,12 +1248,13 @@ def active_power_action(instance: dict[str, Any] | None) -> dict[str, str] | Non
     if instance is None:
         return None
 
+    instance_status = str(instance.get("status", "UNKNOWN")).upper()
     phase, action, token = parse_power_action_status(
         metadata_value(instance, POWER_ACTION_STATUS_METADATA_KEY)
     )
     pending = metadata_value(instance, POWER_ACTION_METADATA_KEY).strip()
 
-    if action and phase in ACTIVE_POWER_ACTION_PHASES:
+    if action and phase in ACTIVE_POWER_ACTION_PHASES and instance_status == "RUNNING":
         return {
             "phase": phase,
             "action": action,
@@ -1326,6 +1327,11 @@ def build_power_action_status(instance: dict[str, Any] | None) -> dict[str, str]
         metadata_value(instance, POWER_ACTION_STATUS_METADATA_KEY)
     )
     pending = metadata_value(instance, POWER_ACTION_METADATA_KEY).strip()
+    instance_status = str(instance.get("status", "UNKNOWN")).upper()
+    if instance_status != "RUNNING" and not pending:
+        phase = ""
+        action = ""
+        token = ""
     labels = {
         "requested": "Requested",
         "running": "Running",
@@ -1584,6 +1590,8 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
                 current_instance,
                 {
                     AUTO_STOP_METADATA_KEY: str(auto_stop_hours) if auto_stop_hours is not None else None,
+                    POWER_ACTION_METADATA_KEY: None,
+                    POWER_ACTION_STATUS_METADATA_KEY: None,
                     SUNSHINE_STATUS_METADATA_KEY: "starting",
                     SUNSHINE_STATUS_DETAIL_METADATA_KEY: "VM booting. Waiting for Sunshine Web UI.",
                 },
