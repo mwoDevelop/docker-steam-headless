@@ -419,7 +419,8 @@ def sku_hourly_price(sku: dict[str, Any]) -> float | None:
     if not pricing_info:
         return None
     expression = pricing_info[0].get("pricingExpression", {}) or {}
-    if expression.get("usageUnit") != "h":
+    usage_unit = str(expression.get("usageUnit", ""))
+    if not usage_unit.endswith("h"):
         return None
     rates = expression.get("tieredRates", []) or []
     if not rates:

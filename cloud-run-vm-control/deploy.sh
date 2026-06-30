@@ -123,6 +123,7 @@ gcloud services enable \
   cloudbuild.googleapis.com \
   artifactregistry.googleapis.com \
   secretmanager.googleapis.com \
+  cloudbilling.googleapis.com \
   compute.googleapis.com >/dev/null
 
 if ! gcloud iam service-accounts describe "$RUNTIME_SA_EMAIL" --project "$GCP_PROJECT" >/dev/null 2>&1; then
@@ -136,6 +137,12 @@ log "Granting Compute Engine VM control role to runtime service account"
 gcloud projects add-iam-policy-binding "$GCP_PROJECT" \
   --member="serviceAccount:${RUNTIME_SA_EMAIL}" \
   --role="roles/compute.instanceAdmin.v1" \
+  --quiet >/dev/null
+
+log "Granting Service Usage consumer role to runtime service account"
+gcloud projects add-iam-policy-binding "$GCP_PROJECT" \
+  --member="serviceAccount:${RUNTIME_SA_EMAIL}" \
+  --role="roles/serviceusage.serviceUsageConsumer" \
   --quiet >/dev/null
 
 log "Granting Compute Engine firewall management role to runtime service account"
