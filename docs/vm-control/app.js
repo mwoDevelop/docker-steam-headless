@@ -112,6 +112,7 @@
     zoneSelect: document.querySelector("#zone-select"),
     refreshHardware: document.querySelector("#refresh-hardware"),
     hardwareOptionsStatus: document.querySelector("#hardware-options-status"),
+    hardwarePriceEstimate: document.querySelector("#hardware-price-estimate"),
     autoStopHours: document.querySelector("#auto-stop-hours"),
     backupSelect: document.querySelector("#backup-select"),
     backupOptionsStatus: document.querySelector("#backup-options-status"),
@@ -510,6 +511,7 @@
     if (!profiles.length) {
       elements.hardwareSelect.innerHTML = '<option value="">No hardware profiles loaded</option>';
       elements.zoneSelect.innerHTML = '<option value="">No zones loaded</option>';
+      renderHardwarePriceEstimate(null);
       if (elements.hardwareOptionsStatus) {
         elements.hardwareOptionsStatus.textContent = "Sign in and refresh hardware to load Compute Engine availability.";
       }
@@ -550,6 +552,7 @@
       if (elements.hardwareOptionsStatus) {
         elements.hardwareOptionsStatus.textContent = `No zones currently expose ${selectedHardwareLabel() || "selected hardware"}. Refresh later or choose CPU.`;
       }
+      renderHardwarePriceEstimate(null);
       saveConfig();
       updateActionAvailability();
       return;
@@ -572,8 +575,52 @@
         : "";
       elements.hardwareOptionsStatus.textContent = `${selectedHardwareLabel()} available in ${zones.length} zone${zones.length === 1 ? "" : "s"}.${refreshedAt}`;
     }
+    renderHardwarePriceEstimate(selectedPriceEstimate());
     saveConfig();
     updateActionAvailability();
+  }
+
+  function selectedPriceEstimate() {
+    const profile = selectedHardwareProfile();
+    const zone = selectedZone();
+    if (profile && zone && profile.priceEstimatesByZone && profile.priceEstimatesByZone[zone]) {
+      return profile.priceEstimatesByZone[zone];
+    }
+    const statusPrice = state.lastStatus && state.lastStatus.hardware && state.lastStatus.hardware.priceEstimate
+      ? state.lastStatus.hardware.priceEstimate
+      : null;
+    if (statusPrice && statusPrice.zone === zone) {
+      return statusPrice;
+    }
+    return null;
+  }
+
+  function renderHardwarePriceEstimate(estimate) {
+    if (!elements.hardwarePriceEstimate) {
+      return;
+    }
+    if (!estimate) {
+      elements.hardwarePriceEstimate.dataset.tone = "neutral";
+      elements.hardwarePriceEstimate.textContent = "Estimated price: unavailable until hardware data is loaded.";
+      return;
+    }
+    if (!estimate.available) {
+      elements.hardwarePriceEstimate.dataset.tone = "warning";
+      elements.hardwarePriceEstimate.innerHTML = `
+        <strong>Estimated price: unavailable</strong>
+        <span>${escapeHtml(estimate.detail || "Pricing catalog did not return all required SKUs.")}</span>
+      `;
+      return;
+    }
+    const parts = Array.isArray(estimate.components)
+      ? estimate.components.map((component) => `${component.label}: ${Number(component.amountPln || 0).toFixed(2)} PLN`).join(", ")
+      : "";
+    const effectiveTime = estimate.effectiveTime ? ` Catalog: ${escapeHtml(estimate.effectiveTime)}.` : "";
+    elements.hardwarePriceEstimate.dataset.tone = "success";
+    elements.hardwarePriceEstimate.innerHTML = `
+      <strong>${escapeHtml(estimate.display || `~${Number(estimate.amountPln || 0).toFixed(2)} PLN/h`)}</strong>
+      <span>On-demand Compute Engine estimate for ${escapeHtml(estimate.region || "selected region")}. ${escapeHtml(parts)}.${effectiveTime} Excludes disks, snapshots, traffic, discounts and taxes.</span>
+    `;
   }
 
   async function refreshHardwareOptions(options) {
@@ -662,6 +709,7 @@
     renderBackupOptions(payload);
     renderApplicationOptions(payload);
     renderMinecraftOptions(payload);
+    renderHardwarePriceEstimate(selectedPriceEstimate());
     renderAccess(payload);
     updateActionAvailability();
   }
@@ -794,6 +842,7 @@
         <p><strong>Hardware:</strong> <code>${escapeHtml(selectedHardwareLabel() || effectiveHardware.id || "unknown")}</code></p>
         <p><strong>Selected zone:</strong> <code>${escapeHtml(effectiveHardware.zone || "unknown")}</code></p>
         <p><strong>Machine:</strong> <code>${escapeHtml(effectiveHardware.machineType || "unknown")}</code></p>
+        <p><strong>Estimated price:</strong> <code>${escapeHtml((effectiveHardware.priceEstimate && effectiveHardware.priceEstimate.display) || (selectedPriceEstimate() && selectedPriceEstimate().display) || "unknown")}</code></p>
       `
       : "";
 
@@ -1630,6 +1679,7 @@
     elements.zoneSelect.addEventListener("change", async () => {
       saveConfig();
       renderTargetSummary();
+      renderHardwarePriceEstimate(selectedPriceEstimate());
       updateActionAvailability();
       try {
         if (state.user) {

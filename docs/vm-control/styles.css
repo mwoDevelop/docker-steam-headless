@@ -294,6 +294,37 @@ select {
   grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr) auto;
 }
 
+.hardware-price-card {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 4px;
+  padding: 14px 15px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.hardware-price-card strong {
+  color: var(--text);
+  font-size: 1.05rem;
+}
+
+.hardware-price-card span {
+  font-size: 0.92rem;
+}
+
+.hardware-price-card[data-tone="success"] {
+  border-color: rgba(106, 228, 208, 0.26);
+  background: rgba(106, 228, 208, 0.07);
+}
+
+.hardware-price-card[data-tone="warning"] {
+  border-color: rgba(242, 198, 109, 0.28);
+  background: rgba(242, 198, 109, 0.07);
+}
+
 .inline-action-group {
   display: grid;
   gap: 10px;

@@ -125,6 +125,20 @@ DEFAULT_CPU_MACHINE_TYPE = "n1-standard-4"
 DEFAULT_T4_MACHINE_TYPE = "n1-standard-4"
 DEFAULT_L4_MACHINE_TYPE = "g2-standard-4"
 CPU_HARDWARE_ID = "cpu"
+COMPUTE_BILLING_SERVICE_ID = "6F81-5844-456A"
+PRICE_CURRENCY_CODE = "PLN"
+PRICE_CACHE_TTL_SECONDS = 6 * 60 * 60
+MACHINE_TYPE_SPECS: Final = {
+    "n1-standard-4": {"family": "n1-standard", "vcpus": 4.0, "memoryGb": 15.0},
+    "g2-standard-4": {"family": "g2", "vcpus": 4.0, "memoryGb": 16.0},
+}
+PRICE_INDEX_CACHE: dict[str, Any] = {
+    "loaded_at": 0.0,
+    "currency": "",
+    "index": {},
+    "effective_time": "",
+    "conversion_rate": None,
+}
 FIREWALL_WEB_ALLOWED: Final = [{"IPProtocol": "tcp", "ports": ["22", "8083"]}]
 FIREWALL_SUNSHINE_ALLOWED: Final = [
     {"IPProtocol": "tcp", "ports": ["47984", "47989", "47990", "48010", "27036-27037"]},
@@ -396,6 +410,243 @@ def accelerator_zones(zones: list[str]) -> dict[str, list[str]]:
     return {name: sorted(values) for name, values in sorted(result.items())}
 
 
+def money_to_float(unit_price: dict[str, Any]) -> float:
+    return float(int(unit_price.get("units", "0") or "0")) + float(unit_price.get("nanos", 0) or 0) / 1_000_000_000
+
+
+def sku_hourly_price(sku: dict[str, Any]) -> float | None:
+    pricing_info = sku.get("pricingInfo", []) or []
+    if not pricing_info:
+        return None
+    expression = pricing_info[0].get("pricingExpression", {}) or {}
+    if expression.get("usageUnit") != "h":
+        return None
+    rates = expression.get("tieredRates", []) or []
+    if not rates:
+        return None
+    unit_price = rates[0].get("unitPrice", {}) or {}
+    return money_to_float(unit_price)
+
+
+def gpu_billing_label(gpu_type: str) -> str:
+    parts = [part for part in gpu_type.split("-") if part and part != "nvidia"]
+    return "Nvidia " + " ".join(part.upper() if any(ch.isdigit() for ch in part) else part.title() for part in parts)
+
+
+def price_key_for_sku(sku: dict[str, Any]) -> tuple[str, str] | None:
+    category = sku.get("category", {}) or {}
+    if category.get("usageType") != "OnDemand":
+        return None
+
+    description = str(sku.get("description", ""))
+    excluded_terms = ("Commitment", "Spot", "Preemptible", "DWS Defined Duration")
+    if any(term in description for term in excluded_terms):
+        return None
+
+    if description.startswith("N1 Predefined Instance Core "):
+        return ("n1-standard", "core")
+    if description.startswith("N1 Predefined Instance Ram "):
+        return ("n1-standard", "ram")
+    if description.startswith("G2 Instance Core "):
+        return ("g2", "core")
+    if description.startswith("G2 Instance Ram "):
+        return ("g2", "ram")
+
+    known_gpu_types = (
+        "nvidia-l4",
+        "nvidia-tesla-t4",
+        "nvidia-tesla-p4",
+        "nvidia-tesla-p100",
+        "nvidia-tesla-v100",
+        "nvidia-tesla-a100",
+        "nvidia-a100-80gb",
+    )
+    for gpu_type in known_gpu_types:
+        if description.startswith(f"{gpu_billing_label(gpu_type)} GPU "):
+            return ("gpu", gpu_type)
+    return None
+
+
+def refresh_price_index(currency: str = PRICE_CURRENCY_CODE) -> dict[str, Any]:
+    now = time.time()
+    if (
+        PRICE_INDEX_CACHE["index"]
+        and PRICE_INDEX_CACHE["currency"] == currency
+        and now - float(PRICE_INDEX_CACHE["loaded_at"]) < PRICE_CACHE_TTL_SECONDS
+    ):
+        return PRICE_INDEX_CACHE
+
+    index: dict[str, dict[tuple[str, str], float]] = {}
+    effective_time = ""
+    conversion_rate: float | None = None
+    page_token = ""
+    session = compute_session()
+    for _ in range(20):
+        params = {
+            "currencyCode": currency,
+            "pageSize": "5000",
+        }
+        if page_token:
+            params["pageToken"] = page_token
+        response = session.get(
+            f"https://cloudbilling.googleapis.com/v1/services/{COMPUTE_BILLING_SERVICE_ID}/skus",
+            params=params,
+            timeout=30,
+        )
+        if response.status_code >= 400:
+            raise ApiError(f"Cloud Billing pricing catalog returned {response.status_code}.", 502)
+        data = response.json()
+        for sku in data.get("skus", []) or []:
+            if not isinstance(sku, dict):
+                continue
+            key = price_key_for_sku(sku)
+            price = sku_hourly_price(sku)
+            if not key or price is None:
+                continue
+            pricing_info = sku.get("pricingInfo", []) or []
+            if pricing_info:
+                effective_time = effective_time or str(pricing_info[0].get("effectiveTime", ""))
+                conversion_rate = conversion_rate or pricing_info[0].get("currencyConversionRate")
+            for region in sku.get("serviceRegions", []) or []:
+                region_key = str(region)
+                region_prices = index.setdefault(region_key, {})
+                region_prices.setdefault(key, price)
+        page_token = str(data.get("nextPageToken", "") or "")
+        if not page_token:
+            break
+
+    PRICE_INDEX_CACHE.update(
+        {
+            "loaded_at": now,
+            "currency": currency,
+            "index": index,
+            "effective_time": effective_time,
+            "conversion_rate": conversion_rate,
+        }
+    )
+    return PRICE_INDEX_CACHE
+
+
+def machine_spec(machine_type: str) -> dict[str, float | str] | None:
+    if machine_type in MACHINE_TYPE_SPECS:
+        return MACHINE_TYPE_SPECS[machine_type]
+    if machine_type.startswith("n1-standard-"):
+        try:
+            vcpus = float(machine_type.rsplit("-", 1)[-1])
+        except ValueError:
+            return None
+        return {"family": "n1-standard", "vcpus": vcpus, "memoryGb": vcpus * 3.75}
+    return None
+
+
+def build_price_estimate(
+    *,
+    machine_type: str,
+    gpu_type: str,
+    gpu_count: int,
+    zone: str,
+) -> dict[str, Any]:
+    currency = PRICE_CURRENCY_CODE
+    region = zone_region(zone)
+    spec = machine_spec(machine_type)
+    if not spec:
+        return {
+            "available": False,
+            "currency": currency,
+            "zone": zone,
+            "region": region,
+            "display": "Price unavailable",
+            "detail": f"No local machine specification for {machine_type}.",
+        }
+
+    price_index = refresh_price_index(currency)
+    region_prices = (price_index.get("index", {}) or {}).get(region, {})
+    family = str(spec["family"])
+    core_rate = region_prices.get((family, "core"))
+    ram_rate = region_prices.get((family, "ram"))
+    missing = []
+    if core_rate is None:
+        missing.append(f"{family} core")
+    if ram_rate is None:
+        missing.append(f"{family} RAM")
+
+    components = []
+    total = 0.0
+    if core_rate is not None:
+        amount = float(spec["vcpus"]) * core_rate
+        total += amount
+        components.append({"label": f"{spec['vcpus']:g} vCPU", "amountPln": round(amount, 4)})
+    if ram_rate is not None:
+        amount = float(spec["memoryGb"]) * ram_rate
+        total += amount
+        components.append({"label": f"{spec['memoryGb']:g} GB RAM", "amountPln": round(amount, 4)})
+
+    if gpu_count > 0:
+        gpu_rate = region_prices.get(("gpu", gpu_type))
+        if gpu_rate is None:
+            missing.append(gpu_type)
+        else:
+            amount = float(gpu_count) * gpu_rate
+            total += amount
+            components.append({"label": f"{gpu_count} x {gpu_type}", "amountPln": round(amount, 4)})
+
+    if missing:
+        return {
+            "available": False,
+            "currency": currency,
+            "zone": zone,
+            "region": region,
+            "display": "Price unavailable",
+            "detail": f"Missing pricing SKU: {', '.join(missing)}.",
+            "effectiveTime": price_index.get("effective_time", ""),
+            "currencyConversionRate": price_index.get("conversion_rate"),
+        }
+
+    rounded = round(total, 2)
+    return {
+        "available": True,
+        "currency": currency,
+        "amountPln": rounded,
+        "display": f"~{rounded:.2f} PLN/h",
+        "zone": zone,
+        "region": region,
+        "machineType": machine_type,
+        "gpuType": gpu_type,
+        "gpuCount": gpu_count,
+        "components": components,
+        "source": "Google Cloud Billing Catalog API",
+        "effectiveTime": price_index.get("effective_time", ""),
+        "currencyConversionRate": price_index.get("conversion_rate"),
+        "excludes": ["persistent disks", "snapshots", "network egress", "committed-use discounts", "taxes"],
+    }
+
+
+def safe_price_estimate(
+    *,
+    machine_type: str,
+    gpu_type: str,
+    gpu_count: int,
+    zone: str,
+) -> dict[str, Any]:
+    try:
+        return build_price_estimate(
+            machine_type=machine_type,
+            gpu_type=gpu_type,
+            gpu_count=gpu_count,
+            zone=zone,
+        )
+    except Exception as error:
+        logging.warning("Pricing estimate unavailable: %s", error)
+        return {
+            "available": False,
+            "currency": PRICE_CURRENCY_CODE,
+            "zone": zone,
+            "region": zone_region(zone),
+            "display": "Price unavailable",
+            "detail": "Cloud Billing pricing catalog is temporarily unavailable.",
+        }
+
+
 def hardware_profile(
     *,
     hardware_id: str,
@@ -406,6 +657,15 @@ def hardware_profile(
     accelerator_mode: str,
     zones: list[str],
 ) -> dict[str, Any]:
+    price_estimates = {
+        zone: safe_price_estimate(
+            machine_type=machine_type,
+            gpu_type=gpu_type,
+            gpu_count=gpu_count,
+            zone=zone,
+        )
+        for zone in zones
+    }
     return {
         "id": hardware_id,
         "label": label,
@@ -414,6 +674,7 @@ def hardware_profile(
         "gpuCount": gpu_count,
         "acceleratorMode": accelerator_mode,
         "zones": zones,
+        "priceEstimatesByZone": price_estimates,
     }
 
 
@@ -1711,6 +1972,12 @@ def build_status_payload(
         "gpuType": selected_gpu_type(),
         "gpuCount": selected_gpu_count(),
         "acceleratorMode": selected_accelerator_mode(),
+        "priceEstimate": safe_price_estimate(
+            machine_type=selected_machine_type(),
+            gpu_type=selected_gpu_type(),
+            gpu_count=selected_gpu_count(),
+            zone=selected_zone(),
+        ),
     }
     if instance is None:
         payload = {
