@@ -10,7 +10,7 @@ from functools import lru_cache
 from typing import Any
 
 import google.auth
-from flask import Flask, jsonify, make_response, request
+from flask import Flask, jsonify, make_response, request, g, has_request_context
 from google.auth.transport.requests import AuthorizedSession, Request
 from google.oauth2 import id_token
 import requests
@@ -121,6 +121,10 @@ SUNSHINE_PASSWORD_MAX_LENGTH = 128
 MIN_AUTO_STOP_HOURS = 1
 MAX_AUTO_STOP_HOURS = 24
 STATUS_NOT_FOUND = "NOT_FOUND"
+DEFAULT_CPU_MACHINE_TYPE = "n1-standard-4"
+DEFAULT_T4_MACHINE_TYPE = "n1-standard-4"
+DEFAULT_L4_MACHINE_TYPE = "g2-standard-4"
+CPU_HARDWARE_ID = "cpu"
 FIREWALL_WEB_ALLOWED: Final = [{"IPProtocol": "tcp", "ports": ["22", "8083"]}]
 FIREWALL_SUNSHINE_ALLOWED: Final = [
     {"IPProtocol": "tcp", "ports": ["47984", "47989", "47990", "48010", "27036-27037"]},
@@ -155,9 +159,39 @@ def compute_session() -> AuthorizedSession:
     return AuthorizedSession(credentials)
 
 
+def request_override(name: str, fallback: Any) -> Any:
+    if not has_request_context():
+        return fallback
+    return getattr(g, name, fallback)
+
+
+def selected_zone() -> str:
+    return str(request_override("target_zone", CONFIG["zone"]))
+
+
+def selected_machine_type() -> str:
+    return str(request_override("target_machine_type", CONFIG["machine_type"]))
+
+
+def selected_gpu_type() -> str:
+    return str(request_override("target_gpu_type", CONFIG["gpu_type"]))
+
+
+def selected_gpu_count() -> int:
+    return int(request_override("target_gpu_count", CONFIG["gpu_count"]) or 0)
+
+
+def selected_accelerator_mode() -> str:
+    return str(request_override("target_accelerator_mode", "attached"))
+
+
+def selected_hardware_id() -> str:
+    return str(request_override("target_hardware_id", default_hardware_selection()["id"]))
+
+
 def instance_url() -> str:
     project = require_env("project")
-    zone = require_env("zone")
+    zone = selected_zone()
     instance = require_env("instance")
     return (
         "https://compute.googleapis.com/compute/v1/"
@@ -167,7 +201,7 @@ def instance_url() -> str:
 
 def instances_collection_url() -> str:
     project = require_env("project")
-    zone = require_env("zone")
+    zone = selected_zone()
     return f"https://compute.googleapis.com/compute/v1/projects/{project}/zones/{zone}/instances"
 
 
@@ -187,19 +221,19 @@ def zone_region(zone: str) -> str:
 
 
 def machine_type_path() -> str:
-    return f"zones/{require_env('zone')}/machineTypes/{CONFIG['machine_type']}"
+    return f"zones/{selected_zone()}/machineTypes/{selected_machine_type()}"
 
 
 def accelerator_type_path() -> str:
-    return f"zones/{require_env('zone')}/acceleratorTypes/{CONFIG['gpu_type']}"
+    return f"zones/{selected_zone()}/acceleratorTypes/{selected_gpu_type()}"
 
 
 def disk_type_path() -> str:
-    return f"zones/{require_env('zone')}/diskTypes/{CONFIG['boot_disk_type']}"
+    return f"zones/{selected_zone()}/diskTypes/{CONFIG['boot_disk_type']}"
 
 
 def data_disk_type_path() -> str:
-    return f"zones/{require_env('zone')}/diskTypes/{CONFIG['data_disk_type']}"
+    return f"zones/{selected_zone()}/diskTypes/{CONFIG['data_disk_type']}"
 
 
 def network_path() -> str:
@@ -218,7 +252,7 @@ def subnet_path() -> str:
     if "/" in value:
         return value
     return (
-        f"projects/{require_env('project')}/regions/{zone_region(require_env('zone'))}/subnetworks/{value}"
+        f"projects/{require_env('project')}/regions/{zone_region(selected_zone())}/subnetworks/{value}"
     )
 
 
@@ -227,6 +261,220 @@ def parse_disk_size_gb(raw_value: str) -> str:
     if not digits:
         raise ApiError("BOOT_DISK_SIZE must include a numeric size.", 500)
     return digits
+
+
+def default_hardware_selection() -> dict[str, Any]:
+    gpu_count = int(CONFIG["gpu_count"] or 0)
+    gpu_type = str(CONFIG["gpu_type"] or "")
+    if gpu_count <= 0:
+        return {
+            "id": CPU_HARDWARE_ID,
+            "label": "CPU",
+            "zone": CONFIG["zone"],
+            "machineType": CONFIG["machine_type"] or DEFAULT_CPU_MACHINE_TYPE,
+            "gpuType": "",
+            "gpuCount": 0,
+            "acceleratorMode": "none",
+        }
+    return {
+        "id": gpu_type,
+        "label": gpu_type,
+        "zone": CONFIG["zone"],
+        "machineType": CONFIG["machine_type"],
+        "gpuType": gpu_type,
+        "gpuCount": gpu_count,
+        "acceleratorMode": "builtin" if gpu_type == "nvidia-l4" else "attached",
+    }
+
+
+def parse_int_payload_value(raw: Any, default: int) -> int:
+    if raw in (None, ""):
+        return default
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        raise ApiError("Hardware GPU count must be an integer.", 400)
+
+
+def clean_target_text(raw: Any, default: str) -> str:
+    value = str(raw or "").strip()
+    return value or default
+
+
+def apply_target_overrides(source: Any) -> None:
+    default = default_hardware_selection()
+    zone = clean_target_text(source.get("zone") if hasattr(source, "get") else None, default["zone"])
+    machine_type = clean_target_text(
+        source.get("machineType") if hasattr(source, "get") else None,
+        str(default["machineType"]),
+    )
+    gpu_type = clean_target_text(
+        source.get("gpuType") if hasattr(source, "get") else None,
+        str(default["gpuType"]),
+    )
+    hardware_id = clean_target_text(
+        source.get("hardwareId") if hasattr(source, "get") else None,
+        str(default["id"]),
+    )
+    accelerator_mode = clean_target_text(
+        source.get("acceleratorMode") if hasattr(source, "get") else None,
+        str(default["acceleratorMode"]),
+    )
+    gpu_count = parse_int_payload_value(
+        source.get("gpuCount") if hasattr(source, "get") else None,
+        int(default["gpuCount"]),
+    )
+
+    if not zone.replace("-", "").isalnum():
+        raise ApiError("Zone contains unsupported characters.", 400)
+    if not machine_type.replace("-", "").isalnum():
+        raise ApiError("Machine type contains unsupported characters.", 400)
+    if gpu_type and not gpu_type.replace("-", "").isalnum():
+        raise ApiError("GPU type contains unsupported characters.", 400)
+    if accelerator_mode not in {"none", "attached", "builtin"}:
+        raise ApiError("Accelerator mode is invalid.", 400)
+    if gpu_count < 0 or gpu_count > 16:
+        raise ApiError("GPU count is invalid.", 400)
+    if gpu_count == 0:
+        gpu_type = ""
+        accelerator_mode = "none"
+        hardware_id = CPU_HARDWARE_ID
+
+    g.target_zone = zone
+    g.target_machine_type = machine_type
+    g.target_gpu_type = gpu_type
+    g.target_gpu_count = gpu_count
+    g.target_accelerator_mode = accelerator_mode
+    g.target_hardware_id = hardware_id
+
+
+def compute_collection(url: str) -> list[dict[str, Any]]:
+    data = compute_request("GET", url)
+    if not isinstance(data, dict):
+        return []
+    items = data.get("items", []) or []
+    return [item for item in items if isinstance(item, dict)]
+
+
+def list_available_zones() -> list[str]:
+    project = require_env("project")
+    zones = []
+    for zone in compute_collection(f"https://compute.googleapis.com/compute/v1/projects/{project}/zones"):
+        if str(zone.get("status", "")).upper() != "UP":
+            continue
+        name = str(zone.get("name", ""))
+        if name:
+            zones.append(name)
+    return sorted(zones)
+
+
+def accelerator_zones(zones: list[str]) -> dict[str, list[str]]:
+    project = require_env("project")
+    result: dict[str, list[str]] = {}
+    zone_set = set(zones)
+    data = compute_request(
+        "GET",
+        f"https://compute.googleapis.com/compute/v1/projects/{project}/aggregated/acceleratorTypes",
+    )
+    if not isinstance(data, dict):
+        return result
+    items = data.get("items", {}) or {}
+    if not isinstance(items, dict):
+        return result
+    for scoped_name, scoped_data in items.items():
+        if not isinstance(scoped_data, dict):
+            continue
+        zone = str(scoped_name).rsplit("/", 1)[-1]
+        if zone not in zone_set:
+            continue
+        for accelerator in scoped_data.get("acceleratorTypes", []) or []:
+            if not isinstance(accelerator, dict):
+                continue
+            name = str(accelerator.get("name", ""))
+            if name:
+                result.setdefault(name, []).append(zone)
+    return {name: sorted(values) for name, values in sorted(result.items())}
+
+
+def hardware_profile(
+    *,
+    hardware_id: str,
+    label: str,
+    machine_type: str,
+    gpu_type: str,
+    gpu_count: int,
+    accelerator_mode: str,
+    zones: list[str],
+) -> dict[str, Any]:
+    return {
+        "id": hardware_id,
+        "label": label,
+        "machineType": machine_type,
+        "gpuType": gpu_type,
+        "gpuCount": gpu_count,
+        "acceleratorMode": accelerator_mode,
+        "zones": zones,
+    }
+
+
+def build_hardware_payload() -> dict[str, Any]:
+    zones = list_available_zones()
+    by_accelerator = accelerator_zones(zones)
+    profiles = [
+        hardware_profile(
+            hardware_id=CPU_HARDWARE_ID,
+            label="CPU",
+            machine_type=DEFAULT_CPU_MACHINE_TYPE,
+            gpu_type="",
+            gpu_count=0,
+            accelerator_mode="none",
+            zones=zones,
+        ),
+        hardware_profile(
+            hardware_id="nvidia-tesla-t4",
+            label="GPU T4",
+            machine_type=DEFAULT_T4_MACHINE_TYPE,
+            gpu_type="nvidia-tesla-t4",
+            gpu_count=1,
+            accelerator_mode="attached",
+            zones=by_accelerator.get("nvidia-tesla-t4", []),
+        ),
+        hardware_profile(
+            hardware_id="nvidia-l4",
+            label="GPU L4",
+            machine_type=DEFAULT_L4_MACHINE_TYPE,
+            gpu_type="nvidia-l4",
+            gpu_count=1,
+            accelerator_mode="builtin",
+            zones=by_accelerator.get("nvidia-l4", []),
+        ),
+    ]
+
+    known = {str(profile["id"]) for profile in profiles}
+    for accelerator_name, accelerator_zone_list in by_accelerator.items():
+        if accelerator_name in known:
+            continue
+        profiles.append(
+            hardware_profile(
+                hardware_id=accelerator_name,
+                label=accelerator_name,
+                machine_type=DEFAULT_T4_MACHINE_TYPE,
+                gpu_type=accelerator_name,
+                gpu_count=1,
+                accelerator_mode="attached",
+                zones=accelerator_zone_list,
+            )
+        )
+
+    return {
+        "refreshedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "project": CONFIG["project"],
+        "scope": "global-zones",
+        "defaultSelection": default_hardware_selection(),
+        "zones": zones,
+        "accelerators": by_accelerator,
+        "profiles": profiles,
+    }
 
 
 def decode_config_b64(name: str) -> str:
@@ -290,6 +538,7 @@ def handle_unexpected_error(error: Exception):
 
 @app.route("/healthz", methods=["GET", "OPTIONS"])
 @app.route("/api/config", methods=["GET", "OPTIONS"])
+@app.route("/api/hardware", methods=["GET", "OPTIONS"])
 @app.route("/api/me", methods=["GET", "OPTIONS"])
 @app.route("/api/status", methods=["GET", "OPTIONS"])
 @app.route("/api/command", methods=["POST", "OPTIONS"])
@@ -306,6 +555,7 @@ def options_passthrough():
                 "service": "cloud-run-vm-control",
                 "googleClientId": CONFIG["google_client_ids"][0] if CONFIG["google_client_ids"] else "",
                 "applicationCatalog": APPLICATION_CATALOG,
+                "defaultHardware": default_hardware_selection(),
                 "target": {
                     "project": CONFIG["project"],
                     "zone": CONFIG["zone"],
@@ -320,17 +570,23 @@ def options_passthrough():
             }
         )
 
+    if request.path == "/api/hardware":
+        require_user()
+        return jsonify(build_hardware_payload())
+
     if request.path == "/api/me":
         return jsonify({"user": require_user()})
 
     if request.path == "/api/status":
         user = require_user()
+        apply_target_overrides(request.args)
         instance = get_instance_or_none()
         return jsonify(build_status_payload(instance, user=user, command="status"))
 
     if request.path == "/api/command":
         user = require_user()
         payload = request.get_json(silent=True) or {}
+        apply_target_overrides(payload)
         command = str(payload.get("command", "")).strip().lower()
         if command not in {
             "status",
@@ -445,7 +701,7 @@ def wait_for_zone_operation(operation: dict[str, Any], timeout_seconds: int = 90
 
     url = (
         "https://compute.googleapis.com/compute/v1/"
-        f"projects/{CONFIG['project']}/zones/{CONFIG['zone']}/operations/{operation_name}"
+        f"projects/{CONFIG['project']}/zones/{selected_zone()}/operations/{operation_name}"
     )
     deadline = time.time() + timeout_seconds
     while time.time() < deadline:
@@ -870,8 +1126,8 @@ def build_instance_metadata_items(
         {"key": "vm-power-action-script", "value": decode_config_b64("vm_power_action_script_b64")},
         {"key": "vm-data-disk-device-name", "value": CONFIG["data_disk_device_name"]},
         {"key": "vm-data-disk-mount-root", "value": CONFIG["data_disk_mount_root"]},
-        {"key": "vm-gpu-count", "value": str(CONFIG["gpu_count"])},
-        {"key": "vm-gpu-type", "value": CONFIG["gpu_type"]},
+        {"key": "vm-gpu-count", "value": str(selected_gpu_count())},
+        {"key": "vm-gpu-type", "value": selected_gpu_type()},
         {
             "key": STEAM_ENV_METADATA_KEY,
             "value": build_steam_env_value(
@@ -1004,11 +1260,11 @@ def build_instance_create_request(
 
     if CONFIG["vm_tags"]:
         request_body["tags"] = {"items": CONFIG["vm_tags"]}
-    if CONFIG["gpu_count"] > 0:
+    if selected_gpu_count() > 0 and selected_accelerator_mode() == "attached":
         request_body["guestAccelerators"] = [
             {
                 "acceleratorType": accelerator_type_path(),
-                "acceleratorCount": CONFIG["gpu_count"],
+                "acceleratorCount": selected_gpu_count(),
             }
         ]
     return request_body
@@ -1448,14 +1704,23 @@ def build_status_payload(
     duckdns_updated: bool | None = None,
     sunshine_credentials: dict[str, str] | None = None,
 ) -> dict[str, Any]:
+    hardware = {
+        "id": selected_hardware_id(),
+        "zone": selected_zone(),
+        "machineType": selected_machine_type(),
+        "gpuType": selected_gpu_type(),
+        "gpuCount": selected_gpu_count(),
+        "acceleratorMode": selected_accelerator_mode(),
+    }
     if instance is None:
         payload = {
             "command": command,
             "target": {
                 "project": CONFIG["project"],
-                "zone": CONFIG["zone"],
+                "zone": selected_zone(),
                 "instance": CONFIG["instance"],
             },
+            "hardware": hardware,
             "status": STATUS_NOT_FOUND,
             "instanceExists": False,
             "allowedCommands": allowed_commands(None),
@@ -1493,9 +1758,10 @@ def build_status_payload(
         "command": command,
         "target": {
             "project": CONFIG["project"],
-            "zone": CONFIG["zone"],
+            "zone": selected_zone(),
             "instance": CONFIG["instance"],
         },
+        "hardware": hardware,
         "status": status,
         "instanceExists": True,
         "allowedCommands": allowed_commands(instance),

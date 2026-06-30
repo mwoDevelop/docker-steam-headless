@@ -108,6 +108,10 @@
     signOut: document.querySelector("#sign-out"),
     targetSummary: document.querySelector("#target-summary"),
     refreshStatus: document.querySelector("#refresh-status"),
+    hardwareSelect: document.querySelector("#hardware-select"),
+    zoneSelect: document.querySelector("#zone-select"),
+    refreshHardware: document.querySelector("#refresh-hardware"),
+    hardwareOptionsStatus: document.querySelector("#hardware-options-status"),
     autoStopHours: document.querySelector("#auto-stop-hours"),
     backupSelect: document.querySelector("#backup-select"),
     backupOptionsStatus: document.querySelector("#backup-options-status"),
@@ -130,6 +134,7 @@
     token: "",
     user: null,
     lastStatus: null,
+    hardwarePayload: null,
     isBusy: false,
     commandStatusRefreshTimer: null,
     history: [],
@@ -144,11 +149,18 @@
     elements.autoStopHours.value = Object.prototype.hasOwnProperty.call(saved, "autoStopHours")
       ? String(saved.autoStopHours || "")
       : defaultAutoStopHours;
+    if (elements.hardwareSelect && saved.hardwareId) {
+      elements.hardwareSelect.dataset.savedValue = String(saved.hardwareId);
+    }
+    if (elements.zoneSelect && saved.zone) {
+      elements.zoneSelect.dataset.savedValue = String(saved.zone);
+    }
     renderHistory();
     renderTargetSummary();
     renderBackupOptions(null);
     renderApplicationOptions(null);
     renderMinecraftOptions(null);
+    renderHardwareOptions(null);
     renderAccess(null);
     updateAuthUi();
   }
@@ -160,6 +172,8 @@
       JSON.stringify({
         backendUrl: state.backendUrl,
         autoStopHours: String(elements.autoStopHours.value || "").trim(),
+        hardwareId: String(elements.hardwareSelect && elements.hardwareSelect.value || "").trim(),
+        zone: String(elements.zoneSelect && elements.zoneSelect.value || "").trim(),
       }),
     );
   }
@@ -176,6 +190,9 @@
     state.isBusy = nextBusy;
     elements.connect.disabled = nextBusy;
     elements.googleSignIn.disabled = nextBusy || !state.backendConfig;
+    if (elements.refreshHardware) {
+      elements.refreshHardware.disabled = nextBusy || !state.user;
+    }
     updateActionAvailability();
 
     const canSetSunshine = canSetSunshinePassword(state.lastStatus);
@@ -215,6 +232,12 @@
 
     if (elements.refreshStatus) {
       elements.refreshStatus.disabled = !state.user || !allowed.has("status");
+    }
+    if (elements.hardwareSelect) {
+      elements.hardwareSelect.disabled = state.isBusy || !state.user || !state.hardwarePayload;
+    }
+    if (elements.zoneSelect) {
+      elements.zoneSelect.disabled = state.isBusy || !state.user || !selectedHardwareProfile();
     }
     elements.autoStopHours.disabled = state.isBusy || !state.user || (!allowed.has("start") && !allowed.has("create"));
     if (elements.backupSelect) {
@@ -420,6 +443,143 @@
     return app ? String(app.label || app.id) : appId;
   }
 
+  function getHardwareProfiles() {
+    const profiles = state.hardwarePayload && Array.isArray(state.hardwarePayload.profiles)
+      ? state.hardwarePayload.profiles
+      : [];
+    return profiles.filter((profile) => profile && profile.id && Array.isArray(profile.zones));
+  }
+
+  function selectedHardwareProfile() {
+    const selectedId = String(elements.hardwareSelect && elements.hardwareSelect.value || "").trim();
+    return getHardwareProfiles().find((profile) => String(profile.id) === selectedId) || null;
+  }
+
+  function selectedZone() {
+    return String(elements.zoneSelect && elements.zoneSelect.value || "").trim();
+  }
+
+  function selectedHardwareLabel() {
+    const profile = selectedHardwareProfile();
+    return profile ? String(profile.label || profile.id) : "";
+  }
+
+  function selectedTargetParams() {
+    const profile = selectedHardwareProfile();
+    const zone = selectedZone();
+    if (!profile || !zone) {
+      return {};
+    }
+    return {
+      hardwareId: String(profile.id || ""),
+      zone,
+      machineType: String(profile.machineType || ""),
+      gpuType: String(profile.gpuType || ""),
+      gpuCount: Number(profile.gpuCount || 0),
+      acceleratorMode: String(profile.acceleratorMode || "none"),
+    };
+  }
+
+  function statusQueryString() {
+    const params = new URLSearchParams();
+    Object.entries(selectedTargetParams()).forEach(([key, value]) => {
+      if (value !== "" && value !== null && value !== undefined) {
+        params.set(key, String(value));
+      }
+    });
+    const query = params.toString();
+    return query ? `?${query}` : "";
+  }
+
+  function renderHardwareOptions(payload) {
+    if (!elements.hardwareSelect || !elements.zoneSelect) {
+      return;
+    }
+
+    state.hardwarePayload = payload || state.hardwarePayload;
+    const profiles = getHardwareProfiles();
+    if (!profiles.length) {
+      elements.hardwareSelect.innerHTML = '<option value="">No hardware profiles loaded</option>';
+      elements.zoneSelect.innerHTML = '<option value="">No zones loaded</option>';
+      if (elements.hardwareOptionsStatus) {
+        elements.hardwareOptionsStatus.textContent = "Sign in and refresh hardware to load Compute Engine availability.";
+      }
+      updateActionAvailability();
+      return;
+    }
+
+    const previousHardware = elements.hardwareSelect.value
+      || elements.hardwareSelect.dataset.savedValue
+      || String((state.hardwarePayload.defaultSelection || {}).id || "");
+    elements.hardwareSelect.innerHTML = profiles.map((profile) => {
+      const id = String(profile.id || "");
+      const gpuCount = Number(profile.gpuCount || 0);
+      const zoneCount = Array.isArray(profile.zones) ? profile.zones.length : 0;
+      const suffix = gpuCount > 0
+        ? `${profile.gpuType || profile.id}, ${profile.machineType || "machine"}`
+        : `${profile.machineType || "machine"}`;
+      return `<option value="${escapeHtml(id)}">${escapeHtml(profile.label || id)} (${escapeHtml(suffix)}, ${zoneCount} zones)</option>`;
+    }).join("");
+    if (profiles.some((profile) => String(profile.id) === previousHardware)) {
+      elements.hardwareSelect.value = previousHardware;
+    } else {
+      elements.hardwareSelect.value = String(profiles[0].id || "");
+    }
+    elements.hardwareSelect.dataset.savedValue = "";
+    renderZoneOptions();
+    updateActionAvailability();
+  }
+
+  function renderZoneOptions() {
+    if (!elements.zoneSelect) {
+      return;
+    }
+    const profile = selectedHardwareProfile();
+    const zones = profile && Array.isArray(profile.zones) ? profile.zones : [];
+    if (!zones.length) {
+      elements.zoneSelect.innerHTML = '<option value="">No zones available</option>';
+      if (elements.hardwareOptionsStatus) {
+        elements.hardwareOptionsStatus.textContent = `No zones currently expose ${selectedHardwareLabel() || "selected hardware"}. Refresh later or choose CPU.`;
+      }
+      saveConfig();
+      updateActionAvailability();
+      return;
+    }
+    const previousZone = elements.zoneSelect.value
+      || elements.zoneSelect.dataset.savedValue
+      || String((state.hardwarePayload && state.hardwarePayload.defaultSelection || {}).zone || "");
+    elements.zoneSelect.innerHTML = zones.map((zone) => (
+      `<option value="${escapeHtml(zone)}">${escapeHtml(zone)}</option>`
+    )).join("");
+    if (zones.includes(previousZone)) {
+      elements.zoneSelect.value = previousZone;
+    } else {
+      elements.zoneSelect.value = zones[0];
+    }
+    elements.zoneSelect.dataset.savedValue = "";
+    if (elements.hardwareOptionsStatus) {
+      const refreshedAt = state.hardwarePayload && state.hardwarePayload.refreshedAt
+        ? ` Refreshed: ${state.hardwarePayload.refreshedAt}.`
+        : "";
+      elements.hardwareOptionsStatus.textContent = `${selectedHardwareLabel()} available in ${zones.length} zone${zones.length === 1 ? "" : "s"}.${refreshedAt}`;
+    }
+    saveConfig();
+    updateActionAvailability();
+  }
+
+  async function refreshHardwareOptions(options) {
+    const silent = Boolean(options && options.silent);
+    if (!state.user) {
+      throw new Error("Sign in with Google first.");
+    }
+    if (!silent && elements.hardwareOptionsStatus) {
+      elements.hardwareOptionsStatus.textContent = "Refreshing Compute Engine hardware availability...";
+    }
+    const data = await fetchApi("/api/hardware", { method: "GET" });
+    renderHardwareOptions(data);
+    return data;
+  }
+
   function renderBackupOptions(payload) {
     if (!elements.backupSelect) {
       return;
@@ -615,6 +775,16 @@
         <p><strong>Last games archive:</strong> <code>${escapeHtml(persistence.gamesArchive && persistence.gamesArchive.lastAt || "n/a")}</code></p>
       `
       : "";
+    const selectedParams = selectedTargetParams();
+    const responseHardware = state.lastStatus && state.lastStatus.hardware ? state.lastStatus.hardware : {};
+    const effectiveHardware = Object.keys(selectedParams).length ? selectedParams : responseHardware;
+    const hardwareMeta = effectiveHardware && effectiveHardware.zone
+      ? `
+        <p><strong>Hardware:</strong> <code>${escapeHtml(selectedHardwareLabel() || effectiveHardware.id || "unknown")}</code></p>
+        <p><strong>Selected zone:</strong> <code>${escapeHtml(effectiveHardware.zone || "unknown")}</code></p>
+        <p><strong>Machine:</strong> <code>${escapeHtml(effectiveHardware.machineType || "unknown")}</code></p>
+      `
+      : "";
 
     elements.targetSummary.innerHTML = `
       <p><strong>Backend:</strong> <code>${escapeHtml(state.backendUrl)}</code></p>
@@ -622,6 +792,7 @@
       <p><strong>Zone:</strong> <code>${escapeHtml(target.zone || "unknown")}</code></p>
       <p><strong>Instance:</strong> <code>${escapeHtml(target.instance || "unknown")}</code></p>
       ${domains}
+      ${hardwareMeta}
       ${persistenceMeta}
     `;
   }
@@ -663,6 +834,7 @@
     state.backendConfig = config;
     renderTargetSummary();
     renderApplicationOptions(state.lastStatus);
+    renderHardwareOptions({ profiles: [], defaultSelection: config.defaultHardware || null });
     updateAuthUi();
 
     if (!config.googleClientId) {
@@ -674,6 +846,7 @@
 
     if (state.token) {
       await restoreSession();
+      await refreshHardwareOptions({ silent: true });
       await refreshStatus({ silent: true });
     }
   }
@@ -728,6 +901,7 @@
       setBanner("Verifying Google session...", "warning");
       storeSessionToken(response.access_token || "");
       await restoreSession();
+      await refreshHardwareOptions({ silent: true });
       await refreshStatus({ silent: true });
     } catch (error) {
       clearSession();
@@ -864,7 +1038,7 @@
     schedulePostCommandStatusRefresh(command);
 
     try {
-      const body = { command };
+      const body = { command, ...selectedTargetParams() };
       if (command === "delete") {
         body.confirmDelete = true;
       }
@@ -954,6 +1128,7 @@
         body: JSON.stringify({
           command: "set-sunshine-password",
           sunshinePassword: password,
+          ...selectedTargetParams(),
         }),
       });
       state.lastStatus = data;
@@ -1121,7 +1296,7 @@
     }
 
     try {
-      const data = await fetchApi("/api/status", { method: "GET" });
+      const data = await fetchApi(`/api/status${statusQueryString()}`, { method: "GET" });
       renderStatusPayload(data);
       if (!silent) {
         setBanner(statusBannerMessage("VM status loaded", data), "success");
@@ -1423,6 +1598,51 @@
 
   if (elements.applicationSelect) {
     elements.applicationSelect.addEventListener("change", updateActionAvailability);
+  }
+
+  if (elements.hardwareSelect) {
+    elements.hardwareSelect.addEventListener("change", async () => {
+      try {
+        if (state.user) {
+          await refreshHardwareOptions({ silent: false });
+        } else {
+          renderZoneOptions();
+        }
+        await refreshStatus({ silent: true });
+      } catch (error) {
+        handleError(error);
+      }
+    });
+  }
+
+  if (elements.zoneSelect) {
+    elements.zoneSelect.addEventListener("change", async () => {
+      saveConfig();
+      renderTargetSummary();
+      updateActionAvailability();
+      try {
+        if (state.user) {
+          await refreshStatus({ silent: true });
+        }
+      } catch (error) {
+        handleError(error);
+      }
+    });
+  }
+
+  if (elements.refreshHardware) {
+    elements.refreshHardware.addEventListener("click", async () => {
+      try {
+        setBusy(true);
+        await refreshHardwareOptions({ silent: false });
+        await refreshStatus({ silent: true });
+        setBanner("Hardware availability refreshed.", "success");
+      } catch (error) {
+        handleError(error);
+      } finally {
+        setBusy(false);
+      }
+    });
   }
 
   loadConfig();

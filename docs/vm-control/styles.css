@@ -279,7 +279,8 @@ select {
 }
 
 .start-options,
-.backup-options {
+.backup-options,
+.hardware-options {
   display: grid;
   gap: 12px;
   grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
@@ -287,6 +288,10 @@ select {
   margin-top: 14px;
   padding-top: 14px;
   border-top: 1px solid var(--line);
+}
+
+.hardware-options {
+  grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr) auto;
 }
 
 .inline-action-group {
@@ -304,7 +309,8 @@ select {
 }
 
 .start-options p,
-.backup-options p {
+.backup-options p,
+.hardware-options p {
   grid-column: 1 / -1;
   margin: 0 0 4px;
   color: var(--muted);
@@ -694,6 +700,7 @@ code,
   .control-row,
   .start-options,
   .backup-options,
+  .hardware-options,
   .access-grid,
   .auth-grid {
     grid-template-columns: 1fr;
