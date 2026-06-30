@@ -762,7 +762,9 @@
       return;
     }
 
-    const target = config.target || {};
+    const target = state.lastStatus && state.lastStatus.target
+      ? state.lastStatus.target
+      : (config.target || {});
     const domains = (config.duckdnsDomains || []).length
       ? `<p><strong>DuckDNS:</strong> <code>${escapeHtml(config.duckdnsDomains.join(", "))}</code></p>`
       : "<p><strong>DuckDNS:</strong> not configured</p>";
@@ -789,7 +791,7 @@
     elements.targetSummary.innerHTML = `
       <p><strong>Backend:</strong> <code>${escapeHtml(state.backendUrl)}</code></p>
       <p><strong>Project:</strong> <code>${escapeHtml(target.project || "unknown")}</code></p>
-      <p><strong>Zone:</strong> <code>${escapeHtml(target.zone || "unknown")}</code></p>
+      <p><strong>Zone:</strong> <code>${escapeHtml((effectiveHardware && effectiveHardware.zone) || target.zone || "unknown")}</code></p>
       <p><strong>Instance:</strong> <code>${escapeHtml(target.instance || "unknown")}</code></p>
       ${domains}
       ${hardwareMeta}
