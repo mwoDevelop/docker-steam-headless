@@ -136,6 +136,7 @@
     user: null,
     lastStatus: null,
     hardwarePayload: null,
+    priceEstimates: {},
     isBusy: false,
     commandStatusRefreshTimer: null,
     history: [],
@@ -490,6 +491,11 @@
     };
   }
 
+  function selectedTargetKey() {
+    const params = selectedTargetParams();
+    return Object.keys(params).length ? JSON.stringify(params) : "";
+  }
+
   function statusQueryString() {
     const params = new URLSearchParams();
     Object.entries(selectedTargetParams()).forEach(([key, value]) => {
@@ -583,8 +589,9 @@
   function selectedPriceEstimate() {
     const profile = selectedHardwareProfile();
     const zone = selectedZone();
-    if (profile && zone && profile.priceEstimatesByZone && profile.priceEstimatesByZone[zone]) {
-      return profile.priceEstimatesByZone[zone];
+    const key = selectedTargetKey();
+    if (key && state.priceEstimates[key]) {
+      return state.priceEstimates[key];
     }
     const statusPrice = state.lastStatus && state.lastStatus.hardware && state.lastStatus.hardware.priceEstimate
       ? state.lastStatus.hardware.priceEstimate
@@ -593,6 +600,27 @@
       return statusPrice;
     }
     return null;
+  }
+
+  async function refreshPriceEstimate(options) {
+    const silent = Boolean(options && options.silent);
+    const key = selectedTargetKey();
+    if (!state.user || !key) {
+      renderHardwarePriceEstimate(null);
+      return null;
+    }
+    if (!silent && elements.hardwarePriceEstimate) {
+      elements.hardwarePriceEstimate.dataset.tone = "neutral";
+      elements.hardwarePriceEstimate.textContent = "Loading estimated hourly price...";
+    }
+    const data = await fetchApi(`/api/price${statusQueryString()}`, { method: "GET" });
+    const estimate = data && data.priceEstimate ? data.priceEstimate : null;
+    if (estimate) {
+      state.priceEstimates[key] = estimate;
+    }
+    renderHardwarePriceEstimate(estimate);
+    renderTargetSummary();
+    return estimate;
   }
 
   function renderHardwarePriceEstimate(estimate) {
@@ -907,6 +935,7 @@
     if (state.token) {
       await restoreSession();
       await refreshHardwareOptions({ silent: true });
+      await refreshPriceEstimate({ silent: true });
       await refreshStatus({ silent: true });
     }
   }
@@ -962,6 +991,7 @@
       storeSessionToken(response.access_token || "");
       await restoreSession();
       await refreshHardwareOptions({ silent: true });
+      await refreshPriceEstimate({ silent: true });
       await refreshStatus({ silent: true });
     } catch (error) {
       clearSession();
@@ -1668,6 +1698,7 @@
         } else {
           renderZoneOptions();
         }
+        await refreshPriceEstimate({ silent: false });
         await refreshStatus({ silent: true });
       } catch (error) {
         handleError(error);
@@ -1683,6 +1714,7 @@
       updateActionAvailability();
       try {
         if (state.user) {
+          await refreshPriceEstimate({ silent: false });
           await refreshStatus({ silent: true });
         }
       } catch (error) {
@@ -1696,6 +1728,7 @@
       try {
         setBusy(true);
         await refreshHardwareOptions({ silent: false });
+        await refreshPriceEstimate({ silent: false });
         await refreshStatus({ silent: true });
         setBanner("Hardware availability refreshed.", "success");
       } catch (error) {

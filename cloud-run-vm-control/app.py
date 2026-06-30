@@ -467,7 +467,7 @@ def price_key_for_sku(sku: dict[str, Any]) -> tuple[str, str] | None:
     return None
 
 
-def refresh_price_index(currency: str = PRICE_CURRENCY_CODE) -> dict[str, Any]:
+def refresh_price_index(currency: str = PRICE_CURRENCY_CODE, *, allow_fetch: bool = True) -> dict[str, Any]:
     now = time.time()
     if (
         PRICE_INDEX_CACHE["index"]
@@ -475,6 +475,8 @@ def refresh_price_index(currency: str = PRICE_CURRENCY_CODE) -> dict[str, Any]:
         and now - float(PRICE_INDEX_CACHE["loaded_at"]) < PRICE_CACHE_TTL_SECONDS
     ):
         return PRICE_INDEX_CACHE
+    if not allow_fetch:
+        raise ApiError("Pricing catalog is not loaded yet.", 503)
 
     index: dict[str, dict[tuple[str, str], float]] = {}
     effective_time = ""
@@ -545,6 +547,7 @@ def build_price_estimate(
     gpu_type: str,
     gpu_count: int,
     zone: str,
+    allow_fetch: bool = True,
 ) -> dict[str, Any]:
     currency = PRICE_CURRENCY_CODE
     region = zone_region(zone)
@@ -559,7 +562,7 @@ def build_price_estimate(
             "detail": f"No local machine specification for {machine_type}.",
         }
 
-    price_index = refresh_price_index(currency)
+    price_index = refresh_price_index(currency, allow_fetch=allow_fetch)
     region_prices = (price_index.get("index", {}) or {}).get(region, {})
     family = str(spec["family"])
     core_rate = region_prices.get((family, "core"))
@@ -627,6 +630,7 @@ def safe_price_estimate(
     gpu_type: str,
     gpu_count: int,
     zone: str,
+    allow_fetch: bool = True,
 ) -> dict[str, Any]:
     try:
         return build_price_estimate(
@@ -634,7 +638,27 @@ def safe_price_estimate(
             gpu_type=gpu_type,
             gpu_count=gpu_count,
             zone=zone,
+            allow_fetch=allow_fetch,
         )
+    except ApiError as error:
+        if not allow_fetch:
+            return {
+                "available": False,
+                "currency": PRICE_CURRENCY_CODE,
+                "zone": zone,
+                "region": zone_region(zone),
+                "display": "Price not loaded",
+                "detail": error.message,
+            }
+        logging.warning("Pricing estimate unavailable: %s", error)
+        return {
+            "available": False,
+            "currency": PRICE_CURRENCY_CODE,
+            "zone": zone,
+            "region": zone_region(zone),
+            "display": "Price unavailable",
+            "detail": "Cloud Billing pricing catalog is temporarily unavailable.",
+        }
     except Exception as error:
         logging.warning("Pricing estimate unavailable: %s", error)
         return {
@@ -657,15 +681,6 @@ def hardware_profile(
     accelerator_mode: str,
     zones: list[str],
 ) -> dict[str, Any]:
-    price_estimates = {
-        zone: safe_price_estimate(
-            machine_type=machine_type,
-            gpu_type=gpu_type,
-            gpu_count=gpu_count,
-            zone=zone,
-        )
-        for zone in zones
-    }
     return {
         "id": hardware_id,
         "label": label,
@@ -674,7 +689,6 @@ def hardware_profile(
         "gpuCount": gpu_count,
         "acceleratorMode": accelerator_mode,
         "zones": zones,
-        "priceEstimatesByZone": price_estimates,
     }
 
 
@@ -800,6 +814,7 @@ def handle_unexpected_error(error: Exception):
 @app.route("/healthz", methods=["GET", "OPTIONS"])
 @app.route("/api/config", methods=["GET", "OPTIONS"])
 @app.route("/api/hardware", methods=["GET", "OPTIONS"])
+@app.route("/api/price", methods=["GET", "OPTIONS"])
 @app.route("/api/me", methods=["GET", "OPTIONS"])
 @app.route("/api/status", methods=["GET", "OPTIONS"])
 @app.route("/api/command", methods=["POST", "OPTIONS"])
@@ -834,6 +849,29 @@ def options_passthrough():
     if request.path == "/api/hardware":
         require_user()
         return jsonify(build_hardware_payload())
+
+    if request.path == "/api/price":
+        require_user()
+        apply_target_overrides(request.args)
+        return jsonify(
+            {
+                "hardware": {
+                    "id": selected_hardware_id(),
+                    "zone": selected_zone(),
+                    "machineType": selected_machine_type(),
+                    "gpuType": selected_gpu_type(),
+                    "gpuCount": selected_gpu_count(),
+                    "acceleratorMode": selected_accelerator_mode(),
+                },
+                "priceEstimate": safe_price_estimate(
+                    machine_type=selected_machine_type(),
+                    gpu_type=selected_gpu_type(),
+                    gpu_count=selected_gpu_count(),
+                    zone=selected_zone(),
+                    allow_fetch=True,
+                ),
+            }
+        )
 
     if request.path == "/api/me":
         return jsonify({"user": require_user()})
@@ -1977,6 +2015,7 @@ def build_status_payload(
             gpu_type=selected_gpu_type(),
             gpu_count=selected_gpu_count(),
             zone=selected_zone(),
+            allow_fetch=False,
         ),
     }
     if instance is None:
