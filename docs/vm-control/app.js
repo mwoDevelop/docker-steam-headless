@@ -121,6 +121,7 @@
     minecraftAddress: document.querySelector("#minecraft-address"),
     minecraftOptionsStatus: document.querySelector("#minecraft-options-status"),
     banner: document.querySelector("#banner"),
+    commandStatus: document.querySelector("#command-status"),
     access: document.querySelector("#access"),
     history: document.querySelector("#history"),
     form: document.querySelector("#settings-form"),
@@ -285,6 +286,14 @@
     elements.banner.dataset.tone = tone || "neutral";
   }
 
+  function setCommandStatus(message, tone) {
+    if (!elements.commandStatus) {
+      return;
+    }
+    elements.commandStatus.textContent = message;
+    elements.commandStatus.dataset.tone = tone || "neutral";
+  }
+
   function statusBannerMessage(prefix, data) {
     if (data && data.instanceExists === false) {
       const target = data.target || {};
@@ -320,7 +329,7 @@
 
       try {
         const data = await refreshStatus({ silent: true });
-        setBanner(statusBannerMessage("VM status refreshed", data), state.isBusy ? "warning" : "success");
+        setCommandStatus(statusBannerMessage("VM status refreshed", data), state.isBusy ? "warning" : "success");
       } catch (error) {
         handleError(error);
       }
@@ -1123,7 +1132,7 @@
     const appLabel = command === "install-app" || command === "uninstall-app"
       ? ` for ${selectedApplicationLabel()}`
       : "";
-    setBanner(`Running "${command}"${appLabel} on the VM...`, "warning");
+    setCommandStatus(`Running "${command}"${appLabel} on the VM...`, "warning");
     applyCommandTransition(command);
     schedulePostCommandStatusRefresh(command);
 
@@ -1153,7 +1162,7 @@
       });
       renderStatusPayload(data);
       if (COMMANDS_TO_POLL_AFTER_RESPONSE.has(command) && isTransitionalStatus(data)) {
-        setBanner(`Command "${command}" accepted. Waiting for current VM and Sunshine status...`, "warning");
+        setCommandStatus(`Command "${command}" accepted. Waiting for current VM and Sunshine status...`, "warning");
         data = await waitForStatusSettled(command, data);
         renderStatusPayload(data);
       }
@@ -1166,7 +1175,7 @@
         : "";
       const powerActionPhase = String(data.powerAction && data.powerAction.phase ? data.powerAction.phase : "").toLowerCase();
       const bannerTone = powerActionPhase === "failed" ? "warning" : "success";
-      setBanner(`${commandCompletionMessage(command, data)}${suffix}${autoStop}`, bannerTone);
+      setCommandStatus(`${commandCompletionMessage(command, data)}${suffix}${autoStop}`, bannerTone);
       pushHistory({
         at: new Date().toISOString(),
         command,
@@ -1382,14 +1391,14 @@
 
     if (!silent) {
       setBusy(true);
-      setBanner("Refreshing VM status...", "warning");
+      setCommandStatus("Refreshing VM status...", "warning");
     }
 
     try {
       const data = await fetchApi(`/api/status${statusQueryString()}`, { method: "GET" });
       renderStatusPayload(data);
       if (!silent) {
-        setBanner(statusBannerMessage("VM status loaded", data), "success");
+        setCommandStatus(statusBannerMessage("VM status loaded", data), "success");
       }
       return data;
     } finally {
@@ -1652,7 +1661,7 @@
     elements.refreshStatus.addEventListener("click", async () => {
       try {
         const data = await refreshStatus({ silent: true });
-        setBanner(statusBannerMessage("VM status loaded", data), state.isBusy ? "warning" : "success");
+        setCommandStatus(statusBannerMessage("VM status loaded", data), state.isBusy ? "warning" : "success");
       } catch (error) {
         handleError(error);
       }
@@ -1665,7 +1674,7 @@
       if (command === "status") {
         try {
           const data = await refreshStatus({ silent: true });
-          setBanner(statusBannerMessage("VM status loaded", data), state.isBusy ? "warning" : "success");
+          setCommandStatus(statusBannerMessage("VM status loaded", data), state.isBusy ? "warning" : "success");
         } catch (error) {
           handleError(error);
         }

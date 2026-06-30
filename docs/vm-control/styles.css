@@ -86,6 +86,7 @@ body::before {
 .run-meta,
 .run-links,
 .banner,
+.command-status,
 label span {
   color: var(--muted);
 }
@@ -421,11 +422,13 @@ code,
 .run-badge,
 .run-links,
 .banner,
+.command-status,
 .run-meta {
   font-family: "IBM Plex Mono", monospace;
 }
 
-.banner {
+.banner,
+.command-status {
   margin-top: 16px;
   padding: 16px 18px;
   border-radius: 16px;
@@ -434,19 +437,26 @@ code,
   line-height: 1.5;
 }
 
-.banner[data-tone="success"] {
+.command-status {
+  margin-top: 12px;
+}
+
+.banner[data-tone="success"],
+.command-status[data-tone="success"] {
   border-color: rgba(106, 228, 208, 0.3);
   background: rgba(106, 228, 208, 0.08);
   color: #c6fff4;
 }
 
-.banner[data-tone="warning"] {
+.banner[data-tone="warning"],
+.command-status[data-tone="warning"] {
   border-color: rgba(242, 198, 109, 0.3);
   background: rgba(242, 198, 109, 0.08);
   color: #ffe8b9;
 }
 
-.banner[data-tone="error"] {
+.banner[data-tone="error"],
+.command-status[data-tone="error"] {
   border-color: rgba(255, 131, 105, 0.34);
   background: rgba(255, 131, 105, 0.08);
   color: #ffd5cd;
