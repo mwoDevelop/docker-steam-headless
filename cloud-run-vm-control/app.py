@@ -69,6 +69,7 @@ CONFIG = {
     "firewall_source_ranges": csv_env("FIREWALL_SOURCE_RANGES") or csv_env("ALLOW_CIDR") or ["0.0.0.0/0"],
     "firewall_rule_web": os.environ.get("FIREWALL_RULE_WEB", "allow-steam-headless-web"),
     "firewall_rule_sunshine": os.environ.get("FIREWALL_RULE_SUNSHINE", "allow-sunshine"),
+    "firewall_rule_minecraft": os.environ.get("FIREWALL_RULE_MINECRAFT", "allow-minecraft-server"),
     "vm_service_account_email": os.environ.get("VM_SERVICE_ACCOUNT_EMAIL", ""),
     "gdrive_folder_id": os.environ.get("GDRIVE_FOLDER_ID", ""),
     "gdrive_state_root": os.environ.get("GDRIVE_STATE_ROOT", "steam-vm-state"),
@@ -87,6 +88,7 @@ CONFIG = {
     "duckdns_token": os.environ.get("DUCKDNS_TOKEN", ""),
     "novnc_port": os.environ.get("VM_NOVNC_PORT", "8083"),
     "sunshine_port": os.environ.get("VM_SUNSHINE_PORT", "47990"),
+    "minecraft_port": os.environ.get("VM_MINECRAFT_PORT", "25565"),
 }
 
 SUNSHINE_HEALTHCHECK_TIMEOUT_SECONDS: Final = 8
@@ -95,6 +97,8 @@ AUTO_STOP_METADATA_KEY = "vm-auto-shutdown-hours"
 STEAM_ENV_METADATA_KEY = "steam-headless-env"
 SUNSHINE_STATUS_METADATA_KEY = "vm-sunshine-status"
 SUNSHINE_STATUS_DETAIL_METADATA_KEY = "vm-sunshine-status-detail"
+MINECRAFT_STATUS_METADATA_KEY = "vm-minecraft-status"
+MINECRAFT_STATUS_DETAIL_METADATA_KEY = "vm-minecraft-status-detail"
 POWER_ACTION_METADATA_KEY = "vm-pending-power-action"
 POWER_ACTION_STATUS_METADATA_KEY = "vm-power-action-status"
 RESTORE_MODE_METADATA_KEY = "vm-restore-mode"
@@ -122,6 +126,7 @@ FIREWALL_SUNSHINE_ALLOWED: Final = [
     {"IPProtocol": "tcp", "ports": ["47984", "47989", "47990", "48010", "27036-27037"]},
     {"IPProtocol": "udp", "ports": ["47998", "47999", "48000", "48002", "48010", "27031-27036"]},
 ]
+FIREWALL_MINECRAFT_ALLOWED: Final = [{"IPProtocol": "tcp", "ports": [CONFIG["minecraft_port"]]}]
 APPLICATION_CATALOG: Final = [
     {
         "id": "prism",
@@ -310,6 +315,7 @@ def options_passthrough():
                 "ports": {
                     "novnc": CONFIG["novnc_port"],
                     "sunshine": CONFIG["sunshine_port"],
+                    "minecraft": CONFIG["minecraft_port"],
                 },
             }
         )
@@ -339,6 +345,11 @@ def options_passthrough():
             "set-sunshine-password",
             "install-app",
             "uninstall-app",
+            "install-minecraft",
+            "start-minecraft",
+            "stop-minecraft",
+            "restart-minecraft",
+            "remove-minecraft",
         }:
             raise ApiError("Unsupported command.", 400)
         result = execute_command(command, user, payload)
@@ -678,15 +689,17 @@ def request_live_power_action(
     action: str,
     status_detail: str,
     extra_metadata: dict[str, str | None] | None = None,
+    sunshine_state: str | None = "starting",
 ) -> tuple[dict[str, Any], str]:
     token = generate_action_token()
     updates: dict[str, str | None] = {
         "vm-power-action-script": decode_config_b64("vm_power_action_script_b64"),
         POWER_ACTION_METADATA_KEY: f"{action}:{token}",
         POWER_ACTION_STATUS_METADATA_KEY: f"requested:{action}:{token}",
-        SUNSHINE_STATUS_METADATA_KEY: "starting",
-        SUNSHINE_STATUS_DETAIL_METADATA_KEY: status_detail,
     }
+    if sunshine_state is not None:
+        updates[SUNSHINE_STATUS_METADATA_KEY] = sunshine_state
+        updates[SUNSHINE_STATUS_DETAIL_METADATA_KEY] = status_detail
     if extra_metadata:
         updates.update(extra_metadata)
     set_instance_metadata_values(instance, updates)
@@ -857,6 +870,8 @@ def build_instance_metadata_items(
         {"key": "vm-power-action-script", "value": decode_config_b64("vm_power_action_script_b64")},
         {"key": "vm-data-disk-device-name", "value": CONFIG["data_disk_device_name"]},
         {"key": "vm-data-disk-mount-root", "value": CONFIG["data_disk_mount_root"]},
+        {"key": "vm-gpu-count", "value": str(CONFIG["gpu_count"])},
+        {"key": "vm-gpu-type", "value": CONFIG["gpu_type"]},
         {
             "key": STEAM_ENV_METADATA_KEY,
             "value": build_steam_env_value(
@@ -922,6 +937,7 @@ def ensure_firewall_rule(name: str, allowed: list[dict[str, Any]]) -> None:
 def ensure_firewall_rules() -> None:
     ensure_firewall_rule(CONFIG["firewall_rule_web"], FIREWALL_WEB_ALLOWED)
     ensure_firewall_rule(CONFIG["firewall_rule_sunshine"], FIREWALL_SUNSHINE_ALLOWED)
+    ensure_firewall_rule(CONFIG["firewall_rule_minecraft"], FIREWALL_MINECRAFT_ALLOWED)
 
 
 def build_instance_create_request(
@@ -1002,6 +1018,7 @@ def build_urls(external_ip: str) -> dict[str, Any]:
     urls: dict[str, Any] = {
         "novnc": "",
         "sunshine": "",
+        "minecraft": "",
         "moonlightHost": external_ip,
         "duckdns": [],
     }
@@ -1009,10 +1026,12 @@ def build_urls(external_ip: str) -> dict[str, Any]:
     if primary_duckdns:
         urls["novnc"] = f"http://{primary_duckdns}:{CONFIG['novnc_port']}/"
         urls["sunshine"] = f"https://{primary_duckdns}:{CONFIG['sunshine_port']}/"
+        urls["minecraft"] = f"{primary_duckdns}:{CONFIG['minecraft_port']}"
         urls["moonlightHost"] = primary_duckdns
     elif external_ip:
         urls["novnc"] = f"http://{external_ip}:{CONFIG['novnc_port']}/"
         urls["sunshine"] = f"https://{external_ip}:{CONFIG['sunshine_port']}/"
+        urls["minecraft"] = f"{external_ip}:{CONFIG['minecraft_port']}"
 
     duckdns_entries = []
     for domain in CONFIG["duckdns_domains"]:
@@ -1021,6 +1040,7 @@ def build_urls(external_ip: str) -> dict[str, Any]:
                 "domain": domain,
                 "novnc": f"http://{domain}:{CONFIG['novnc_port']}/",
                 "sunshine": f"https://{domain}:{CONFIG['sunshine_port']}/",
+                "minecraft": f"{domain}:{CONFIG['minecraft_port']}",
             }
         )
     urls["duckdns"] = duckdns_entries
@@ -1093,6 +1113,64 @@ def build_sunshine_status(instance: dict[str, Any] | None) -> dict[str, str]:
         "stopping": "Stopping",
         "backup": "Backup in progress",
         "restore": "Restore in progress",
+        "error": "Error",
+    }
+    return {
+        "state": state,
+        "label": labels.get(state, state.title()),
+        "detail": detail,
+    }
+
+
+def build_minecraft_status(instance: dict[str, Any] | None) -> dict[str, str]:
+    if instance is None:
+        return {
+            "state": "not_created",
+            "label": "VM not created",
+            "detail": "",
+        }
+
+    vm_status = str(instance.get("status", "UNKNOWN")).upper()
+    if vm_status != "RUNNING":
+        return {
+            "state": "stopped",
+            "label": "VM not running",
+            "detail": "",
+        }
+
+    state = metadata_value(instance, MINECRAFT_STATUS_METADATA_KEY).strip().lower() or "not_installed"
+    detail = metadata_value(instance, MINECRAFT_STATUS_DETAIL_METADATA_KEY).strip()
+    phase, power_action, _ = parse_power_action_status(
+        metadata_value(instance, POWER_ACTION_STATUS_METADATA_KEY)
+    )
+    if power_action in {
+        "install-minecraft",
+        "start-minecraft",
+        "stop-minecraft",
+        "restart-minecraft",
+        "remove-minecraft",
+    } and phase in {"requested", "running"}:
+        action_labels = {
+            "install-minecraft": "Installing",
+            "start-minecraft": "Starting",
+            "stop-minecraft": "Stopping",
+            "restart-minecraft": "Restarting",
+            "remove-minecraft": "Removing",
+        }
+        return {
+            "state": "starting" if power_action != "stop-minecraft" else "stopping",
+            "label": action_labels.get(power_action, "Updating"),
+            "detail": detail or "Minecraft server action is running.",
+        }
+
+    labels = {
+        "not_installed": "Not installed",
+        "installing": "Installing",
+        "starting": "Starting",
+        "running": "Running",
+        "stopping": "Stopping",
+        "stopped": "Stopped",
+        "removed": "Removed",
         "error": "Error",
     }
     return {
@@ -1306,6 +1384,11 @@ def allowed_commands(instance: dict[str, Any] | None) -> list[str]:
                 "remove-backup",
                 "install-app",
                 "uninstall-app",
+                "install-minecraft",
+                "start-minecraft",
+                "stop-minecraft",
+                "restart-minecraft",
+                "remove-minecraft",
             ])
         return commands
     if status == "TERMINATED":
@@ -1341,6 +1424,7 @@ def build_power_action_status(instance: dict[str, Any] | None) -> dict[str, str]
         "installed": "Installed",
         "uninstalled": "Uninstalled",
         "removed": "Removed",
+        "started": "Started",
         "rebooting": "Rebooting",
         "restarted": "Restarted",
         "restored": "Restored",
@@ -1385,6 +1469,7 @@ def build_status_payload(
                 "password": "",
             },
             "sunshineStatus": build_sunshine_status(None),
+            "minecraftStatus": build_minecraft_status(None),
             "persistence": build_persistence_status(None),
             "powerAction": build_power_action_status(None),
             "applications": {
@@ -1421,6 +1506,7 @@ def build_status_payload(
         "autoStopHours": metadata_value(instance, AUTO_STOP_METADATA_KEY),
         "sunshineCredentials": normalize_sunshine_credentials_for_response(credentials),
         "sunshineStatus": build_sunshine_status(instance),
+        "minecraftStatus": build_minecraft_status(instance),
         "persistence": build_persistence_status(instance),
         "powerAction": build_power_action_status(instance),
         "applications": {
@@ -1829,6 +1915,51 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
         final_instance = wait_for_external_ip(timeout_seconds=180)
         final_instance = wait_for_sunshine_status("ready", timeout_seconds=240)
         return build_status_payload(final_instance, user=user, command=command)
+
+    if command in {
+        "install-minecraft",
+        "start-minecraft",
+        "stop-minecraft",
+        "restart-minecraft",
+        "remove-minecraft",
+    }:
+        if current_instance is None:
+            raise ApiError("Instance does not exist. Create it first.", 400)
+        if current_status != "RUNNING":
+            raise ApiError("Minecraft server actions require a running VM.", 400)
+        require_live_backup_ready(current_instance, command)
+        ensure_firewall_rule(CONFIG["firewall_rule_minecraft"], FIREWALL_MINECRAFT_ALLOWED)
+        target_phase = {
+            "install-minecraft": "installed",
+            "start-minecraft": "started",
+            "stop-minecraft": "stopped",
+            "restart-minecraft": "restarted",
+            "remove-minecraft": "removed",
+        }[command]
+        current_instance, token = request_live_power_action(
+            current_instance,
+            action=command,
+            status_detail=f"Running Minecraft server action {command}.",
+            sunshine_state=None,
+            extra_metadata={
+                MINECRAFT_STATUS_METADATA_KEY: "starting" if command != "stop-minecraft" else "stopping",
+                MINECRAFT_STATUS_DETAIL_METADATA_KEY: f"Running {command}.",
+            },
+        )
+        final_instance = wait_for_power_action_phase(
+            action=command,
+            token=token,
+            target_phase=target_phase,
+            timeout_seconds=1200,
+        )
+        final_instance = wait_for_external_ip(timeout_seconds=180)
+        updated = update_duckdns(extract_external_ip(final_instance))
+        return build_status_payload(
+            final_instance,
+            user=user,
+            command=command,
+            duckdns_updated=updated,
+        )
 
     if command == "set-sunshine-password":
         if "set-sunshine-password" not in allowed_commands(current_instance):

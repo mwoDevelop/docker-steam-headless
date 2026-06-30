@@ -381,6 +381,12 @@ is_nvidia_ready() {
   command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1
 }
 
+gpu_enabled() {
+  local count
+  count="$(metadata_get vm-gpu-count)"
+  [[ -z "$count" || "$count" != "0" ]]
+}
+
 ensure_nvidia_driver() {
   local retry_file="${STATE_DIR}/nvidia-driver-bootstrapped"
   if is_nvidia_ready; then
@@ -419,9 +425,12 @@ clear_backup_ready_marker
 set_sunshine_status "starting" "VM startup in progress."
 apt-get update -y
 apt-get install -y ca-certificates curl gnupg lsb-release ubuntu-drivers-common jq zstd rclone
-ensure_nvidia_driver
-
-is_nvidia_ready || log "NVIDIA stack check warning: proceeding with best-effort startup."
+if gpu_enabled; then
+  ensure_nvidia_driver
+  is_nvidia_ready || log "NVIDIA stack check warning: proceeding with best-effort startup."
+else
+  log "GPU_COUNT=0; skipping NVIDIA driver bootstrap."
+fi
 
 install -m 0755 -d /etc/apt/keyrings
 if [ ! -f /etc/apt/keyrings/docker.gpg ]; then
@@ -437,17 +446,21 @@ apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin do
 systemctl enable docker
 reconcile_docker_service
 
-if [ ! -f /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg ]; then
-  curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | \
-    gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+if gpu_enabled; then
+  if [ ! -f /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg ]; then
+    curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | \
+      gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+  fi
+  curl -fsSL https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
+    sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#' \
+    > /etc/apt/sources.list.d/nvidia-container-toolkit.list
+  apt-get update -y
+  apt-get install -y nvidia-container-toolkit
+  nvidia-ctk runtime configure --runtime=docker || true
+  reconcile_docker_service
+else
+  log "GPU_COUNT=0; skipping NVIDIA container toolkit."
 fi
-curl -fsSL https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
-  sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#' \
-  > /etc/apt/sources.list.d/nvidia-container-toolkit.list
-apt-get update -y
-apt-get install -y nvidia-container-toolkit
-nvidia-ctk runtime configure --runtime=docker || true
-reconcile_docker_service
 
 modprobe uinput || true
 modprobe fuse || true
@@ -571,6 +584,14 @@ if [ -x /usr/local/bin/vm-persist-state ]; then
     log "Shared data disk bind mounts failed"
     exit 1
   fi
+fi
+
+if ! gpu_enabled; then
+  mark_backup_ready
+  log "Backup readiness marker created for CPU-only VM"
+  schedule_auto_shutdown
+  set_sunshine_status "stopped" "GPU disabled for this VM; Sunshine stack was not started."
+  exit 0
 fi
 
 docker compose "${COMPOSE_FILES[@]}" up -d --force-recreate

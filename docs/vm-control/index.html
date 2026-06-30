@@ -145,6 +145,21 @@
           <p id="application-options-status">Connect the backend to load supported applications.</p>
         </div>
 
+        <div class="backup-options minecraft-options">
+          <label>
+            <span>Minecraft Server</span>
+            <input id="minecraft-address" type="text" readonly value="Connect backend to load address">
+          </label>
+          <div class="inline-action-group minecraft-action-group">
+            <button class="action backup" type="button" data-command="install-minecraft">Install</button>
+            <button class="action start" type="button" data-command="start-minecraft">Start</button>
+            <button class="action stop" type="button" data-command="stop-minecraft">Stop</button>
+            <button class="action restart" type="button" data-command="restart-minecraft">Restart</button>
+            <button class="action delete" type="button" data-command="remove-minecraft">Remove</button>
+          </div>
+          <p id="minecraft-options-status">Install a Paper Minecraft server exposed on TCP 25565. World data is stored under /mnt/games/minecraft-server.</p>
+        </div>
+
         <div id="banner" class="banner" data-tone="neutral">
           Connect the Cloud Run backend and sign in with Google to control the VM.
         </div>

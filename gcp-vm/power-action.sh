@@ -15,6 +15,8 @@ POWER_ACTION_METADATA_KEY="vm-pending-power-action"
 POWER_ACTION_STATUS_METADATA_KEY="vm-power-action-status"
 SUNSHINE_STATUS_METADATA_KEY="vm-sunshine-status"
 SUNSHINE_STATUS_DETAIL_METADATA_KEY="vm-sunshine-status-detail"
+MINECRAFT_STATUS_METADATA_KEY="vm-minecraft-status"
+MINECRAFT_STATUS_DETAIL_METADATA_KEY="vm-minecraft-status-detail"
 STEAM_ENV_METADATA_KEY="steam-headless-env"
 SELECTED_APPLICATION_METADATA_KEY="vm-selected-application-id"
 ENVF=/opt/container-services/steam-headless/.env
@@ -22,6 +24,9 @@ COMPOSE_DIR=/opt/container-services/steam-headless
 COMPOSE_GCE="${COMPOSE_DIR}/docker-compose.nvidia.privileged.gce.yml"
 COMPOSE_OVERRIDE="${COMPOSE_DIR}/docker-compose.nvidia.privileged.override.yml"
 COMPOSE_IMAGE_OVERRIDE="${COMPOSE_DIR}/docker-compose.image.override.yml"
+MINECRAFT_ROOT=/mnt/games/minecraft-server
+MINECRAFT_COMPOSE_FILE="${MINECRAFT_ROOT}/docker-compose.yml"
+MINECRAFT_SERVICE=minecraft
 
 metadata_get() {
   local key="$1"
@@ -200,6 +205,133 @@ set_sunshine_status() {
     --arg detail_value "$detail" \
     '{($state_key): $state_value, ($detail_key): $detail_value}')"
   set_instance_metadata_values "$updates"
+}
+
+set_minecraft_status() {
+  local state="$1"
+  local detail="${2-}"
+  local updates
+  updates="$(jq -n \
+    --arg state_key "$MINECRAFT_STATUS_METADATA_KEY" \
+    --arg state_value "$state" \
+    --arg detail_key "$MINECRAFT_STATUS_DETAIL_METADATA_KEY" \
+    --arg detail_value "$detail" \
+    '{($state_key): $state_value, ($detail_key): $detail_value}')"
+  set_instance_metadata_values "$updates"
+}
+
+wait_for_local_minecraft_ready() {
+  local container_id health_status
+  for _ in $(seq 1 90); do
+    container_id="$(docker ps --filter "name=^/${MINECRAFT_SERVICE}$" --format '{{.ID}}' | head -n 1 || true)"
+    if [[ -n "$container_id" ]]; then
+      health_status="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$container_id" 2>/dev/null || true)"
+      if [[ "$health_status" == "healthy" ]]; then
+        set_minecraft_status "running" "Minecraft server healthcheck is healthy."
+        return 0
+      fi
+      if timeout 2 bash -c '</dev/tcp/127.0.0.1/25565' >/dev/null 2>&1; then
+        set_minecraft_status "running" "Minecraft server port 25565 is reachable locally."
+        return 0
+      fi
+    fi
+    sleep 5
+  done
+
+  set_minecraft_status "starting" "Minecraft container started, but port 25565 is not reachable yet."
+  return 1
+}
+
+ensure_minecraft_compose() {
+  mkdir -p "${MINECRAFT_ROOT}/data"
+  cat > "$MINECRAFT_COMPOSE_FILE" <<'EOF'
+services:
+  minecraft:
+    image: itzg/minecraft-server:latest
+    container_name: minecraft
+    restart: unless-stopped
+    ports:
+      - "25565:25565"
+    environment:
+      EULA: "TRUE"
+      TYPE: "PAPER"
+      VERSION: "LATEST"
+      MEMORY: "4G"
+      MOTD: "Steam GPU Minecraft"
+      ENABLE_AUTOPAUSE: "FALSE"
+    volumes:
+      - ./data:/data
+EOF
+}
+
+minecraft_compose() {
+  if [[ ! -f "$MINECRAFT_COMPOSE_FILE" ]]; then
+    log "Minecraft compose file is missing at ${MINECRAFT_COMPOSE_FILE}."
+    return 1
+  fi
+  (cd "$MINECRAFT_ROOT" && docker compose -f "$MINECRAFT_COMPOSE_FILE" "$@")
+}
+
+run_minecraft_action() {
+  local action="$1"
+  local token="$2"
+  local target_phase="started"
+
+  log "Running Minecraft action ${action}"
+  set_power_action_status "$action" "$token" "running"
+  set_minecraft_status "starting" "Running ${action}."
+
+  case "$action" in
+    install-minecraft)
+      ensure_minecraft_compose
+      minecraft_compose pull
+      minecraft_compose up -d
+      if ! wait_for_local_minecraft_ready; then
+        set_minecraft_status "error" "Minecraft server did not become reachable on port 25565."
+        set_power_action_status "$action" "$token" "failed" ""
+        return 1
+      fi
+      target_phase="installed"
+      ;;
+    start-minecraft)
+      minecraft_compose up -d
+      if ! wait_for_local_minecraft_ready; then
+        set_minecraft_status "error" "Minecraft server did not become reachable on port 25565."
+        set_power_action_status "$action" "$token" "failed" ""
+        return 1
+      fi
+      target_phase="started"
+      ;;
+    stop-minecraft)
+      set_minecraft_status "stopping" "Stopping Minecraft server."
+      minecraft_compose stop -t 30
+      set_minecraft_status "stopped" "Minecraft server is stopped."
+      target_phase="stopped"
+      ;;
+    restart-minecraft)
+      minecraft_compose restart
+      if ! wait_for_local_minecraft_ready; then
+        set_minecraft_status "error" "Minecraft server did not become reachable on port 25565."
+        set_power_action_status "$action" "$token" "failed" ""
+        return 1
+      fi
+      target_phase="restarted"
+      ;;
+    remove-minecraft)
+      set_minecraft_status "stopping" "Removing Minecraft container while preserving world data."
+      minecraft_compose down
+      set_minecraft_status "removed" "Minecraft container removed. World data is preserved in ${MINECRAFT_ROOT}/data."
+      target_phase="removed"
+      ;;
+    *)
+      log "Unsupported Minecraft action ${action}"
+      set_minecraft_status "error" "Unsupported Minecraft action ${action}."
+      set_power_action_status "$action" "$token" "failed" ""
+      return 1
+      ;;
+  esac
+
+  set_power_action_status "$action" "$token" "$target_phase" ""
 }
 
 wait_for_local_sunshine_ready() {
@@ -632,6 +764,9 @@ run_daemon() {
           ;;
         install-app|uninstall-app)
           run_application_action "$action" "$token" || true
+          ;;
+        install-minecraft|start-minecraft|stop-minecraft|restart-minecraft|remove-minecraft)
+          run_minecraft_action "$action" "$token" || true
           ;;
       esac
     fi

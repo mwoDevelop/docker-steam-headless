@@ -58,6 +58,33 @@
       detail: "Updating Sunshine application list.",
     },
   };
+  const COMMAND_MINECRAFT_TRANSITIONS = {
+    "install-minecraft": {
+      state: "starting",
+      label: "Installing",
+      detail: "Installing and starting Minecraft server.",
+    },
+    "start-minecraft": {
+      state: "starting",
+      label: "Starting",
+      detail: "Starting Minecraft server.",
+    },
+    "stop-minecraft": {
+      state: "stopping",
+      label: "Stopping",
+      detail: "Stopping Minecraft server.",
+    },
+    "restart-minecraft": {
+      state: "starting",
+      label: "Restarting",
+      detail: "Restarting Minecraft server.",
+    },
+    "remove-minecraft": {
+      state: "stopping",
+      label: "Removing",
+      detail: "Removing Minecraft container while preserving world data.",
+    },
+  };
   const COMMANDS_TO_POLL_AFTER_RESPONSE = new Set([
     "create",
     "start",
@@ -66,6 +93,11 @@
     "restore-backup",
     "install-app",
     "uninstall-app",
+    "install-minecraft",
+    "start-minecraft",
+    "stop-minecraft",
+    "restart-minecraft",
+    "remove-minecraft",
   ]);
 
   const elements = {
@@ -81,6 +113,8 @@
     backupOptionsStatus: document.querySelector("#backup-options-status"),
     applicationSelect: document.querySelector("#application-select"),
     applicationOptionsStatus: document.querySelector("#application-options-status"),
+    minecraftAddress: document.querySelector("#minecraft-address"),
+    minecraftOptionsStatus: document.querySelector("#minecraft-options-status"),
     banner: document.querySelector("#banner"),
     access: document.querySelector("#access"),
     history: document.querySelector("#history"),
@@ -114,6 +148,7 @@
     renderTargetSummary();
     renderBackupOptions(null);
     renderApplicationOptions(null);
+    renderMinecraftOptions(null);
     renderAccess(null);
     updateAuthUi();
   }
@@ -191,6 +226,9 @@
       const hasApplications = getApplicationCatalog(state.lastStatus).length > 0;
       const canChangeApps = allowed.has("install-app") || allowed.has("uninstall-app");
       elements.applicationSelect.disabled = state.isBusy || !state.user || !canChangeApps || !hasApplications;
+    }
+    if (elements.minecraftAddress) {
+      elements.minecraftAddress.disabled = true;
     }
     elements.actionButtons.forEach((button) => {
       const command = button.dataset.command;
@@ -352,7 +390,10 @@
       : powerActionPhase === "running" && powerActionName
         ? ` VM action "${powerActionName}" is still running.`
         : "";
-    return `Command "${command}" completed. Final VM state: ${vmState}, Sunshine state: ${sunshineState}.${powerActionSuffix}`;
+    const minecraftState = payload && payload.minecraftStatus && payload.minecraftStatus.label
+      ? `, Minecraft state: ${String(payload.minecraftStatus.label).toLowerCase()}`
+      : "";
+    return `Command "${command}" completed. Final VM state: ${vmState}, Sunshine state: ${sunshineState}${minecraftState}.${powerActionSuffix}`;
   }
 
   function getAvailableBackups(payload) {
@@ -451,6 +492,7 @@
     renderTargetSummary();
     renderBackupOptions(payload);
     renderApplicationOptions(payload);
+    renderMinecraftOptions(payload);
     renderAccess(payload);
     updateActionAvailability();
   }
@@ -470,10 +512,23 @@
 
   function applyCommandTransition(command) {
     const sunshineStatus = COMMAND_SUNSHINE_TRANSITIONS[command];
-    if (!sunshineStatus || !state.lastStatus) {
+    const minecraftStatus = COMMAND_MINECRAFT_TRANSITIONS[command];
+    if (!state.lastStatus) {
       return;
     }
-    renderStatusPayload(withSunshineStatus(state.lastStatus, sunshineStatus));
+    if (sunshineStatus) {
+      renderStatusPayload(withSunshineStatus(state.lastStatus, sunshineStatus));
+      return;
+    }
+    if (minecraftStatus) {
+      renderStatusPayload({
+        ...state.lastStatus,
+        minecraftStatus: {
+          ...(state.lastStatus.minecraftStatus || {}),
+          ...minecraftStatus,
+        },
+      });
+    }
   }
 
   function isTransitionalStatus(payload) {
@@ -490,7 +545,11 @@
     const sunshineState = String(payload.sunshineStatus && payload.sunshineStatus.state || "")
       .trim()
       .toLowerCase();
-    return ["starting", "stopping", "backup", "restore"].includes(sunshineState);
+    const minecraftState = String(payload.minecraftStatus && payload.minecraftStatus.state || "")
+      .trim()
+      .toLowerCase();
+    return ["starting", "stopping", "backup", "restore"].includes(sunshineState)
+      || ["installing", "starting", "stopping"].includes(minecraftState);
   }
 
   async function waitForStatusSettled(command, initialPayload) {
@@ -788,6 +847,14 @@
       }
     }
 
+    if (command === "remove-minecraft") {
+      const confirmed = window.confirm("Remove the Minecraft container? World data under /mnt/games/minecraft-server/data will be preserved.");
+      if (!confirmed) {
+        setBanner("Remove Minecraft cancelled.", "warning");
+        return;
+      }
+    }
+
     setBusy(true);
     const appLabel = command === "install-app" || command === "uninstall-app"
       ? ` for ${selectedApplicationLabel()}`
@@ -943,6 +1010,9 @@
     if (data.powerAction && data.powerAction.phase && data.powerAction.action) {
       parts.push(`VM action: ${data.powerAction.action} ${data.powerAction.phase}`);
     }
+    if (data.minecraftStatus && data.minecraftStatus.label) {
+      parts.push(`Minecraft: ${data.minecraftStatus.label}`);
+    }
     return parts.join(" · ");
   }
 
@@ -960,6 +1030,38 @@
       </div>
       ${detail}
     `;
+  }
+
+  function renderMinecraftStatusMeta(payload) {
+    const minecraftStatus = payload.minecraftStatus || {};
+    const state = escapeToken(minecraftStatus.state || "not_installed");
+    const label = escapeHtml(minecraftStatus.label || "Not installed");
+    const detail = minecraftStatus.detail
+      ? `<p class="access-meta">Status detail: <span>${escapeHtml(minecraftStatus.detail)}</span></p>`
+      : "";
+    return `
+      <div class="service-status ${state}">
+        <span class="service-status-dot" aria-hidden="true"></span>
+        <span>Status: ${label}</span>
+      </div>
+      ${detail}
+    `;
+  }
+
+  function renderMinecraftOptions(payload) {
+    if (!elements.minecraftAddress) {
+      return;
+    }
+    const address = payload && payload.urls && payload.urls.minecraft
+      ? String(payload.urls.minecraft)
+      : "Connect backend to load address";
+    elements.minecraftAddress.value = address;
+    if (elements.minecraftOptionsStatus) {
+      const label = payload && payload.minecraftStatus && payload.minecraftStatus.label
+        ? payload.minecraftStatus.label
+        : "Unknown";
+      elements.minecraftOptionsStatus.textContent = `Minecraft status: ${label}. Server address: ${address}.`;
+    }
   }
 
   function bindSunshinePasswordForm(canSet) {
@@ -1115,6 +1217,7 @@
       : "Host/IP";
     const novncUrl = String(payload.urls && payload.urls.novnc ? payload.urls.novnc : "");
     const sunshineUrl = String(payload.urls && payload.urls.sunshine ? payload.urls.sunshine : "");
+    const minecraftAddress = String(payload.urls && payload.urls.minecraft ? payload.urls.minecraft : "");
     const sunshineOpenUrl = primaryDuckDns && primaryDuckDns.sunshine ? primaryDuckDns.sunshine : sunshineUrl;
     const novncOpenUrl = primaryDuckDns && primaryDuckDns.novnc ? primaryDuckDns.novnc : novncUrl;
     const sunshineUrlLabel = primaryDuckDns && primaryDuckDns.sunshine === sunshineUrl
@@ -1127,6 +1230,7 @@
     const sunshineOpenUrlEscaped = escapeHtml(sunshineOpenUrl);
     const novncUrlEscaped = escapeHtml(novncUrl);
     const novncOpenUrlEscaped = escapeHtml(novncOpenUrl);
+    const minecraftAddressEscaped = escapeHtml(minecraftAddress);
     const sunshineCredentials = payload.sunshineCredentials || {};
     const novncDnsMeta = primaryDuckDns && primaryDuckDns.novnc && primaryDuckDns.novnc !== novncUrl
       ? `<p class="access-meta">DNS URL: <code>${escapeHtml(primaryDuckDns.novnc)}</code></p>`
@@ -1139,6 +1243,7 @@
       : "";
     const canSetSunshinePasswordForAccess = canSetSunshinePassword(payload);
     const sunshineStatusMeta = renderSunshineStatusMeta(payload);
+    const minecraftStatusMeta = renderMinecraftStatusMeta(payload);
 
     elements.access.className = "access";
     elements.access.innerHTML = `
@@ -1192,6 +1297,16 @@
           </div>
           <p class="access-meta">${novncUrlLabel}: <code>${novncUrlEscaped}</code></p>
           ${novncDnsMeta}
+        </article>
+
+        <article class="access-card accent">
+          <h3>Minecraft Server</h3>
+          <p>Use this address in Minecraft Multiplayer. Server management actions are available in the Minecraft Server row above.</p>
+          <p class="access-meta">Address: <code>${minecraftAddressEscaped}</code></p>
+          ${minecraftStatusMeta}
+          <div class="access-links">
+            <a href="#minecraft-address">Open management controls</a>
+          </div>
         </article>
 
         ${persistenceMeta}

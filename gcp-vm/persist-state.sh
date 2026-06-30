@@ -22,6 +22,9 @@ HOST_HOME_DIR=${HOST_HOME_DIR:-/opt/container-data/steam-headless/home}
 HOST_HOME_PARENT=${HOST_HOME_PARENT:-/opt/container-data/steam-headless}
 HOST_GAMES_DIR=${HOST_GAMES_DIR:-/mnt/games}
 STACK_DIR=${STACK_DIR:-/opt/container-services/steam-headless}
+MINECRAFT_ROOT=${MINECRAFT_ROOT:-/mnt/games/minecraft-server}
+MINECRAFT_COMPOSE_FILE="${MINECRAFT_ROOT}/docker-compose.yml"
+MINECRAFT_SERVICE=${MINECRAFT_SERVICE:-minecraft}
 REMOTE_NAME="vmstate"
 DEFAULT_ROOT_PATH="steam-vm-state"
 DEFAULT_DATA_DISK_DEVICE_NAME="steam-state"
@@ -499,6 +502,11 @@ stop_stack() {
     log "Stopping Steam Headless stack before persistence work"
     (cd "$STACK_DIR" && docker compose "${compose_args[@]}" stop -t 30) || true
   fi
+
+  if [[ -f "$MINECRAFT_COMPOSE_FILE" ]] && docker ps -qf "name=^/${MINECRAFT_SERVICE}$" | grep -q .; then
+    log "Stopping Minecraft stack before persistence work"
+    (cd "$MINECRAFT_ROOT" && docker compose -f "$MINECRAFT_COMPOSE_FILE" stop -t 30) || true
+  fi
 }
 
 start_stack() {
@@ -517,6 +525,11 @@ start_stack() {
 
   log "Starting Steam Headless stack after failed persistence action"
   (cd "$STACK_DIR" && docker compose "${compose_args[@]}" up -d) || true
+
+  if [[ -f "$MINECRAFT_COMPOSE_FILE" ]]; then
+    log "Starting Minecraft stack after persistence action"
+    (cd "$MINECRAFT_ROOT" && docker compose -f "$MINECRAFT_COMPOSE_FILE" up -d) || true
+  fi
 }
 
 write_root_manifest() {
