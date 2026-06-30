@@ -312,6 +312,10 @@
     return `${parts.join(", ")}.`;
   }
 
+  function statusMessageTone(data) {
+    return isTransitionalStatus(data) ? "warning" : "success";
+  }
+
   function schedulePostCommandStatusRefresh(command) {
     if (command === "status" || !state.user) {
       return;
@@ -329,7 +333,7 @@
 
       try {
         const data = await refreshStatus({ silent: true });
-        setCommandStatus(statusBannerMessage("VM status refreshed", data), state.isBusy ? "warning" : "success");
+        setCommandStatus(statusBannerMessage("VM status refreshed", data), statusMessageTone(data));
       } catch (error) {
         handleError(error);
       }
@@ -1398,7 +1402,7 @@
       const data = await fetchApi(`/api/status${statusQueryString()}`, { method: "GET" });
       renderStatusPayload(data);
       if (!silent) {
-        setCommandStatus(statusBannerMessage("VM status loaded", data), "success");
+        setCommandStatus(statusBannerMessage("VM status loaded", data), statusMessageTone(data));
       }
       return data;
     } finally {
@@ -1661,7 +1665,7 @@
     elements.refreshStatus.addEventListener("click", async () => {
       try {
         const data = await refreshStatus({ silent: true });
-        setCommandStatus(statusBannerMessage("VM status loaded", data), state.isBusy ? "warning" : "success");
+        setCommandStatus(statusBannerMessage("VM status loaded", data), statusMessageTone(data));
       } catch (error) {
         handleError(error);
       }
@@ -1674,7 +1678,7 @@
       if (command === "status") {
         try {
           const data = await refreshStatus({ silent: true });
-          setCommandStatus(statusBannerMessage("VM status loaded", data), state.isBusy ? "warning" : "success");
+          setCommandStatus(statusBannerMessage("VM status loaded", data), statusMessageTone(data));
         } catch (error) {
           handleError(error);
         }
