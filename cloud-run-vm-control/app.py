@@ -1623,7 +1623,7 @@ def require_no_active_power_action(instance: dict[str, Any] | None, command: str
 
 def allowed_commands(instance: dict[str, Any] | None) -> list[str]:
     if instance is None:
-        return ["create"]
+        return ["status", "create"]
 
     status = str(instance.get("status", "UNKNOWN")).upper()
     if status == "RUNNING":

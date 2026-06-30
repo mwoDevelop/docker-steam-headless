@@ -231,7 +231,7 @@
     );
 
     if (elements.refreshStatus) {
-      elements.refreshStatus.disabled = !state.user || !allowed.has("status");
+      elements.refreshStatus.disabled = !state.user;
     }
     if (elements.hardwareSelect) {
       elements.hardwareSelect.disabled = state.isBusy || !state.user || !state.hardwarePayload;
@@ -259,11 +259,13 @@
       const needsApplication = command === "install-app" || command === "uninstall-app";
       const hasSelectedBackup = Boolean(elements.backupSelect && elements.backupSelect.value);
       const hasSelectedApplication = Boolean(elements.applicationSelect && elements.applicationSelect.value);
-      button.disabled = (state.isBusy && command !== "status")
-        || !state.user
-        || !allowed.has(command)
-        || (needsBackup && !hasSelectedBackup)
-        || (needsApplication && !hasSelectedApplication);
+      button.disabled = !state.user
+        || (command !== "status" && (
+          state.isBusy
+          || !allowed.has(command)
+          || (needsBackup && !hasSelectedBackup)
+          || (needsApplication && !hasSelectedApplication)
+        ));
     });
   }
 
@@ -282,6 +284,13 @@
   }
 
   function statusBannerMessage(prefix, data) {
+    if (data && data.instanceExists === false) {
+      const target = data.target || {};
+      const hardware = data.hardware || {};
+      const zone = hardware.zone || target.zone || "unknown";
+      const instance = target.instance || "unknown";
+      return `${prefix}. VM not created for ${zone}/${instance}.`;
+    }
     const parts = [`${prefix}. Current VM state: ${data.status || "UNKNOWN"}`];
     if (data.sunshineStatus && data.sunshineStatus.label) {
       parts.push(`Sunshine: ${data.sunshineStatus.label}`);
