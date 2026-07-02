@@ -2684,25 +2684,44 @@ def update_duckdns(external_ip: str) -> bool:
     updated = True
     for domain in CONFIG["duckdns_domains"]:
         subdomain = domain.removesuffix(".duckdns.org")
-        try:
-            response = requests.get(
-                "https://www.duckdns.org/update",
-                params={
-                    "domains": subdomain,
-                    "token": CONFIG["duckdns_token"],
-                    "ip": external_ip,
-                },
-                timeout=15,
+        domain_updated = False
+        last_error = ""
+        for attempt in range(1, 5):
+            try:
+                response = requests.get(
+                    "https://www.duckdns.org/update",
+                    params={
+                        "domains": subdomain,
+                        "token": CONFIG["duckdns_token"],
+                        "ip": external_ip,
+                    },
+                    timeout=15,
+                )
+            except requests.RequestException as error:
+                last_error = str(error).replace(CONFIG["duckdns_token"], "<redacted>")
+                logging.warning(
+                    "DuckDNS update attempt %s failed for %s: %s",
+                    attempt,
+                    domain,
+                    last_error,
+                )
+                time.sleep(min(attempt * 2, 8))
+                continue
+            if response.text.strip() == "OK":
+                logging.info("DuckDNS updated for %s -> %s", domain, external_ip)
+                domain_updated = True
+                break
+            last_error = response.text.strip()
+            logging.warning(
+                "DuckDNS update attempt %s failed for %s: %s",
+                attempt,
+                domain,
+                last_error,
             )
-        except requests.RequestException as error:
-            logging.warning("DuckDNS update failed for %s: %s", domain, error)
+            time.sleep(min(attempt * 2, 8))
+        if not domain_updated:
+            logging.warning("DuckDNS update failed for %s after retries: %s", domain, last_error)
             updated = False
-            continue
-        if response.text.strip() != "OK":
-            logging.warning("DuckDNS update failed for %s: %s", domain, response.text.strip())
-            updated = False
-        else:
-            logging.info("DuckDNS updated for %s -> %s", domain, external_ip)
     return updated
 
 

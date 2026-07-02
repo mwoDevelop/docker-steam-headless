@@ -627,6 +627,21 @@ for _ in $(seq 1 60); do
   sleep 2
 done
 
+container_id="$(docker compose "${COMPOSE_FILES[@]}" ps -q | head -n 1 || true)"
+if [ -n "$container_id" ]; then
+  if ! docker exec --user root "$container_id" bash -lc '
+    set -e
+    install -d -m 0777 /opt/frontend/utils
+    if [ ! -x /opt/frontend/utils/websockify/run ]; then
+      rm -rf /opt/frontend/utils/websockify
+      git clone --depth=1 https://github.com/novnc/websockify /opt/frontend/utils/websockify
+      chmod -R a+rX /opt/frontend/utils/websockify
+    fi
+  '; then
+    log "noVNC websockify bootstrap failed; continuing with Sunshine startup."
+  fi
+fi
+
 CFG_HOST="/opt/container-data/steam-headless/home/.config/sunshine/sunshine.conf"
 mkdir -p "$(dirname "$CFG_HOST")"
 touch "$CFG_HOST"

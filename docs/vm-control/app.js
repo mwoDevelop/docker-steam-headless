@@ -1665,6 +1665,13 @@
         return data;
       }
       renderStatusPayload(data, requestTargetKey);
+      if (!options || options.refreshInstances !== false) {
+        try {
+          await refreshInstances({ silent: true });
+        } catch (error) {
+          console.warn("Failed to refresh instance list after status update.", error);
+        }
+      }
       if (!silent) {
         setCommandStatus(statusBannerMessage("VM status loaded", data), statusMessageTone(data));
       }
