@@ -48,6 +48,19 @@ def normalize_duckdns_domains(raw_domains: list[str]) -> list[str]:
     return domains
 
 
+DEFAULT_MINECRAFT_SERVER_VERSIONS: Final = [
+    "LATEST",
+    "1.21.8",
+    "1.21.7",
+    "1.21.6",
+    "1.21.5",
+    "1.21.4",
+    "1.21.1",
+    "1.20.6",
+    "1.20.4",
+]
+
+
 CONFIG = {
     "project": os.environ.get("GCP_PROJECT", ""),
     "zone": os.environ.get("GCP_ZONE", ""),
@@ -91,6 +104,7 @@ CONFIG = {
     "novnc_port": os.environ.get("VM_NOVNC_PORT", "8083"),
     "sunshine_port": os.environ.get("VM_SUNSHINE_PORT", "47990"),
     "minecraft_port": os.environ.get("VM_MINECRAFT_PORT", "25565"),
+    "minecraft_versions": csv_env("MINECRAFT_VERSIONS") or list(DEFAULT_MINECRAFT_SERVER_VERSIONS),
 }
 
 SUNSHINE_HEALTHCHECK_TIMEOUT_SECONDS: Final = 8
@@ -102,6 +116,7 @@ SUNSHINE_STATUS_DETAIL_METADATA_KEY = "vm-sunshine-status-detail"
 GPU_COUNT_METADATA_KEY = "vm-gpu-count"
 MINECRAFT_STATUS_METADATA_KEY = "vm-minecraft-status"
 MINECRAFT_STATUS_DETAIL_METADATA_KEY = "vm-minecraft-status-detail"
+MINECRAFT_VERSION_METADATA_KEY = "vm-minecraft-version"
 POWER_ACTION_METADATA_KEY = "vm-pending-power-action"
 POWER_ACTION_STATUS_METADATA_KEY = "vm-power-action-status"
 RESTORE_MODE_METADATA_KEY = "vm-restore-mode"
@@ -177,6 +192,45 @@ APPLICATION_CATALOG: Final = [
 ]
 APPLICATION_IDS: Final = {str(app["id"]) for app in APPLICATION_CATALOG}
 SECRET_MANAGER_BASE_URL = "https://secretmanager.googleapis.com/v1"
+
+
+def normalize_minecraft_version(raw_version: Any) -> str:
+    version = str(raw_version or "").strip()
+    if not version:
+        raise ApiError("Minecraft server version is required.", 400)
+    if version.upper() == "LATEST":
+        return "LATEST"
+    parts = version.split(".")
+    if len(parts) not in {2, 3} or not all(part.isdigit() for part in parts):
+        raise ApiError("Minecraft server version must be LATEST or a numeric version like 1.21.4.", 400)
+    return version
+
+
+def minecraft_version_options() -> list[str]:
+    versions: list[str] = []
+    for raw_version in CONFIG["minecraft_versions"]:
+        try:
+            version = normalize_minecraft_version(raw_version)
+        except ApiError:
+            logging.warning("Ignoring invalid configured Minecraft server version: %s", raw_version)
+            continue
+        if version not in versions:
+            versions.append(version)
+    if "LATEST" not in versions:
+        versions.insert(0, "LATEST")
+    return versions
+
+
+def default_minecraft_version() -> str:
+    return minecraft_version_options()[0]
+
+
+def parse_minecraft_version(payload: Any) -> str:
+    raw_version = payload.get("minecraftVersion") if hasattr(payload, "get") else ""
+    version = normalize_minecraft_version(raw_version or default_minecraft_version())
+    if version not in set(minecraft_version_options()):
+        raise ApiError(f"Minecraft server version {version} is not available.", 400)
+    return version
 
 
 def require_env(name: str) -> str:
@@ -1086,6 +1140,10 @@ def options_passthrough():
                     "novnc": CONFIG["novnc_port"],
                     "sunshine": CONFIG["sunshine_port"],
                     "minecraft": CONFIG["minecraft_port"],
+                },
+                "minecraftServer": {
+                    "versions": minecraft_version_options(),
+                    "defaultVersion": default_minecraft_version(),
                 },
             }
         )
@@ -2179,12 +2237,24 @@ def build_sunshine_status(instance: dict[str, Any] | None) -> dict[str, str]:
     }
 
 
+def minecraft_version_from_instance(instance: dict[str, Any] | None) -> str:
+    if instance is None:
+        return default_minecraft_version()
+    raw_version = metadata_value(instance, MINECRAFT_VERSION_METADATA_KEY).strip()
+    try:
+        return normalize_minecraft_version(raw_version or default_minecraft_version())
+    except ApiError:
+        return default_minecraft_version()
+
+
 def build_minecraft_status(instance: dict[str, Any] | None) -> dict[str, str]:
+    version = minecraft_version_from_instance(instance)
     if instance is None:
         return {
             "state": "not_created",
             "label": "VM not created",
             "detail": "",
+            "version": version,
         }
 
     vm_status = str(instance.get("status", "UNKNOWN")).upper()
@@ -2193,6 +2263,7 @@ def build_minecraft_status(instance: dict[str, Any] | None) -> dict[str, str]:
             "state": "stopped",
             "label": "VM not running",
             "detail": "",
+            "version": version,
         }
 
     state = metadata_value(instance, MINECRAFT_STATUS_METADATA_KEY).strip().lower() or "not_installed"
@@ -2218,6 +2289,7 @@ def build_minecraft_status(instance: dict[str, Any] | None) -> dict[str, str]:
             "state": "starting" if power_action != "stop-minecraft" else "stopping",
             "label": action_labels.get(power_action, "Updating"),
             "detail": detail or "Minecraft server action is running.",
+            "version": version,
         }
 
     labels = {
@@ -2234,6 +2306,7 @@ def build_minecraft_status(instance: dict[str, Any] | None) -> dict[str, str]:
         "state": state,
         "label": labels.get(state, state.title()),
         "detail": detail,
+        "version": version,
     }
 
 
@@ -2580,6 +2653,10 @@ def build_status_payload(
             },
             "sunshineStatus": build_sunshine_status(None),
             "minecraftStatus": build_minecraft_status(None),
+            "minecraft": {
+                "versions": minecraft_version_options(),
+                "defaultVersion": default_minecraft_version(),
+            },
             "persistence": build_persistence_status(None),
             "powerAction": build_power_action_status(None),
             "applications": {
@@ -2618,6 +2695,10 @@ def build_status_payload(
         "sunshineCredentials": normalize_sunshine_credentials_for_response(credentials),
         "sunshineStatus": build_sunshine_status(instance),
         "minecraftStatus": build_minecraft_status(instance),
+        "minecraft": {
+            "versions": minecraft_version_options(),
+            "defaultVersion": default_minecraft_version(),
+        },
         "persistence": build_persistence_status(instance),
         "powerAction": build_power_action_status(instance),
         "applications": {
@@ -3102,6 +3183,7 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
         require_minecraft_command_allowed(current_instance, command)
         require_live_backup_ready(current_instance, command)
         ensure_firewall_rule(CONFIG["firewall_rule_minecraft"], FIREWALL_MINECRAFT_ALLOWED)
+        minecraft_version = parse_minecraft_version(payload) if command == "install-minecraft" else minecraft_version_from_instance(current_instance)
         target_phase = {
             "install-minecraft": "installed",
             "start-minecraft": "started",
@@ -3116,7 +3198,12 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
             sunshine_state=None,
             extra_metadata={
                 MINECRAFT_STATUS_METADATA_KEY: "starting" if command != "stop-minecraft" else "stopping",
-                MINECRAFT_STATUS_DETAIL_METADATA_KEY: f"Running {command}.",
+                MINECRAFT_STATUS_DETAIL_METADATA_KEY: (
+                    f"Installing Minecraft server {minecraft_version}."
+                    if command == "install-minecraft"
+                    else f"Running {command}."
+                ),
+                MINECRAFT_VERSION_METADATA_KEY: minecraft_version,
             },
         )
         final_instance = wait_for_power_action_phase(

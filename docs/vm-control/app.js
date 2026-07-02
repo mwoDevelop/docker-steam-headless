@@ -125,6 +125,7 @@
     applicationSelect: document.querySelector("#application-select"),
     applicationOptionsStatus: document.querySelector("#application-options-status"),
     minecraftAddress: document.querySelector("#minecraft-address"),
+    minecraftVersionSelect: document.querySelector("#minecraft-version-select"),
     minecraftOptionsStatus: document.querySelector("#minecraft-options-status"),
     banner: document.querySelector("#banner"),
     commandStatus: document.querySelector("#command-status"),
@@ -200,6 +201,9 @@
     if (elements.hardwareSelect && saved.hardwareId) {
       elements.hardwareSelect.dataset.savedValue = String(saved.hardwareId);
     }
+    if (elements.minecraftVersionSelect && saved.minecraftVersion) {
+      elements.minecraftVersionSelect.dataset.savedValue = String(saved.minecraftVersion);
+    }
     renderHistory();
     renderTargetSummary();
     renderBackupOptions(null);
@@ -220,6 +224,7 @@
         autoStopHours: String(elements.autoStopHours.value || "").trim(),
         hardwareId: String(elements.hardwareSelect && elements.hardwareSelect.value || "").trim(),
         zone: String(elements.zoneSelect && elements.zoneSelect.value || "").trim(),
+        minecraftVersion: String(elements.minecraftVersionSelect && elements.minecraftVersionSelect.value || "").trim(),
       }),
     );
   }
@@ -338,6 +343,13 @@
     }
     if (elements.minecraftAddress) {
       elements.minecraftAddress.disabled = true;
+    }
+    if (elements.minecraftVersionSelect) {
+      elements.minecraftVersionSelect.disabled = state.isBusy
+        || !state.user
+        || !allowed.has("install-minecraft")
+        || !minecraftCommandAvailable("install-minecraft")
+        || getMinecraftVersionCatalog(state.lastStatus).length === 0;
     }
     elements.actionButtons.forEach((button) => {
       const command = button.dataset.command;
@@ -1468,6 +1480,13 @@
         }
         body.applicationId = applicationId;
       }
+      if (command === "install-minecraft") {
+        const minecraftVersion = selectedMinecraftVersion();
+        if (!minecraftVersion) {
+          throw new Error("Select a Minecraft server version first.");
+        }
+        body.minecraftVersion = minecraftVersion;
+      }
       const autoStopHours = readAutoStopHours(command);
       if (autoStopHours) {
         body.autoStopHours = autoStopHours;
@@ -1660,6 +1679,32 @@
     `;
   }
 
+  function getMinecraftVersionCatalog(payload) {
+    const fromPayload = payload && payload.minecraft && Array.isArray(payload.minecraft.versions)
+      ? payload.minecraft.versions
+      : [];
+    const fromConfig = state.backendConfig && state.backendConfig.minecraftServer && Array.isArray(state.backendConfig.minecraftServer.versions)
+      ? state.backendConfig.minecraftServer.versions
+      : [];
+    const versions = fromPayload.length ? fromPayload : fromConfig;
+    return versions.map((version) => String(version || "").trim()).filter(Boolean);
+  }
+
+  function defaultMinecraftVersion(payload) {
+    const fromPayload = payload && payload.minecraft && payload.minecraft.defaultVersion
+      ? String(payload.minecraft.defaultVersion)
+      : "";
+    const fromConfig = state.backendConfig && state.backendConfig.minecraftServer && state.backendConfig.minecraftServer.defaultVersion
+      ? String(state.backendConfig.minecraftServer.defaultVersion)
+      : "";
+    return fromPayload || fromConfig || "LATEST";
+  }
+
+  function selectedMinecraftVersion() {
+    return String(elements.minecraftVersionSelect && elements.minecraftVersionSelect.value || "").trim()
+      || defaultMinecraftVersion(state.lastStatus);
+  }
+
   function renderMinecraftOptions(payload) {
     if (!elements.minecraftAddress) {
       return;
@@ -1668,12 +1713,34 @@
       ? String(payload.urls.minecraft)
       : "Connect backend to load address";
     elements.minecraftAddress.value = address;
+    if (elements.minecraftVersionSelect) {
+      const versions = getMinecraftVersionCatalog(payload);
+      const previousValue = elements.minecraftVersionSelect.value
+        || elements.minecraftVersionSelect.dataset.savedValue
+        || (payload && payload.minecraftStatus && payload.minecraftStatus.version ? String(payload.minecraftStatus.version) : "")
+        || defaultMinecraftVersion(payload);
+      if (!versions.length) {
+        elements.minecraftVersionSelect.innerHTML = '<option value="">No versions loaded</option>';
+      } else {
+        elements.minecraftVersionSelect.innerHTML = versions
+          .map((version) => `<option value="${escapeHtml(version)}">${escapeHtml(version)}</option>`)
+          .join("");
+        if (versions.includes(previousValue)) {
+          elements.minecraftVersionSelect.value = previousValue;
+        } else {
+          const fallbackVersion = defaultMinecraftVersion(payload);
+          elements.minecraftVersionSelect.value = versions.includes(fallbackVersion) ? fallbackVersion : versions[0];
+        }
+      }
+      elements.minecraftVersionSelect.dataset.savedValue = "";
+    }
     if (elements.minecraftOptionsStatus) {
       const label = payload && payload.minecraftStatus && payload.minecraftStatus.label
         ? payload.minecraftStatus.label
         : "Unknown";
-      elements.minecraftOptionsStatus.textContent = `Minecraft status: ${label}. Server address: ${address}.`;
+      elements.minecraftOptionsStatus.textContent = `Minecraft status: ${label}. Server address: ${address}. Version: ${selectedMinecraftVersion()}.`;
     }
+    updateActionAvailability();
   }
 
   function bindSunshinePasswordForm(canSet) {
@@ -2050,6 +2117,13 @@
 
   if (elements.applicationSelect) {
     elements.applicationSelect.addEventListener("change", updateActionAvailability);
+  }
+
+  if (elements.minecraftVersionSelect) {
+    elements.minecraftVersionSelect.addEventListener("change", () => {
+      saveConfig();
+      renderMinecraftOptions(state.lastStatus);
+    });
   }
 
   if (elements.hardwareSelect) {

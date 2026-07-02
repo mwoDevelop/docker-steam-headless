@@ -199,6 +199,12 @@
             <span>Minecraft Server</span>
             <input id="minecraft-address" type="text" readonly value="Connect backend to load address">
           </label>
+          <label>
+            <span>Server version</span>
+            <select id="minecraft-version-select" name="minecraft-version-select">
+              <option value="">Connect backend to load versions</option>
+            </select>
+          </label>
           <div class="inline-action-group minecraft-action-group">
             <button class="action backup" type="button" data-command="install-minecraft">Install</button>
             <button class="action start" type="button" data-command="start-minecraft">Start</button>
@@ -247,6 +253,6 @@
       </section>
     </main>
 
-    <script src="./app.js?v=page-loader-20260702"></script>
+    <script src="./app.js?v=minecraft-version-select-20260702"></script>
   </body>
 </html>

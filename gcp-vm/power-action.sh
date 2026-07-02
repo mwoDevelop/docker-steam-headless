@@ -17,6 +17,7 @@ SUNSHINE_STATUS_METADATA_KEY="vm-sunshine-status"
 SUNSHINE_STATUS_DETAIL_METADATA_KEY="vm-sunshine-status-detail"
 MINECRAFT_STATUS_METADATA_KEY="vm-minecraft-status"
 MINECRAFT_STATUS_DETAIL_METADATA_KEY="vm-minecraft-status-detail"
+MINECRAFT_VERSION_METADATA_KEY="vm-minecraft-version"
 STEAM_ENV_METADATA_KEY="steam-headless-env"
 SELECTED_APPLICATION_METADATA_KEY="vm-selected-application-id"
 ENVF=/opt/container-services/steam-headless/.env
@@ -242,9 +243,22 @@ wait_for_local_minecraft_ready() {
   return 1
 }
 
+validated_minecraft_version() {
+  local version
+  version="$(metadata_get "$MINECRAFT_VERSION_METADATA_KEY" | tr -d '\r' | head -n 1 || true)"
+  version="${version:-LATEST}"
+  if [[ "$version" == "LATEST" || "$version" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+    printf '%s\n' "$version"
+    return 0
+  fi
+  log "Invalid Minecraft version metadata '${version}', falling back to LATEST."
+  printf '%s\n' "LATEST"
+}
+
 ensure_minecraft_compose() {
+  local version="${1:-LATEST}"
   mkdir -p "${MINECRAFT_ROOT}/data"
-  cat > "$MINECRAFT_COMPOSE_FILE" <<'EOF'
+  cat > "$MINECRAFT_COMPOSE_FILE" <<EOF
 services:
   minecraft:
     image: itzg/minecraft-server:latest
@@ -255,7 +269,7 @@ services:
     environment:
       EULA: "TRUE"
       TYPE: "PAPER"
-      VERSION: "LATEST"
+      VERSION: "${version}"
       MEMORY: "4G"
       MOTD: "Steam GPU Minecraft"
       ENABLE_AUTOPAUSE: "FALSE"
@@ -323,7 +337,7 @@ require_minecraft_compose() {
 run_minecraft_action() {
   local action="$1"
   local token="$2"
-  local state
+  local state version
   local target_phase="started"
 
   log "Running Minecraft action ${action}"
@@ -336,8 +350,9 @@ run_minecraft_action() {
         fail_minecraft_action "$action" "$token" "$state" "Minecraft server is already installed. Use Start, Stop, Restart, or Remove."
         return 1
       fi
-      set_minecraft_status "installing" "Installing Minecraft server."
-      ensure_minecraft_compose
+      version="$(validated_minecraft_version)"
+      set_minecraft_status "installing" "Installing Minecraft server ${version}."
+      ensure_minecraft_compose "$version"
       minecraft_compose pull
       minecraft_compose up -d
       if ! wait_for_local_minecraft_ready; then

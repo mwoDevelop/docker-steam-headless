@@ -488,6 +488,10 @@ select {
   grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
 }
 
+.minecraft-options {
+  grid-template-columns: minmax(220px, 1fr) minmax(160px, 220px) minmax(0, 1.2fr);
+}
+
 .start-options p,
 .backup-options p,
 .hardware-options p {
