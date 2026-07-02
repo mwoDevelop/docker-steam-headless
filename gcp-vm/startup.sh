@@ -590,7 +590,7 @@ if ! gpu_enabled; then
   mark_backup_ready
   log "Backup readiness marker created for CPU-only VM"
   schedule_auto_shutdown
-  set_sunshine_status "stopped" "GPU disabled for this VM; Sunshine stack was not started."
+  set_sunshine_status "disabled" "GPU disabled for this VM; Sunshine stack was not started."
   exit 0
 fi
 

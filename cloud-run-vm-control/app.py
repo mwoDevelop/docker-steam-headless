@@ -99,6 +99,7 @@ AUTO_STOP_METADATA_KEY = "vm-auto-shutdown-hours"
 STEAM_ENV_METADATA_KEY = "steam-headless-env"
 SUNSHINE_STATUS_METADATA_KEY = "vm-sunshine-status"
 SUNSHINE_STATUS_DETAIL_METADATA_KEY = "vm-sunshine-status-detail"
+GPU_COUNT_METADATA_KEY = "vm-gpu-count"
 MINECRAFT_STATUS_METADATA_KEY = "vm-minecraft-status"
 MINECRAFT_STATUS_DETAIL_METADATA_KEY = "vm-minecraft-status-detail"
 POWER_ACTION_METADATA_KEY = "vm-pending-power-action"
@@ -1520,6 +1521,16 @@ def is_sunshine_started(
     return False
 
 
+def is_gpu_disabled_for_instance(instance: dict[str, Any]) -> bool:
+    gpu_count = metadata_value(instance, GPU_COUNT_METADATA_KEY).strip()
+    if not gpu_count:
+        return False
+    try:
+        return int(gpu_count) <= 0
+    except ValueError:
+        return False
+
+
 def wait_for_sunshine_status(
     target_state: str,
     timeout_seconds: int = 300,
@@ -1800,6 +1811,12 @@ def build_sunshine_status(instance: dict[str, Any] | None) -> dict[str, str]:
             "label": "Stopping",
             "detail": detail or "Steam Headless and Sunshine are stopping for the requested VM action.",
         }
+    if is_gpu_disabled_for_instance(instance):
+        return {
+            "state": "disabled",
+            "label": "Disabled",
+            "detail": detail or "GPU disabled for this VM; Sunshine stack was not started.",
+        }
     if is_sunshine_started(instance, state, detail):
         state = "ready"
         detail = "Sunshine Web UI is available."
@@ -1809,6 +1826,7 @@ def build_sunshine_status(instance: dict[str, Any] | None) -> dict[str, str]:
         "stopping": "Stopping",
         "backup": "Backup in progress",
         "restore": "Restore in progress",
+        "disabled": "Disabled",
         "error": "Error",
     }
     return {
