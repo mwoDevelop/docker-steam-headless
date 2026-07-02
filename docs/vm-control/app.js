@@ -311,6 +311,44 @@
     elements.commandStatus.dataset.tone = tone || "neutral";
   }
 
+  function clearScheduledCommandStatusRefresh() {
+    if (!state.commandStatusRefreshTimer) {
+      return;
+    }
+    window.clearTimeout(state.commandStatusRefreshTimer);
+    state.commandStatusRefreshTimer = null;
+  }
+
+  function extractErrorToken(rawMessage, key) {
+    const raw = String(rawMessage || "");
+    const singleQuoted = new RegExp(`['"]${key}['"]\\s*:\\s*'([^']+)'`).exec(raw);
+    if (singleQuoted && singleQuoted[1]) {
+      return singleQuoted[1];
+    }
+    const doubleQuoted = new RegExp(`['"]${key}['"]\\s*:\\s*"([^"]+)"`).exec(raw);
+    if (doubleQuoted && doubleQuoted[1]) {
+      return doubleQuoted[1];
+    }
+    return "";
+  }
+
+  function formatErrorMessage(error) {
+    const raw = String(error && error.message ? error.message : error || "Unexpected error.");
+    const code = extractErrorToken(raw, "code");
+    const message = extractErrorToken(raw, "message");
+    if (code === "ZONE_RESOURCE_POOL_EXHAUSTED") {
+      return `Google Compute Engine capacity error (${code}): ${message || raw}`;
+    }
+    if (code) {
+      return `Google Compute Engine error (${code}): ${message || raw}`;
+    }
+    return raw;
+  }
+
+  function commandFailureMessage(command, error) {
+    return `Command "${command}" failed. ${formatErrorMessage(error)}`;
+  }
+
   function statusBannerMessage(prefix, data) {
     if (data && data.instanceExists === false) {
       const target = data.target || {};
@@ -783,8 +821,23 @@
     updateActionAvailability();
   }
 
+  function currentSelectionMatchesCreatedInstance() {
+    const currentZone = selectedZone();
+    const currentHardwareId = String(elements.hardwareSelect && elements.hardwareSelect.value || "").trim();
+    if (!currentZone || !currentHardwareId) {
+      return false;
+    }
+    return getCreatedInstances().some((instance) => {
+      const profile = profileForInstance(instance);
+      return profile
+        && String(profile.id || "") === currentHardwareId
+        && String(instance.zone || "").trim() === currentZone;
+    });
+  }
+
   async function refreshInstances(options) {
     const silent = Boolean(options && options.silent);
+    const autoSelect = Boolean(options && options.autoSelect);
     if (!state.user) {
       throw new Error("Sign in with Google first.");
     }
@@ -793,6 +846,9 @@
     }
     const data = await fetchApi("/api/instances", { method: "GET" });
     renderInstanceOptions(data);
+    if (autoSelect) {
+      await autoSelectCreatedInstanceIfNeeded({ silent: true });
+    }
     return data;
   }
 
@@ -805,7 +861,23 @@
       || null;
   }
 
-  async function selectCreatedInstance(index) {
+  async function autoSelectCreatedInstanceIfNeeded(options) {
+    const instances = getCreatedInstances();
+    if (!instances.length) {
+      return false;
+    }
+    if (!state.hardwarePayload || !getHardwareProfiles().length) {
+      await refreshHardwareOptions({ silent: true });
+    }
+    if (currentSelectionMatchesCreatedInstance()) {
+      return false;
+    }
+    await selectCreatedInstance(0, options);
+    return true;
+  }
+
+  async function selectCreatedInstance(index, options) {
+    const silent = Boolean(options && options.silent);
     const instances = getCreatedInstances();
     const instance = instances[index];
     if (!instance) {
@@ -831,8 +903,10 @@
     }
     renderZoneOptions();
     renderInstanceOptions(state.instancesPayload);
-    setCommandStatus(`Selected ${instance.name} in ${zone}. Hardware and zone fields were updated.`, "success");
-    await refreshPriceEstimate({ silent: false });
+    if (!silent) {
+      setCommandStatus(`Selected ${instance.name} in ${zone}. Hardware and zone fields were updated.`, "success");
+    }
+    await refreshPriceEstimate({ silent });
     await refreshStatus({ silent: true });
   }
 
@@ -1108,7 +1182,7 @@
     if (state.token) {
       await restoreSession();
       await refreshHardwareOptions({ silent: true });
-      await refreshInstances({ silent: true });
+      await refreshInstances({ silent: true, autoSelect: true });
       await refreshPriceEstimate({ silent: true });
       await refreshStatus({ silent: true });
     }
@@ -1166,7 +1240,7 @@
       storeSessionToken(response.access_token || "");
       await restoreSession();
       await refreshHardwareOptions({ silent: true });
-      await refreshInstances({ silent: true });
+      await refreshInstances({ silent: true, autoSelect: true });
       await refreshPriceEstimate({ silent: true });
       await refreshStatus({ silent: true });
     } catch (error) {
@@ -1301,6 +1375,8 @@
       : "";
     setCommandStatus(`Running "${command}"${appLabel} on the VM...`, "warning");
     applyCommandTransition(command);
+    const previousStatus = state.lastStatus;
+    const previousStatusTargetKey = state.lastStatusTargetKey;
     schedulePostCommandStatusRefresh(command);
 
     try {
@@ -1333,6 +1409,9 @@
         data = await waitForStatusSettled(command, data);
         renderStatusPayload(data);
       }
+      if (command === "create" || command === "delete") {
+        await refreshInstances({ silent: true, autoSelect: command === "delete" });
+      }
 
       const suffix = data.duckdnsUpdated
         ? " DuckDNS refreshed."
@@ -1354,6 +1433,24 @@
           : historyMessage(data),
         duckdnsDomains: data.duckdnsDomains || [],
       });
+    } catch (error) {
+      clearScheduledCommandStatusRefresh();
+      const message = commandFailureMessage(command, error);
+      setCommandStatus(message, "error");
+      setBanner(message, "error");
+      if (previousStatus) {
+        state.lastStatus = previousStatus;
+        state.lastStatusTargetKey = previousStatusTargetKey;
+      }
+      try {
+        await refreshStatus({ silent: true });
+      } catch (refreshError) {
+        if (previousStatus) {
+          renderStatusPayload(previousStatus, previousStatusTargetKey);
+        } else {
+          updateActionAvailability();
+        }
+      }
     } finally {
       setBusy(false);
     }
@@ -1786,7 +1883,11 @@
   }
 
   function handleError(error) {
-    setBanner(error.message || "Unexpected error.", "error");
+    clearScheduledCommandStatusRefresh();
+    const message = formatErrorMessage(error);
+    setCommandStatus(message, "error");
+    setBanner(message, "error");
+    updateActionAvailability();
   }
 
   elements.form.addEventListener("input", saveConfig);
@@ -1924,7 +2025,7 @@
     elements.refreshInstances.addEventListener("click", async () => {
       try {
         setBusy(true);
-        await refreshInstances({ silent: false });
+        await refreshInstances({ silent: false, autoSelect: true });
         setBanner("Created instances refreshed.", "success");
       } catch (error) {
         handleError(error);
