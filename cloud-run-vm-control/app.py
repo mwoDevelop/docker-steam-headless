@@ -836,6 +836,106 @@ def build_hardware_payload() -> dict[str, Any]:
     }
 
 
+def instance_zone_name(instance: dict[str, Any]) -> str:
+    return str(instance.get("zone", "") or "").rsplit("/", 1)[-1]
+
+
+def instance_accelerator_summary(instance: dict[str, Any]) -> tuple[str, int]:
+    accelerators = instance_guest_accelerators(instance)
+    if not accelerators:
+        return "", 0
+    accelerator = accelerators[0]
+    gpu_type = str(accelerator.get("acceleratorType", "") or "").rsplit("/", 1)[-1]
+    try:
+        gpu_count = int(accelerator.get("acceleratorCount", 0) or 0)
+    except (TypeError, ValueError):
+        gpu_count = 0
+    return gpu_type, gpu_count
+
+
+def instance_hardware_selection(instance: dict[str, Any]) -> dict[str, Any]:
+    machine_type = instance_machine_type(instance)
+    metadata_gpu_type = metadata_value(instance, "vm-gpu-type").strip()
+    metadata_count = metadata_gpu_count(instance)
+    accelerator_gpu_type, accelerator_gpu_count = instance_accelerator_summary(instance)
+
+    gpu_type = metadata_gpu_type or accelerator_gpu_type
+    gpu_count = metadata_count or accelerator_gpu_count
+    if machine_type.startswith("g2-") and not gpu_type:
+        gpu_type = "nvidia-l4"
+        gpu_count = max(gpu_count, 1)
+
+    if not gpu_type or gpu_count <= 0:
+        return {
+            "id": CPU_HARDWARE_ID,
+            "label": "CPU",
+            "machineType": machine_type or DEFAULT_CPU_MACHINE_TYPE,
+            "gpuType": "",
+            "gpuCount": 0,
+            "acceleratorMode": "none",
+        }
+
+    accelerator_mode = "builtin" if machine_type.startswith("g2-") or gpu_type == "nvidia-l4" else "attached"
+    label = "GPU L4" if gpu_type == "nvidia-l4" else "GPU T4" if gpu_type == "nvidia-tesla-t4" else gpu_type
+    return {
+        "id": gpu_type,
+        "label": label,
+        "machineType": machine_type,
+        "gpuType": gpu_type,
+        "gpuCount": gpu_count,
+        "acceleratorMode": accelerator_mode,
+    }
+
+
+def build_instance_picker_entry(instance: dict[str, Any]) -> dict[str, Any]:
+    zone = instance_zone_name(instance)
+    hardware = instance_hardware_selection(instance)
+    status = str(instance.get("status", "UNKNOWN") or "UNKNOWN")
+    return {
+        "name": str(instance.get("name", "") or CONFIG["instance"]),
+        "zone": zone,
+        "status": status,
+        "externalIp": extract_external_ip(instance),
+        "createdAt": str(instance.get("creationTimestamp", "") or ""),
+        "lastStartTimestamp": str(instance.get("lastStartTimestamp", "") or ""),
+        "hardware": hardware,
+        "sunshineStatus": build_sunshine_status(instance),
+    }
+
+
+def list_created_instances() -> list[dict[str, Any]]:
+    project = require_env("project")
+    url = f"https://compute.googleapis.com/compute/v1/projects/{project}/aggregated/instances"
+    page_token = ""
+    instances: list[dict[str, Any]] = []
+    while True:
+        params = {"filter": f"name = {CONFIG['instance']}"}
+        if page_token:
+            params["pageToken"] = page_token
+        data = compute_request("GET", url, params=params)
+        if not isinstance(data, dict):
+            break
+        for scoped_data in (data.get("items", {}) or {}).values():
+            if not isinstance(scoped_data, dict):
+                continue
+            for instance in scoped_data.get("instances", []) or []:
+                if isinstance(instance, dict) and str(instance.get("name", "")) == CONFIG["instance"]:
+                    instances.append(build_instance_picker_entry(instance))
+        page_token = str(data.get("nextPageToken", "") or "")
+        if not page_token:
+            break
+    return sorted(instances, key=lambda item: (str(item.get("name", "")), str(item.get("zone", ""))))
+
+
+def build_instances_payload() -> dict[str, Any]:
+    return {
+        "refreshedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "project": CONFIG["project"],
+        "instanceName": CONFIG["instance"],
+        "instances": list_created_instances(),
+    }
+
+
 def decode_config_b64(name: str) -> str:
     raw_value = str(CONFIG.get(name, "") or "")
     if not raw_value:
@@ -899,6 +999,7 @@ def handle_unexpected_error(error: Exception):
 @app.route("/api/config", methods=["GET", "OPTIONS"])
 @app.route("/api/admin/users", methods=["GET", "POST", "OPTIONS"])
 @app.route("/api/hardware", methods=["GET", "OPTIONS"])
+@app.route("/api/instances", methods=["GET", "OPTIONS"])
 @app.route("/api/price", methods=["GET", "OPTIONS"])
 @app.route("/api/me", methods=["GET", "OPTIONS"])
 @app.route("/api/status", methods=["GET", "OPTIONS"])
@@ -954,6 +1055,10 @@ def options_passthrough():
     if request.path == "/api/hardware":
         require_user()
         return jsonify(build_hardware_payload())
+
+    if request.path == "/api/instances":
+        require_user()
+        return jsonify(build_instances_payload())
 
     if request.path == "/api/price":
         require_user()

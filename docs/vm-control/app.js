@@ -113,6 +113,9 @@
     refreshHardware: document.querySelector("#refresh-hardware"),
     hardwareOptionsStatus: document.querySelector("#hardware-options-status"),
     hardwarePriceEstimate: document.querySelector("#hardware-price-estimate"),
+    refreshInstances: document.querySelector("#refresh-instances"),
+    instancesList: document.querySelector("#instances-list"),
+    instancesStatus: document.querySelector("#instances-status"),
     autoStopHours: document.querySelector("#auto-stop-hours"),
     backupSelect: document.querySelector("#backup-select"),
     backupOptionsStatus: document.querySelector("#backup-options-status"),
@@ -137,6 +140,7 @@
     user: null,
     lastStatus: null,
     hardwarePayload: null,
+    instancesPayload: null,
     priceEstimates: {},
     isBusy: false,
     commandStatusRefreshTimer: null,
@@ -164,6 +168,7 @@
     renderApplicationOptions(null);
     renderMinecraftOptions(null);
     renderHardwareOptions(null);
+    renderInstanceOptions(null);
     renderAccess(null);
     updateAuthUi();
   }
@@ -195,6 +200,9 @@
     elements.googleSignIn.disabled = nextBusy || !state.backendConfig;
     if (elements.refreshHardware) {
       elements.refreshHardware.disabled = nextBusy || !state.user;
+    }
+    if (elements.refreshInstances) {
+      elements.refreshInstances.disabled = nextBusy || !state.user;
     }
     updateActionAvailability();
 
@@ -235,6 +243,14 @@
 
     if (elements.refreshStatus) {
       elements.refreshStatus.disabled = !state.user;
+    }
+    if (elements.refreshInstances) {
+      elements.refreshInstances.disabled = state.isBusy || !state.user;
+    }
+    if (elements.instancesList) {
+      elements.instancesList.querySelectorAll("[data-instance-index]").forEach((button) => {
+        button.disabled = state.isBusy || !state.user;
+      });
     }
     if (elements.hardwareSelect) {
       elements.hardwareSelect.disabled = state.isBusy || !state.user || !state.hardwarePayload;
@@ -677,6 +693,143 @@
     return data;
   }
 
+  function getCreatedInstances() {
+    const instances = state.instancesPayload && Array.isArray(state.instancesPayload.instances)
+      ? state.instancesPayload.instances
+      : [];
+    return instances.filter((instance) => instance && instance.name && instance.zone);
+  }
+
+  function instanceHardwareLabel(instance) {
+    const hardware = instance && instance.hardware ? instance.hardware : {};
+    if (hardware.label) {
+      return String(hardware.label);
+    }
+    if (hardware.gpuType) {
+      return String(hardware.gpuType);
+    }
+    return "CPU";
+  }
+
+  function renderInstanceOptions(payload) {
+    if (!elements.instancesList) {
+      return;
+    }
+
+    state.instancesPayload = payload || state.instancesPayload;
+    const instances = getCreatedInstances();
+    if (!state.user) {
+      elements.instancesList.className = "instance-list empty";
+      elements.instancesList.textContent = "Sign in to load created instances.";
+      if (elements.instancesStatus) {
+        elements.instancesStatus.textContent = "Created instances are loaded from Compute Engine after Google sign-in.";
+      }
+      updateActionAvailability();
+      return;
+    }
+
+    if (!instances.length) {
+      elements.instancesList.className = "instance-list empty";
+      elements.instancesList.textContent = "No created instances found for this backend target name.";
+      if (elements.instancesStatus) {
+        const name = state.instancesPayload && state.instancesPayload.instanceName
+          ? state.instancesPayload.instanceName
+          : "configured VM";
+        elements.instancesStatus.textContent = `No Compute Engine instances named ${name} were found.`;
+      }
+      updateActionAvailability();
+      return;
+    }
+
+    const selectedHardware = String(elements.hardwareSelect && elements.hardwareSelect.value || "");
+    const selectedZoneValue = selectedZone();
+    elements.instancesList.className = "instance-list";
+    elements.instancesList.innerHTML = instances.map((instance, index) => {
+      const hardware = instance.hardware || {};
+      const hardwareId = String(hardware.id || "");
+      const isSelected = selectedHardware && selectedZoneValue
+        && hardwareId === selectedHardware
+        && String(instance.zone) === selectedZoneValue;
+      const status = String(instance.status || "UNKNOWN");
+      const sunshine = instance.sunshineStatus && instance.sunshineStatus.label
+        ? String(instance.sunshineStatus.label)
+        : "unknown";
+      const ip = instance.externalIp ? ` · ${instance.externalIp}` : "";
+      return `
+        <button
+          class="instance-card${isSelected ? " selected" : ""}"
+          type="button"
+          data-instance-index="${index}"
+        >
+          <span class="instance-card-title">${escapeHtml(instance.name)} · ${escapeHtml(instance.zone)}</span>
+          <span class="instance-card-meta">${escapeHtml(instanceHardwareLabel(instance))} · ${escapeHtml(hardware.machineType || "machine")} · ${escapeHtml(status)}${escapeHtml(ip)}</span>
+          <span class="instance-card-meta">Sunshine: ${escapeHtml(sunshine)}</span>
+        </button>
+      `;
+    }).join("");
+
+    if (elements.instancesStatus) {
+      const refreshedAt = state.instancesPayload && state.instancesPayload.refreshedAt
+        ? ` Refreshed: ${state.instancesPayload.refreshedAt}.`
+        : "";
+      elements.instancesStatus.textContent = `${instances.length} created instance${instances.length === 1 ? "" : "s"} found.${refreshedAt}`;
+    }
+    updateActionAvailability();
+  }
+
+  async function refreshInstances(options) {
+    const silent = Boolean(options && options.silent);
+    if (!state.user) {
+      throw new Error("Sign in with Google first.");
+    }
+    if (!silent && elements.instancesStatus) {
+      elements.instancesStatus.textContent = "Refreshing created instances...";
+    }
+    const data = await fetchApi("/api/instances", { method: "GET" });
+    renderInstanceOptions(data);
+    return data;
+  }
+
+  function profileForInstance(instance) {
+    const hardware = instance && instance.hardware ? instance.hardware : {};
+    const hardwareId = String(hardware.id || "");
+    const gpuType = String(hardware.gpuType || "");
+    return getHardwareProfiles().find((profile) => String(profile.id) === hardwareId)
+      || getHardwareProfiles().find((profile) => gpuType && String(profile.gpuType) === gpuType)
+      || null;
+  }
+
+  async function selectCreatedInstance(index) {
+    const instances = getCreatedInstances();
+    const instance = instances[index];
+    if (!instance) {
+      throw new Error("Selected instance is no longer available.");
+    }
+    if (!state.hardwarePayload || !getHardwareProfiles().length) {
+      await refreshHardwareOptions({ silent: false });
+    }
+
+    const profile = profileForInstance(instance);
+    if (!profile) {
+      throw new Error(`No hardware profile matches ${instanceHardwareLabel(instance)}.`);
+    }
+
+    const zone = String(instance.zone || "").trim();
+    if (zone && Array.isArray(profile.zones) && !profile.zones.includes(zone)) {
+      profile.zones = [zone, ...profile.zones];
+    }
+
+    elements.hardwareSelect.value = String(profile.id || "");
+    if (elements.zoneSelect) {
+      elements.zoneSelect.dataset.savedValue = zone;
+    }
+    renderZoneOptions();
+    renderInstanceOptions(state.instancesPayload);
+    setCommandStatus(`Selected ${instance.name} in ${zone}. Hardware and zone fields were updated.`, "success");
+    await refreshPriceEstimate({ silent: false });
+    await refreshStatus({ silent: true });
+  }
+
   function renderBackupOptions(payload) {
     if (!elements.backupSelect) {
       return;
@@ -948,6 +1101,7 @@
     if (state.token) {
       await restoreSession();
       await refreshHardwareOptions({ silent: true });
+      await refreshInstances({ silent: true });
       await refreshPriceEstimate({ silent: true });
       await refreshStatus({ silent: true });
     }
@@ -1004,6 +1158,7 @@
       storeSessionToken(response.access_token || "");
       await restoreSession();
       await refreshHardwareOptions({ silent: true });
+      await refreshInstances({ silent: true });
       await refreshPriceEstimate({ silent: true });
       await refreshStatus({ silent: true });
     } catch (error) {
@@ -1741,9 +1896,41 @@
       try {
         setBusy(true);
         await refreshHardwareOptions({ silent: false });
+        await refreshInstances({ silent: true });
         await refreshPriceEstimate({ silent: false });
         await refreshStatus({ silent: true });
         setBanner("Hardware availability refreshed.", "success");
+      } catch (error) {
+        handleError(error);
+      } finally {
+        setBusy(false);
+      }
+    });
+  }
+
+  if (elements.refreshInstances) {
+    elements.refreshInstances.addEventListener("click", async () => {
+      try {
+        setBusy(true);
+        await refreshInstances({ silent: false });
+        setBanner("Created instances refreshed.", "success");
+      } catch (error) {
+        handleError(error);
+      } finally {
+        setBusy(false);
+      }
+    });
+  }
+
+  if (elements.instancesList) {
+    elements.instancesList.addEventListener("click", async (event) => {
+      const button = event.target.closest("[data-instance-index]");
+      if (!button || state.isBusy) {
+        return;
+      }
+      try {
+        setBusy(true);
+        await selectCreatedInstance(Number(button.dataset.instanceIndex));
       } catch (error) {
         handleError(error);
       } finally {

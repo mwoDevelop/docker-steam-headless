@@ -295,6 +295,82 @@ select {
   grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr) auto;
 }
 
+.instance-picker {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.instance-picker-head {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.instance-picker-head span {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--text);
+  font-weight: 700;
+}
+
+.instance-picker-head p,
+.instance-picker > p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.instance-list {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+}
+
+.instance-list.empty {
+  display: block;
+  color: var(--muted);
+}
+
+.instance-card {
+  display: grid;
+  gap: 6px;
+  min-height: 0;
+  padding: 14px;
+  text-align: left;
+  border: 1px solid var(--line);
+  background: rgba(4, 10, 15, 0.58);
+  color: var(--text);
+}
+
+.instance-card:hover:not(:disabled) {
+  border-color: rgba(106, 228, 208, 0.34);
+  box-shadow: 0 12px 26px rgba(0, 0, 0, 0.22);
+}
+
+.instance-card.selected {
+  border-color: rgba(106, 228, 208, 0.52);
+  background: rgba(106, 228, 208, 0.09);
+}
+
+.instance-card-title {
+  color: var(--text);
+  font-weight: 700;
+}
+
+.instance-card-meta {
+  color: var(--muted);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
 .hardware-price-card {
   grid-column: 1 / -1;
   display: grid;
@@ -787,6 +863,10 @@ code,
 
   .access-dns-row {
     grid-template-columns: 1fr;
+  }
+
+  .instance-picker-head {
+    flex-direction: column;
   }
 }
 

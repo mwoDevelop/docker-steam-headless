@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;700&display=swap"
       rel="stylesheet"
     >
-    <link rel="stylesheet" href="./styles.css?v=admin-users-20260702">
+    <link rel="stylesheet" href="./styles.css?v=instance-picker-20260702">
     <script src="https://accounts.google.com/gsi/client" async defer></script>
   </head>
   <body>
@@ -91,6 +91,20 @@
         </div>
 
         <div class="hardware-options">
+          <div class="instance-picker">
+            <div class="instance-picker-head">
+              <div>
+                <span>Created instances</span>
+                <p>Pick an existing VM to fill Hardware and Zone from its current GCE configuration.</p>
+              </div>
+              <button id="refresh-instances" class="ghost" type="button">Refresh Instances</button>
+            </div>
+            <div id="instances-list" class="instance-list empty">
+              Sign in to load created instances.
+            </div>
+            <p id="instances-status">Created instances are loaded from Compute Engine.</p>
+          </div>
+
           <label>
             <span>Hardware</span>
             <select id="hardware-select" name="hardware-select">
@@ -223,6 +237,6 @@
       </section>
     </main>
 
-    <script src="./app.js?v=admin-users-20260702"></script>
+    <script src="./app.js?v=instance-picker-20260702"></script>
   </body>
 </html>
