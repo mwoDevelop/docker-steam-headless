@@ -317,8 +317,12 @@ def machine_type_path() -> str:
     return f"zones/{selected_zone()}/machineTypes/{selected_machine_type()}"
 
 
+def accelerator_type_path_for(gpu_type: str) -> str:
+    return f"zones/{selected_zone()}/acceleratorTypes/{gpu_type}"
+
+
 def accelerator_type_path() -> str:
-    return f"zones/{selected_zone()}/acceleratorTypes/{selected_gpu_type()}"
+    return accelerator_type_path_for(selected_gpu_type())
 
 
 def disk_type_path() -> str:
@@ -1201,6 +1205,54 @@ def extract_external_ip(instance: dict[str, Any]) -> str:
     return str(access_configs[0].get("natIP", "") or "")
 
 
+def instance_machine_type(instance: dict[str, Any]) -> str:
+    return str(instance.get("machineType", "") or "").rsplit("/", 1)[-1]
+
+
+def instance_guest_accelerators(instance: dict[str, Any]) -> list[dict[str, Any]]:
+    accelerators = instance.get("guestAccelerators", []) or []
+    return [accelerator for accelerator in accelerators if isinstance(accelerator, dict)]
+
+
+def metadata_gpu_count(instance: dict[str, Any]) -> int:
+    raw = metadata_value(instance, GPU_COUNT_METADATA_KEY).strip()
+    if not raw:
+        return 0
+    try:
+        return int(raw)
+    except ValueError:
+        return 0
+
+
+def attached_accelerator_matches(instance: dict[str, Any], gpu_type: str, gpu_count: int) -> bool:
+    accelerators = instance_guest_accelerators(instance)
+    if gpu_count <= 0:
+        return not accelerators
+    if len(accelerators) != 1:
+        return False
+    accelerator = accelerators[0]
+    actual_type = str(accelerator.get("acceleratorType", "") or "").rsplit("/", 1)[-1]
+    try:
+        actual_count = int(accelerator.get("acceleratorCount", 0) or 0)
+    except (TypeError, ValueError):
+        actual_count = 0
+    return actual_type == gpu_type and actual_count == gpu_count
+
+
+def instance_hardware_matches_selection(instance: dict[str, Any]) -> bool:
+    if instance_machine_type(instance) != selected_machine_type():
+        return False
+    if metadata_gpu_count(instance) != selected_gpu_count():
+        return False
+    if metadata_value(instance, "vm-gpu-type").strip() != selected_gpu_type():
+        return False
+    if selected_accelerator_mode() == "attached":
+        return attached_accelerator_matches(instance, selected_gpu_type(), selected_gpu_count())
+    if selected_accelerator_mode() in {"none", "builtin"}:
+        return attached_accelerator_matches(instance, "", 0)
+    return False
+
+
 def instance_metadata_items(instance: dict[str, Any]) -> list[dict[str, str]]:
     metadata = instance.get("metadata", {}) or {}
     items = metadata.get("items", []) or []
@@ -1239,6 +1291,125 @@ def set_instance_metadata_values(instance: dict[str, Any], updates: dict[str, st
 
 def set_instance_metadata_value(instance: dict[str, Any], key: str, value: str | None) -> None:
     set_instance_metadata_values(instance, {key: value})
+
+
+def wait_for_instance_metadata_fingerprint() -> dict[str, Any]:
+    return get_instance()
+
+
+def set_instance_machine_type_if_needed(instance: dict[str, Any]) -> dict[str, Any]:
+    if instance_machine_type(instance) == selected_machine_type():
+        return instance
+    operation = compute_request(
+        "POST",
+        f"{instance_url()}/setMachineType",
+        json={"machineType": machine_type_path()},
+    )
+    if not isinstance(operation, dict):
+        raise ApiError("Failed to update VM machine type.", 502)
+    wait_for_zone_operation(operation, timeout_seconds=180)
+    return get_instance()
+
+
+def set_instance_accelerators_if_needed(instance: dict[str, Any]) -> dict[str, Any]:
+    if selected_accelerator_mode() != "attached":
+        desired_accelerators: list[dict[str, Any]] = []
+    else:
+        desired_accelerators = [
+            {
+                "acceleratorType": accelerator_type_path(),
+                "acceleratorCount": selected_gpu_count(),
+            }
+        ]
+
+    if selected_accelerator_mode() == "attached":
+        if attached_accelerator_matches(instance, selected_gpu_type(), selected_gpu_count()):
+            return instance
+    elif attached_accelerator_matches(instance, "", 0):
+        return instance
+
+    operation = compute_request(
+        "POST",
+        f"{instance_url()}/setMachineResources",
+        json={"guestAccelerators": desired_accelerators},
+    )
+    if not isinstance(operation, dict):
+        raise ApiError("Failed to update VM accelerators.", 502)
+    wait_for_zone_operation(operation, timeout_seconds=180)
+    return get_instance()
+
+
+def set_instance_scheduling_for_selected_hardware(instance: dict[str, Any]) -> dict[str, Any]:
+    operation = compute_request(
+        "POST",
+        f"{instance_url()}/setScheduling",
+        json={
+            "onHostMaintenance": "TERMINATE",
+            "automaticRestart": True,
+        },
+    )
+    if isinstance(operation, dict):
+        wait_for_zone_operation(operation, timeout_seconds=120)
+    return get_instance()
+
+
+def start_metadata_updates(
+    *,
+    auto_stop_hours: int | None,
+    sunshine_credentials: dict[str, str],
+) -> dict[str, str | None]:
+    return {
+        "startup-script": decode_config_b64("vm_startup_script_b64"),
+        "shutdown-script": decode_config_b64("vm_shutdown_script_b64"),
+        "vm-persist-script": decode_config_b64("vm_persist_script_b64"),
+        "vm-power-action-script": decode_config_b64("vm_power_action_script_b64"),
+        "vm-data-disk-device-name": CONFIG["data_disk_device_name"],
+        "vm-data-disk-mount-root": CONFIG["data_disk_mount_root"],
+        GPU_COUNT_METADATA_KEY: str(selected_gpu_count()),
+        "vm-gpu-type": selected_gpu_type(),
+        STEAM_ENV_METADATA_KEY: build_steam_env_value(
+            {
+                "SUNSHINE_USER": sunshine_credentials["username"],
+                "SUNSHINE_PASS": sunshine_credentials["password"],
+            }
+        ),
+        AUTO_STOP_METADATA_KEY: str(auto_stop_hours) if auto_stop_hours is not None else None,
+        POWER_ACTION_METADATA_KEY: None,
+        POWER_ACTION_STATUS_METADATA_KEY: None,
+        SUNSHINE_STATUS_METADATA_KEY: "starting" if selected_gpu_count() > 0 else "disabled",
+        SUNSHINE_STATUS_DETAIL_METADATA_KEY: (
+            "VM booting. Waiting for Sunshine Web UI."
+            if selected_gpu_count() > 0
+            else "GPU disabled for this VM; Sunshine stack was not started."
+        ),
+    }
+
+
+def reconcile_stopped_instance_hardware(instance: dict[str, Any]) -> dict[str, Any]:
+    if instance_hardware_matches_selection(instance):
+        return instance
+    if str(instance.get("status", "")).upper() != "TERMINATED":
+        raise ApiError("Hardware profile can only be changed while the VM is stopped.", 400)
+
+    set_instance_metadata_values(
+        instance,
+        {
+            SUNSHINE_STATUS_METADATA_KEY: "starting" if selected_gpu_count() > 0 else "disabled",
+            SUNSHINE_STATUS_DETAIL_METADATA_KEY: (
+                f"Reconfiguring VM hardware to {selected_hardware_id()} before start."
+            ),
+        },
+    )
+    instance = get_instance()
+
+    if selected_accelerator_mode() in {"none", "builtin"}:
+        instance = set_instance_accelerators_if_needed(instance)
+        instance = set_instance_machine_type_if_needed(instance)
+    else:
+        instance = set_instance_machine_type_if_needed(instance)
+        instance = set_instance_accelerators_if_needed(instance)
+
+    return set_instance_scheduling_for_selected_hardware(instance)
 
 
 def parse_auto_stop_hours(payload: dict[str, Any]) -> int | None:
@@ -1588,8 +1759,18 @@ def build_instance_metadata_items(
                 }
             ),
         },
-        {"key": SUNSHINE_STATUS_METADATA_KEY, "value": "starting"},
-        {"key": SUNSHINE_STATUS_DETAIL_METADATA_KEY, "value": "VM booting. Waiting for Sunshine Web UI."},
+        {
+            "key": SUNSHINE_STATUS_METADATA_KEY,
+            "value": "starting" if selected_gpu_count() > 0 else "disabled",
+        },
+        {
+            "key": SUNSHINE_STATUS_DETAIL_METADATA_KEY,
+            "value": (
+                "VM booting. Waiting for Sunshine Web UI."
+                if selected_gpu_count() > 0
+                else "GPU disabled for this VM; Sunshine stack was not started."
+            ),
+        },
         {"key": DATA_DISK_STATUS_METADATA_KEY, "value": "pending"},
         {"key": DATA_DISK_DETAIL_METADATA_KEY, "value": "Waiting for shared data disk mount."},
     ]
@@ -2399,19 +2580,19 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
         auto_stop_hours = parse_auto_stop_hours(payload)
         if auto_stop_hours is not None and current_status == "RUNNING":
             raise ApiError("Auto-stop can only be scheduled while starting a stopped VM.", 400)
+        if current_status == "RUNNING" and not instance_hardware_matches_selection(current_instance):
+            raise ApiError("Hardware profile can only be changed while the VM is stopped.", 400)
 
         sunshine_credentials = sunshine_credentials_from_instance(current_instance)
         if current_status != "RUNNING":
             current_instance, sunshine_credentials = ensure_sunshine_credentials(current_instance)
+            current_instance = reconcile_stopped_instance_hardware(current_instance)
             set_instance_metadata_values(
                 current_instance,
-                {
-                    AUTO_STOP_METADATA_KEY: str(auto_stop_hours) if auto_stop_hours is not None else None,
-                    POWER_ACTION_METADATA_KEY: None,
-                    POWER_ACTION_STATUS_METADATA_KEY: None,
-                    SUNSHINE_STATUS_METADATA_KEY: "starting",
-                    SUNSHINE_STATUS_DETAIL_METADATA_KEY: "VM booting. Waiting for Sunshine Web UI.",
-                },
+                start_metadata_updates(
+                    auto_stop_hours=auto_stop_hours,
+                    sunshine_credentials=sunshine_credentials,
+                ),
             )
             current_instance = get_instance()
 
