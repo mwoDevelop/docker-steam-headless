@@ -2256,7 +2256,9 @@ def allowed_minecraft_commands(instance: dict[str, Any] | None) -> list[str]:
         return ["stop-minecraft", "restart-minecraft", "remove-minecraft"]
     if state == "stopped":
         return ["start-minecraft", "remove-minecraft"]
-    if state in {"not_installed", "removed", "error"}:
+    if state == "error":
+        return ["install-minecraft", "remove-minecraft"]
+    if state in {"not_installed", "removed"}:
         return ["install-minecraft"]
     return []
 

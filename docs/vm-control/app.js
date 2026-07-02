@@ -251,7 +251,7 @@
       return minecraftState === "running";
     }
     if (command === "remove-minecraft") {
-      return ["running", "stopped"].includes(minecraftState);
+      return ["running", "stopped", "error"].includes(minecraftState);
     }
     return false;
   }

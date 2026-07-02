@@ -276,29 +276,67 @@ minecraft_installed() {
   [[ -f "$MINECRAFT_COMPOSE_FILE" ]]
 }
 
-require_minecraft_installed() {
+minecraft_state() {
+  local state
+  state="$(metadata_get "$MINECRAFT_STATUS_METADATA_KEY" | tr '[:upper:]' '[:lower:]' | tr -d '\r' | head -n 1 || true)"
+  printf '%s\n' "${state:-not_installed}"
+}
+
+fail_minecraft_action() {
+  local action="$1"
+  local token="$2"
+  local state="$3"
+  local detail="$4"
+  log "Refusing ${action}: ${detail}"
+  set_minecraft_status "$state" "$detail"
+  set_power_action_status "$action" "$token" "failed" ""
+  return 1
+}
+
+require_minecraft_state() {
+  local action="$1"
+  local token="$2"
+  shift 2
+  local state expected
+  state="$(minecraft_state)"
+  for expected in "$@"; do
+    if [[ "$state" == "$expected" ]]; then
+      return 0
+    fi
+  done
+  if [[ "$state" == "not_installed" || "$state" == "removed" ]]; then
+    fail_minecraft_action "$action" "$token" "not_installed" "Minecraft server is not installed. Use Install first."
+  else
+    fail_minecraft_action "$action" "$token" "$state" "Minecraft action ${action} is not available while server state is ${state}."
+  fi
+}
+
+require_minecraft_compose() {
   local action="$1"
   local token="$2"
   if minecraft_installed; then
     return 0
   fi
-  log "Minecraft server is not installed; refusing ${action}."
-  set_minecraft_status "not_installed" "Minecraft server is not installed. Use Install first."
-  set_power_action_status "$action" "$token" "failed" ""
-  return 1
+  fail_minecraft_action "$action" "$token" "not_installed" "Minecraft server files are missing. Use Install first."
 }
 
 run_minecraft_action() {
   local action="$1"
   local token="$2"
+  local state
   local target_phase="started"
 
   log "Running Minecraft action ${action}"
   set_power_action_status "$action" "$token" "running"
-  set_minecraft_status "starting" "Running ${action}."
 
   case "$action" in
     install-minecraft)
+      state="$(minecraft_state)"
+      if [[ "$state" == "running" || "$state" == "stopped" ]]; then
+        fail_minecraft_action "$action" "$token" "$state" "Minecraft server is already installed. Use Start, Stop, Restart, or Remove."
+        return 1
+      fi
+      set_minecraft_status "installing" "Installing Minecraft server."
       ensure_minecraft_compose
       minecraft_compose pull
       minecraft_compose up -d
@@ -310,7 +348,9 @@ run_minecraft_action() {
       target_phase="installed"
       ;;
     start-minecraft)
-      require_minecraft_installed "$action" "$token" || return 1
+      require_minecraft_state "$action" "$token" "stopped" || return 1
+      require_minecraft_compose "$action" "$token" || return 1
+      set_minecraft_status "starting" "Starting Minecraft server."
       minecraft_compose up -d
       if ! wait_for_local_minecraft_ready; then
         set_minecraft_status "error" "Minecraft server did not become reachable on port 25565."
@@ -320,14 +360,17 @@ run_minecraft_action() {
       target_phase="started"
       ;;
     stop-minecraft)
-      require_minecraft_installed "$action" "$token" || return 1
+      require_minecraft_state "$action" "$token" "running" || return 1
+      require_minecraft_compose "$action" "$token" || return 1
       set_minecraft_status "stopping" "Stopping Minecraft server."
       minecraft_compose stop -t 30
       set_minecraft_status "stopped" "Minecraft server is stopped."
       target_phase="stopped"
       ;;
     restart-minecraft)
-      require_minecraft_installed "$action" "$token" || return 1
+      require_minecraft_state "$action" "$token" "running" || return 1
+      require_minecraft_compose "$action" "$token" || return 1
+      set_minecraft_status "starting" "Restarting Minecraft server."
       minecraft_compose restart
       if ! wait_for_local_minecraft_ready; then
         set_minecraft_status "error" "Minecraft server did not become reachable on port 25565."
@@ -337,7 +380,8 @@ run_minecraft_action() {
       target_phase="restarted"
       ;;
     remove-minecraft)
-      require_minecraft_installed "$action" "$token" || return 1
+      require_minecraft_state "$action" "$token" "running" "stopped" "error" || return 1
+      require_minecraft_compose "$action" "$token" || return 1
       set_minecraft_status "stopping" "Removing Minecraft container while preserving world data."
       minecraft_compose down
       set_minecraft_status "removed" "Minecraft container removed. World data is preserved in ${MINECRAFT_ROOT}/data."
