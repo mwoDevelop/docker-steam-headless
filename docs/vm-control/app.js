@@ -597,8 +597,9 @@
       updateActionAvailability();
       return;
     }
-    const previousZone = elements.zoneSelect.value
-      || elements.zoneSelect.dataset.savedValue
+    const requestedZone = elements.zoneSelect.dataset.savedValue || "";
+    const previousZone = requestedZone
+      || elements.zoneSelect.value
       || String((state.hardwarePayload && state.hardwarePayload.defaultSelection || {}).zone || "");
     elements.zoneSelect.innerHTML = zones.map((zone) => (
       `<option value="${escapeHtml(zone)}">${escapeHtml(zone)}</option>`
