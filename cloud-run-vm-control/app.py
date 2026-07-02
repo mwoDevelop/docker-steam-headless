@@ -3197,7 +3197,6 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
             status_detail=f"Running Minecraft server action {command}.",
             sunshine_state=None,
             extra_metadata={
-                MINECRAFT_STATUS_METADATA_KEY: "starting" if command != "stop-minecraft" else "stopping",
                 MINECRAFT_STATUS_DETAIL_METADATA_KEY: (
                     f"Installing Minecraft server {minecraft_version}."
                     if command == "install-minecraft"

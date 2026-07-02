@@ -321,7 +321,7 @@ require_minecraft_state() {
   if [[ "$state" == "not_installed" || "$state" == "removed" ]]; then
     fail_minecraft_action "$action" "$token" "not_installed" "Minecraft server is not installed. Use Install first."
   else
-    fail_minecraft_action "$action" "$token" "$state" "Minecraft action ${action} is not available while server state is ${state}."
+    fail_minecraft_action "$action" "$token" "error" "Minecraft action ${action} is not available while server state is ${state}."
   fi
 }
 
