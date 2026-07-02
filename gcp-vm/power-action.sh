@@ -272,6 +272,22 @@ minecraft_compose() {
   (cd "$MINECRAFT_ROOT" && docker compose -f "$MINECRAFT_COMPOSE_FILE" "$@")
 }
 
+minecraft_installed() {
+  [[ -f "$MINECRAFT_COMPOSE_FILE" ]]
+}
+
+require_minecraft_installed() {
+  local action="$1"
+  local token="$2"
+  if minecraft_installed; then
+    return 0
+  fi
+  log "Minecraft server is not installed; refusing ${action}."
+  set_minecraft_status "not_installed" "Minecraft server is not installed. Use Install first."
+  set_power_action_status "$action" "$token" "failed" ""
+  return 1
+}
+
 run_minecraft_action() {
   local action="$1"
   local token="$2"
@@ -294,6 +310,7 @@ run_minecraft_action() {
       target_phase="installed"
       ;;
     start-minecraft)
+      require_minecraft_installed "$action" "$token" || return 1
       minecraft_compose up -d
       if ! wait_for_local_minecraft_ready; then
         set_minecraft_status "error" "Minecraft server did not become reachable on port 25565."
@@ -303,12 +320,14 @@ run_minecraft_action() {
       target_phase="started"
       ;;
     stop-minecraft)
+      require_minecraft_installed "$action" "$token" || return 1
       set_minecraft_status "stopping" "Stopping Minecraft server."
       minecraft_compose stop -t 30
       set_minecraft_status "stopped" "Minecraft server is stopped."
       target_phase="stopped"
       ;;
     restart-minecraft)
+      require_minecraft_installed "$action" "$token" || return 1
       minecraft_compose restart
       if ! wait_for_local_minecraft_ready; then
         set_minecraft_status "error" "Minecraft server did not become reachable on port 25565."
@@ -318,6 +337,7 @@ run_minecraft_action() {
       target_phase="restarted"
       ;;
     remove-minecraft)
+      require_minecraft_installed "$action" "$token" || return 1
       set_minecraft_status "stopping" "Removing Minecraft container while preserving world data."
       minecraft_compose down
       set_minecraft_status "removed" "Minecraft container removed. World data is preserved in ${MINECRAFT_ROOT}/data."

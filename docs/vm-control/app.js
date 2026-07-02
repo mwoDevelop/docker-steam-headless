@@ -230,6 +230,32 @@
     return hasInstance && hasPermission;
   }
 
+  function isMinecraftCommand(command) {
+    return Object.prototype.hasOwnProperty.call(COMMAND_MINECRAFT_TRANSITIONS, command);
+  }
+
+  function minecraftCommandAvailable(command) {
+    if (!isMinecraftCommand(command)) {
+      return true;
+    }
+    const minecraftState = String(state.lastStatus && state.lastStatus.minecraftStatus && state.lastStatus.minecraftStatus.state || "")
+      .trim()
+      .toLowerCase();
+    if (command === "install-minecraft") {
+      return ["not_installed", "removed", "error"].includes(minecraftState);
+    }
+    if (command === "start-minecraft") {
+      return minecraftState === "stopped";
+    }
+    if (command === "stop-minecraft" || command === "restart-minecraft") {
+      return minecraftState === "running";
+    }
+    if (command === "remove-minecraft") {
+      return ["running", "stopped"].includes(minecraftState);
+    }
+    return false;
+  }
+
   function updateActionAvailability() {
     const canUseLastStatus = state.lastStatus
       && state.lastStatusTargetKey
@@ -277,6 +303,7 @@
       const command = button.dataset.command;
       const needsBackup = command === "restore-backup" || command === "remove-backup";
       const needsApplication = command === "install-app" || command === "uninstall-app";
+      const needsMinecraftState = isMinecraftCommand(command);
       const hasSelectedBackup = Boolean(elements.backupSelect && elements.backupSelect.value);
       const hasSelectedApplication = Boolean(elements.applicationSelect && elements.applicationSelect.value);
       button.disabled = !state.user
@@ -285,6 +312,7 @@
           || !allowed.has(command)
           || (needsBackup && !hasSelectedBackup)
           || (needsApplication && !hasSelectedApplication)
+          || (needsMinecraftState && !minecraftCommandAvailable(command))
         ));
     });
   }

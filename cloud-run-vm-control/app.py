@@ -2237,6 +2237,42 @@ def build_minecraft_status(instance: dict[str, Any] | None) -> dict[str, str]:
     }
 
 
+MINECRAFT_INSTALLED_STATES = {"running", "stopped"}
+
+
+def minecraft_state(instance: dict[str, Any] | None) -> str:
+    if instance is None:
+        return "not_created"
+    return metadata_value(instance, MINECRAFT_STATUS_METADATA_KEY).strip().lower() or "not_installed"
+
+
+def minecraft_installed(instance: dict[str, Any] | None) -> bool:
+    return minecraft_state(instance) in MINECRAFT_INSTALLED_STATES
+
+
+def allowed_minecraft_commands(instance: dict[str, Any] | None) -> list[str]:
+    state = minecraft_state(instance)
+    if state == "running":
+        return ["stop-minecraft", "restart-minecraft", "remove-minecraft"]
+    if state == "stopped":
+        return ["start-minecraft", "remove-minecraft"]
+    if state in {"not_installed", "removed", "error"}:
+        return ["install-minecraft"]
+    return []
+
+
+def require_minecraft_command_allowed(instance: dict[str, Any] | None, command: str) -> None:
+    if command in set(allowed_minecraft_commands(instance)):
+        return
+
+    state = minecraft_state(instance)
+    if command == "install-minecraft" and minecraft_installed(instance):
+        raise ApiError("Minecraft server is already installed. Use Start, Stop, Restart, or Remove.", 400)
+    if command in {"start-minecraft", "stop-minecraft", "restart-minecraft", "remove-minecraft"} and not minecraft_installed(instance):
+        raise ApiError("Minecraft server is not installed. Use Install first.", 400)
+    raise ApiError(f'Minecraft action "{command}" is not available while server state is "{state}".', 400)
+
+
 def has_attached_data_disk(instance: dict[str, Any] | None) -> bool:
     if instance is None:
         return False
@@ -2442,12 +2478,8 @@ def allowed_commands(instance: dict[str, Any] | None) -> list[str]:
                 "remove-backup",
                 "install-app",
                 "uninstall-app",
-                "install-minecraft",
-                "start-minecraft",
-                "stop-minecraft",
-                "restart-minecraft",
-                "remove-minecraft",
             ])
+            commands.extend(allowed_minecraft_commands(instance))
         return commands
     if status == "TERMINATED" and not hardware_matches:
         return ["status", "create", "delete", "set-sunshine-password"]
@@ -3065,6 +3097,7 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
             raise ApiError("Instance does not exist. Create it first.", 400)
         if current_status != "RUNNING":
             raise ApiError("Minecraft server actions require a running VM.", 400)
+        require_minecraft_command_allowed(current_instance, command)
         require_live_backup_ready(current_instance, command)
         ensure_firewall_rule(CONFIG["firewall_rule_minecraft"], FIREWALL_MINECRAFT_ALLOWED)
         target_phase = {
