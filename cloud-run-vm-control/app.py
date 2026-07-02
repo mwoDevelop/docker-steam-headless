@@ -2370,6 +2370,7 @@ def allowed_commands(instance: dict[str, Any] | None) -> list[str]:
         return ["status", "create"]
 
     status = str(instance.get("status", "UNKNOWN")).upper()
+    hardware_matches = instance_hardware_matches_selection(instance)
     if status == "RUNNING":
         if active_power_action(instance):
             return ["status"]
@@ -2391,6 +2392,8 @@ def allowed_commands(instance: dict[str, Any] | None) -> list[str]:
                 "remove-minecraft",
             ])
         return commands
+    if status == "TERMINATED" and not hardware_matches:
+        return ["status", "create", "delete", "set-sunshine-password"]
     if status == "TERMINATED":
         return ["status", "start", "delete", "set-sunshine-password"]
     return ["status", "delete"]
@@ -2658,9 +2661,36 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
     require_no_active_power_action(current_instance, command)
 
     if command == "create":
-        if current_instance is not None:
-            raise ApiError("Instance already exists.", 400)
         auto_stop_hours = parse_auto_stop_hours(payload)
+        if current_instance is not None:
+            if current_status != "TERMINATED" or instance_hardware_matches_selection(current_instance):
+                raise ApiError("Instance already exists.", 400)
+
+            current_instance, sunshine_credentials = ensure_sunshine_credentials(current_instance)
+            current_instance = reconcile_stopped_instance_hardware(current_instance)
+            set_instance_metadata_values(
+                current_instance,
+                start_metadata_updates(
+                    auto_stop_hours=auto_stop_hours,
+                    sunshine_credentials=sunshine_credentials,
+                ),
+            )
+            current_instance = get_instance()
+            operation = compute_request("POST", f"{instance_url()}/start")
+            if not isinstance(operation, dict):
+                raise ApiError("Failed to start VM instance.", 502)
+            wait_for_zone_operation(operation, timeout_seconds=180)
+            poll_instance_status("RUNNING", timeout_seconds=240)
+            final_instance = wait_for_external_ip(timeout_seconds=180)
+            updated = update_duckdns(extract_external_ip(final_instance))
+            return build_status_payload(
+                final_instance,
+                user=user,
+                command=command,
+                duckdns_updated=updated,
+                sunshine_credentials=sunshine_credentials,
+            )
+
         sunshine_credentials = {
             "username": SUNSHINE_USERNAME,
             "password": generate_sunshine_password(),
