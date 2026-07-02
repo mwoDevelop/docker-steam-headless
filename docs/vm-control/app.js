@@ -139,6 +139,7 @@
     token: "",
     user: null,
     lastStatus: null,
+    lastStatusTargetKey: "",
     hardwarePayload: null,
     instancesPayload: null,
     priceEstimates: {},
@@ -233,8 +234,11 @@
   }
 
   function updateActionAvailability() {
+    const canUseLastStatus = state.lastStatus
+      && state.lastStatusTargetKey
+      && state.lastStatusTargetKey === selectedTargetKey();
     const allowed = new Set(
-      state.user && state.lastStatus && Array.isArray(state.lastStatus.allowedCommands)
+      state.user && canUseLastStatus && Array.isArray(state.lastStatus.allowedCommands)
         ? state.lastStatus.allowedCommands
         : state.user
           ? ["status"]
@@ -897,8 +901,9 @@
     updateActionAvailability();
   }
 
-  function renderStatusPayload(payload) {
+  function renderStatusPayload(payload, targetKey) {
     state.lastStatus = payload;
+    state.lastStatusTargetKey = targetKey || selectedTargetKey();
     renderTargetSummary();
     renderBackupOptions(payload);
     renderApplicationOptions(payload);
@@ -1140,6 +1145,7 @@
     storeSessionToken("");
     state.user = null;
     state.lastStatus = null;
+    state.lastStatusTargetKey = "";
     renderAccess(null);
     updateAuthUi();
     setBusy(false);
@@ -1554,8 +1560,12 @@
     }
 
     try {
+      const requestTargetKey = selectedTargetKey();
       const data = await fetchApi(`/api/status${statusQueryString()}`, { method: "GET" });
-      renderStatusPayload(data);
+      if (requestTargetKey !== selectedTargetKey()) {
+        return data;
+      }
+      renderStatusPayload(data, requestTargetKey);
       if (!silent) {
         setCommandStatus(statusBannerMessage("VM status loaded", data), statusMessageTone(data));
       }
