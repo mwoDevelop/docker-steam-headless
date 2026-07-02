@@ -231,7 +231,7 @@ wait_for_local_minecraft_ready() {
         set_minecraft_status "running" "Minecraft server healthcheck is healthy."
         return 0
       fi
-      if timeout 2 bash -c '</dev/tcp/127.0.0.1/25565' >/dev/null 2>&1; then
+      if [[ -z "$health_status" ]] && timeout 2 bash -c '</dev/tcp/127.0.0.1/25565' >/dev/null 2>&1; then
         set_minecraft_status "running" "Minecraft server port 25565 is reachable locally."
         return 0
       fi
