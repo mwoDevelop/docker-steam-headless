@@ -363,6 +363,17 @@ button:hover:not(:disabled) {
   transform: translateY(-1px);
 }
 
+button,
+.button-link {
+  text-decoration: none;
+}
+
+.button-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
 button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
@@ -768,4 +779,29 @@ code,
   .access-dns-row {
     grid-template-columns: 1fr;
   }
+}
+
+.admin-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.admin-user-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.admin-user-row code {
+  overflow-wrap: anywhere;
+}
+
+.admin-user-row.fixed {
+  color: var(--muted);
 }

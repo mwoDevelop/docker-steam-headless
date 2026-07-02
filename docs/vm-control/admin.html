@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>VM Control Admin</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;700&display=swap"
+      rel="stylesheet"
+    >
+    <link rel="stylesheet" href="./styles.css?v=admin-users-20260702">
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
+  </head>
+  <body>
+    <main class="shell">
+      <section class="hero panel">
+        <div>
+          <p class="eyebrow">Administrator</p>
+          <h1>GUI Access</h1>
+          <p class="hero-copy">
+            Manage Google accounts that can access the main VM Control GUI.
+            Only administrator Google accounts can use this page.
+          </p>
+        </div>
+        <div class="hero-note">
+          <p>Administrator account: <code>mwodevelop@gmail.com</code></p>
+          <a href="./index.html">Back to VM Control</a>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Connection</p>
+            <h2>Admin Sign-In</h2>
+          </div>
+          <button id="connect" class="ghost" type="button">Connect API</button>
+        </div>
+
+        <form id="settings-form" class="form-grid" autocomplete="off">
+          <label>
+            <span>Cloud Run API URL</span>
+            <input id="backend-url" name="backend-url" type="url" placeholder="https://your-cloud-run-service.run.app">
+          </label>
+          <div class="auth-status-card">
+            <span class="auth-status-label">Session</span>
+            <div id="auth-status" class="auth-status" data-tone="neutral">
+              Connect the backend, then sign in with the administrator Google account.
+            </div>
+          </div>
+        </form>
+
+        <div class="auth-grid">
+          <div class="auth-card">
+            <p class="auth-card-label">Google Admin</p>
+            <button id="google-sign-in" class="google-sign-in" type="button">Sign in with Google</button>
+            <p class="auth-help">Use <code>mwodevelop@gmail.com</code>. Non-admin accounts are rejected by the backend.</p>
+            <button id="sign-out" class="ghost hidden" type="button">Sign Out</button>
+          </div>
+          <div class="auth-card">
+            <p class="auth-card-label">Admin API</p>
+            <div id="admin-summary" class="connection-summary">
+              <p>Sign in to load managed users.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Users</p>
+            <h2>Main GUI access</h2>
+          </div>
+        </div>
+
+        <form id="add-user-form" class="form-grid" autocomplete="off">
+          <label>
+            <span>User Google email</span>
+            <input id="user-email" type="email" placeholder="user@example.com">
+          </label>
+          <button id="add-user" class="action create" type="submit">Add User</button>
+        </form>
+
+        <div id="admin-message" class="command-status" data-tone="neutral">
+          Managed users will appear after admin sign-in.
+        </div>
+
+        <div id="users-list" class="admin-list"></div>
+      </section>
+    </main>
+
+    <script src="./admin.js?v=admin-users-20260702"></script>
+  </body>
+</html>

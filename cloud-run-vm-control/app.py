@@ -84,6 +84,8 @@ CONFIG = {
     "google_client_ids": csv_env("GOOGLE_CLIENT_IDS") or csv_env("GOOGLE_CLIENT_ID"),
     "allowed_google_emails": {value.lower() for value in csv_env("ALLOWED_GOOGLE_EMAILS")},
     "allowed_google_domains": {value.lower() for value in csv_env("ALLOWED_GOOGLE_DOMAINS")},
+    "admin_google_emails": {value.lower() for value in (csv_env("ADMIN_GOOGLE_EMAILS") or ["mwodevelop@gmail.com"])},
+    "access_users_secret_name": os.environ.get("ACCESS_USERS_SECRET_NAME", "steam-vm-control-allowed-users"),
     "duckdns_domains": normalize_duckdns_domains(csv_env("DUCKDNS_DOMAINS")),
     "duckdns_token": os.environ.get("DUCKDNS_TOKEN", ""),
     "novnc_port": os.environ.get("VM_NOVNC_PORT", "8083"),
@@ -158,6 +160,7 @@ APPLICATION_CATALOG: Final = [
     },
 ]
 APPLICATION_IDS: Final = {str(app["id"]) for app in APPLICATION_CATALOG}
+SECRET_MANAGER_BASE_URL = "https://secretmanager.googleapis.com/v1"
 
 
 def require_env(name: str) -> str:
@@ -171,6 +174,81 @@ def require_env(name: str) -> str:
 def compute_session() -> AuthorizedSession:
     credentials, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
     return AuthorizedSession(credentials)
+
+
+def normalize_email(raw_email: str) -> str:
+    return str(raw_email or "").strip().lower()
+
+
+def validate_email(raw_email: str) -> str:
+    email = normalize_email(raw_email)
+    if not email or "@" not in email or " " in email or email.startswith("@") or email.endswith("@"):
+        raise ApiError("Provide a valid email address.", 400)
+    return email
+
+
+def admin_google_emails() -> set[str]:
+    return {normalize_email(email) for email in CONFIG["admin_google_emails"] if normalize_email(email)}
+
+
+def secret_path(secret_name: str) -> str:
+    project = require_env("project")
+    return f"projects/{project}/secrets/{secret_name}"
+
+
+def read_access_users_secret() -> set[str]:
+    secret_name = str(CONFIG["access_users_secret_name"] or "").strip()
+    if not secret_name:
+        return set()
+    response = compute_session().get(
+        f"{SECRET_MANAGER_BASE_URL}/{secret_path(secret_name)}/versions/latest:access",
+        timeout=30,
+    )
+    if response.status_code == 404:
+        return set()
+    if response.status_code >= 400:
+        logging.warning("Unable to read managed access users secret: %s", response.text)
+        return set()
+    data = response.json()
+    encoded = (((data or {}).get("payload") or {}).get("data") or "")
+    if not encoded:
+        return set()
+    try:
+        decoded = base64.b64decode(encoded).decode("utf-8")
+        payload = json.loads(decoded)
+    except Exception as error:
+        logging.warning("Unable to decode managed access users secret: %s", error)
+        return set()
+    raw_users = payload.get("users", []) if isinstance(payload, dict) else payload
+    if not isinstance(raw_users, list):
+        return set()
+    return {normalize_email(email) for email in raw_users if normalize_email(email)}
+
+
+def write_access_users_secret(users: set[str]) -> None:
+    secret_name = str(CONFIG["access_users_secret_name"] or "").strip()
+    if not secret_name:
+        raise ApiError("Managed access users secret is not configured.", 500)
+    payload = json.dumps({"users": sorted(users)}, separators=(",", ":")).encode("utf-8")
+    response = compute_session().post(
+        f"{SECRET_MANAGER_BASE_URL}/{secret_path(secret_name)}:addVersion",
+        json={"payload": {"data": base64.b64encode(payload).decode("ascii")}},
+        timeout=30,
+    )
+    if response.status_code >= 400:
+        raise ApiError(f"Unable to update managed access users: {response.text}", 502)
+
+
+def configured_allowed_emails() -> set[str]:
+    return {normalize_email(email) for email in CONFIG["allowed_google_emails"] if normalize_email(email)}
+
+
+def managed_allowed_emails() -> set[str]:
+    return read_access_users_secret()
+
+
+def all_direct_allowed_emails() -> set[str]:
+    return configured_allowed_emails() | admin_google_emails() | managed_allowed_emails()
 
 
 def request_override(name: str, fallback: Any) -> Any:
@@ -814,6 +892,7 @@ def handle_unexpected_error(error: Exception):
 
 @app.route("/healthz", methods=["GET", "OPTIONS"])
 @app.route("/api/config", methods=["GET", "OPTIONS"])
+@app.route("/api/admin/users", methods=["GET", "POST", "OPTIONS"])
 @app.route("/api/hardware", methods=["GET", "OPTIONS"])
 @app.route("/api/price", methods=["GET", "OPTIONS"])
 @app.route("/api/me", methods=["GET", "OPTIONS"])
@@ -833,6 +912,7 @@ def options_passthrough():
                 "googleClientId": CONFIG["google_client_ids"][0] if CONFIG["google_client_ids"] else "",
                 "applicationCatalog": APPLICATION_CATALOG,
                 "defaultHardware": default_hardware_selection(),
+                "adminUrl": "./admin.html",
                 "target": {
                     "project": CONFIG["project"],
                     "zone": CONFIG["zone"],
@@ -846,6 +926,25 @@ def options_passthrough():
                 },
             }
         )
+
+    if request.path == "/api/admin/users":
+        admin_user = require_admin_user()
+        if request.method == "GET":
+            return jsonify(build_admin_users_payload(admin_user))
+        payload = request.get_json(silent=True) or {}
+        action = str(payload.get("action", "")).strip().lower()
+        email = validate_email(str(payload.get("email", "")))
+        users = managed_allowed_emails()
+        if action == "add":
+            users.add(email)
+        elif action == "remove":
+            if email in admin_google_emails():
+                raise ApiError("Administrator accounts cannot be removed from this page.", 400)
+            users.discard(email)
+        else:
+            raise ApiError("Unsupported admin action.", 400)
+        write_access_users_secret(users)
+        return jsonify(build_admin_users_payload(admin_user))
 
     if request.path == "/api/hardware":
         require_user()
@@ -914,7 +1013,7 @@ def options_passthrough():
     raise ApiError("Not found.", 404)
 
 
-def require_user() -> dict[str, Any]:
+def authenticated_google_user() -> dict[str, Any]:
     auth_header = request.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):
         raise ApiError("Missing Google token.", 401)
@@ -945,7 +1044,34 @@ def require_user() -> dict[str, Any]:
     if not email_verified or not email:
         raise ApiError("Google account email is not verified.", 403)
 
-    allowed_emails = CONFIG["allowed_google_emails"]
+    return {
+        "email": email,
+        "name": info.get("name", ""),
+        "picture": info.get("picture", ""),
+        "sub": info.get("sub", ""),
+        "hd": hd,
+        "email_domain": email_domain,
+    }
+
+
+def user_response(user: dict[str, Any]) -> dict[str, Any]:
+    email = normalize_email(str(user.get("email", "")))
+    return {
+        "email": email,
+        "name": user.get("name", ""),
+        "picture": user.get("picture", ""),
+        "sub": user.get("sub", ""),
+        "hd": user.get("hd", ""),
+        "isAdmin": email in admin_google_emails(),
+    }
+
+
+def require_user() -> dict[str, Any]:
+    user = authenticated_google_user()
+    email = normalize_email(str(user.get("email", "")))
+    hd = normalize_email(str(user.get("hd", "")))
+    email_domain = normalize_email(str(user.get("email_domain", "")))
+    allowed_emails = all_direct_allowed_emails()
     allowed_domains = CONFIG["allowed_google_domains"]
     if allowed_emails or allowed_domains:
         allowed = (
@@ -956,12 +1082,26 @@ def require_user() -> dict[str, Any]:
         if not allowed:
             raise ApiError(f"Google account {email} is not allowed.", 403)
 
+    return user_response(user)
+
+
+def require_admin_user() -> dict[str, Any]:
+    user = authenticated_google_user()
+    email = normalize_email(str(user.get("email", "")))
+    if email not in admin_google_emails():
+        raise ApiError(f"Google account {email} is not an administrator.", 403)
+    return user_response(user)
+
+
+def build_admin_users_payload(admin_user: dict[str, Any]) -> dict[str, Any]:
+    managed_users = managed_allowed_emails()
     return {
-        "email": email,
-        "name": info.get("name", ""),
-        "picture": info.get("picture", ""),
-        "sub": info.get("sub", ""),
-        "hd": hd,
+        "user": admin_user,
+        "adminEmails": sorted(admin_google_emails()),
+        "configuredEmails": sorted(configured_allowed_emails()),
+        "configuredDomains": sorted(CONFIG["allowed_google_domains"]),
+        "managedUsers": sorted(managed_users),
+        "effectiveDirectEmails": sorted(configured_allowed_emails() | admin_google_emails() | managed_users),
     }
 
 
