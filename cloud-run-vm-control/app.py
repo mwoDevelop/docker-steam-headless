@@ -2441,7 +2441,11 @@ def poll_instance_status(target_status: str, timeout_seconds: int = 300) -> dict
         time.sleep(3)
 
     if last_instance:
-        return last_instance
+        last_status = str(last_instance.get("status", "UNKNOWN"))
+        raise ApiError(
+            f"Timed out waiting for instance to reach {target_status}; last state was {last_status}.",
+            504,
+        )
     raise ApiError(f"Timed out waiting for instance to reach {target_status}.", 504)
 
 
@@ -2602,7 +2606,10 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
             current_instance = get_instance()
 
         if current_status != "RUNNING":
-            compute_request("POST", f"{instance_url()}/start")
+            operation = compute_request("POST", f"{instance_url()}/start")
+            if not isinstance(operation, dict):
+                raise ApiError("Failed to start VM instance.", 502)
+            wait_for_zone_operation(operation, timeout_seconds=180)
             poll_instance_status("RUNNING")
             final_instance = wait_for_external_ip(timeout_seconds=120)
         else:
@@ -2683,7 +2690,10 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
                 duckdns_updated=updated,
                 sunshine_credentials=sunshine_credentials,
             )
-        compute_request("POST", f"{instance_url()}/start")
+        operation = compute_request("POST", f"{instance_url()}/start")
+        if not isinstance(operation, dict):
+            raise ApiError("Failed to start VM instance.", 502)
+        wait_for_zone_operation(operation, timeout_seconds=180)
         poll_instance_status("RUNNING")
         final_instance = wait_for_external_ip(timeout_seconds=120)
         updated = update_duckdns(extract_external_ip(final_instance))
