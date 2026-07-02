@@ -13,8 +13,18 @@
     <link rel="stylesheet" href="./styles.css?v=instance-picker-fix-20260702">
     <script src="https://accounts.google.com/gsi/client" async defer></script>
   </head>
-  <body>
-    <main class="shell">
+  <body class="is-page-loading">
+    <div id="page-loader" class="page-loader" role="status" aria-live="polite" aria-busy="true">
+      <div class="page-loader-card">
+        <span class="page-loader-spinner" aria-hidden="true"></span>
+        <div>
+          <p class="page-loader-kicker">Loading VM Control</p>
+          <p id="page-loader-message">Preparing page components...</p>
+        </div>
+      </div>
+    </div>
+
+    <main id="app-shell" class="shell" aria-busy="true">
       <section class="hero panel">
         <div>
           <p class="eyebrow">GitHub Pages + Cloud Run</p>
@@ -237,6 +247,6 @@
       </section>
     </main>
 
-    <script src="./app.js?v=minecraft-action-guard-20260702b"></script>
+    <script src="./app.js?v=page-loader-20260702"></script>
   </body>
 </html>

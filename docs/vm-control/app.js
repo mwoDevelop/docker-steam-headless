@@ -103,6 +103,9 @@
   const elements = {
     backendUrl: document.querySelector("#backend-url"),
     connect: document.querySelector("#connect"),
+    pageLoader: document.querySelector("#page-loader"),
+    pageLoaderMessage: document.querySelector("#page-loader-message"),
+    appShell: document.querySelector("#app-shell"),
     authStatus: document.querySelector("#auth-status"),
     googleSignIn: document.querySelector("#google-sign-in"),
     signOut: document.querySelector("#sign-out"),
@@ -146,7 +149,44 @@
     isBusy: false,
     commandStatusRefreshTimer: null,
     history: [],
+    isInitialLoad: true,
   };
+
+  function setPageLoading(message) {
+    if (!state.isInitialLoad || !elements.pageLoader) {
+      return;
+    }
+    document.body.classList.add("is-page-loading");
+    elements.pageLoader.hidden = false;
+    elements.pageLoader.setAttribute("aria-busy", "true");
+    if (elements.appShell) {
+      elements.appShell.setAttribute("aria-busy", "true");
+    }
+    if (elements.pageLoaderMessage && message) {
+      elements.pageLoaderMessage.textContent = message;
+    }
+  }
+
+  function markPageReady(message) {
+    state.isInitialLoad = false;
+    if (elements.pageLoaderMessage && message) {
+      elements.pageLoaderMessage.textContent = message;
+    }
+    if (elements.appShell) {
+      elements.appShell.setAttribute("aria-busy", "false");
+    }
+    if (!elements.pageLoader) {
+      document.body.classList.remove("is-page-loading");
+      return;
+    }
+    elements.pageLoader.setAttribute("aria-busy", "false");
+    document.body.classList.remove("is-page-loading");
+    window.setTimeout(() => {
+      if (!state.isInitialLoad) {
+        elements.pageLoader.hidden = true;
+      }
+    }, 220);
+  }
 
   function loadConfig() {
     const saved = JSON.parse(window.localStorage.getItem(storageKeys.config) || "{}");
@@ -1180,6 +1220,7 @@
     if (!silent) {
       setBanner("Connecting to Cloud Run backend...", "warning");
     }
+    setPageLoading("Connecting to Cloud Run backend...");
 
     const response = await window.fetch(`${state.backendUrl}/api/config`, {
       method: "GET",
@@ -1208,10 +1249,15 @@
     setBanner("Backend connected. Sign in with Google to unlock VM control.", "success");
 
     if (state.token) {
+      setPageLoading("Restoring Google session...");
       await restoreSession();
+      setPageLoading("Loading hardware and zone availability...");
       await refreshHardwareOptions({ silent: true });
+      setPageLoading("Loading created VM instances...");
       await refreshInstances({ silent: true, autoSelect: true });
+      setPageLoading("Loading price estimate...");
       await refreshPriceEstimate({ silent: true });
+      setPageLoading("Loading current VM and service status...");
       await refreshStatus({ silent: true });
     }
   }
@@ -2087,15 +2133,23 @@
     });
   }
 
-  loadConfig();
-  setBusy(false);
-
-  if (state.backendUrl) {
-    setBusy(true);
-    connectBackend({ silent: true })
-      .catch(handleError)
-      .finally(() => {
-        setBusy(false);
-      });
+  async function boot() {
+    setPageLoading("Preparing page components...");
+    try {
+      loadConfig();
+      setBusy(false);
+      if (!state.backendUrl) {
+        return;
+      }
+      setBusy(true);
+      await connectBackend({ silent: true });
+    } catch (error) {
+      handleError(error);
+    } finally {
+      setBusy(false);
+      markPageReady("Ready.");
+    }
   }
+
+  boot();
 })();
