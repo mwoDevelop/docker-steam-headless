@@ -85,6 +85,28 @@ metadata_get_with_retry() {
   return 1
 }
 
+wait_for_zone_operation() {
+  local token="$1"
+  local project="$2"
+  local zone="$3"
+  local operation_name="$4"
+  local operation_json status
+  [[ -n "$token" && -n "$project" && -n "$zone" && -n "$operation_name" ]] || return 0
+
+  for _ in $(seq 1 30); do
+    operation_json="$(curl --fail --silent --show-error \
+      -H "Authorization: Bearer ${token}" \
+      "https://compute.googleapis.com/compute/v1/projects/${project}/zones/${zone}/operations/${operation_name}" || true)"
+    status="$(printf '%s\n' "$operation_json" | jq -r '.status // empty' 2>/dev/null || true)"
+    if [[ "$status" == "DONE" ]]; then
+      return 0
+    fi
+    sleep 1
+  done
+
+  return 0
+}
+
 normalize_metadata_value() {
   local value="$1"
   if [[ "$value" == "|-"$'\n'* ]]; then
@@ -96,7 +118,7 @@ normalize_metadata_value() {
 set_instance_metadata_value() {
   local key="$1"
   local value="${2-}"
-  local token project zone name instance_json fingerprint items payload
+  local token project zone name instance_json fingerprint items payload operation_json operation_name
   token="$(metadata_token || true)"
   project="$(project_id || true)"
   zone="$(zone_name || true)"
@@ -126,12 +148,14 @@ set_instance_metadata_value() {
         '{fingerprint: $fingerprint, items: $items}')"
     fi
 
-    if curl --fail --silent --show-error \
+    if operation_json="$(curl --fail --silent --show-error \
       -X POST \
       -H "Authorization: Bearer ${token}" \
       -H "Content-Type: application/json" \
       -d "$payload" \
-      "https://compute.googleapis.com/compute/v1/projects/${project}/zones/${zone}/instances/${name}/setMetadata" >/dev/null; then
+      "https://compute.googleapis.com/compute/v1/projects/${project}/zones/${zone}/instances/${name}/setMetadata")"; then
+      operation_name="$(printf '%s\n' "$operation_json" | jq -r '.name // empty' 2>/dev/null || true)"
+      wait_for_zone_operation "$token" "$project" "$zone" "$operation_name"
       return 0
     fi
 
