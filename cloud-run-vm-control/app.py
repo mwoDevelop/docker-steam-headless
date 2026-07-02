@@ -2515,15 +2515,20 @@ def update_duckdns(external_ip: str) -> bool:
     updated = True
     for domain in CONFIG["duckdns_domains"]:
         subdomain = domain.removesuffix(".duckdns.org")
-        response = requests.get(
-            "https://www.duckdns.org/update",
-            params={
-                "domains": subdomain,
-                "token": CONFIG["duckdns_token"],
-                "ip": external_ip,
-            },
-            timeout=15,
-        )
+        try:
+            response = requests.get(
+                "https://www.duckdns.org/update",
+                params={
+                    "domains": subdomain,
+                    "token": CONFIG["duckdns_token"],
+                    "ip": external_ip,
+                },
+                timeout=15,
+            )
+        except requests.RequestException as error:
+            logging.warning("DuckDNS update failed for %s: %s", domain, error)
+            updated = False
+            continue
         if response.text.strip() != "OK":
             logging.warning("DuckDNS update failed for %s: %s", domain, response.text.strip())
             updated = False
