@@ -135,6 +135,21 @@ MACHINE_TYPE_SPECS: Final = {
     "n1-standard-4": {"family": "n1-standard", "vcpus": 4.0, "memoryGb": 15.0},
     "g2-standard-4": {"family": "g2", "vcpus": 4.0, "memoryGb": 16.0},
 }
+GPU_PRICE_DESCRIPTION_ALIASES: Final = {
+    "nvidia-l4": ("Nvidia L4 GPU",),
+    "nvidia-tesla-t4": ("Nvidia Tesla T4 GPU",),
+    "nvidia-tesla-p4": ("Nvidia Tesla P4 GPU",),
+    "nvidia-tesla-p100": ("Nvidia Tesla P100 GPU",),
+    "nvidia-tesla-v100": ("Nvidia Tesla V100 GPU",),
+    "nvidia-tesla-a100": ("Nvidia Tesla A100 GPU",),
+    "nvidia-a100-80gb": ("Nvidia Tesla A100 80GB GPU", "Nvidia A100 80GB GPU"),
+    "nvidia-h100-80gb": ("Nvidia H100 80GB GPU",),
+    "nvidia-h100-mega-80gb": ("Nvidia H100 80GB Mega GPU", "Nvidia H100 Mega 80GB GPU"),
+    "nvidia-h200-141gb": ("Nvidia H200 141GB GPU",),
+    "nvidia-b200": ("A4 Nvidia B200 (1 gpu slice)", "Nvidia B200 GPU"),
+    "nvidia-gb200": ("Nvidia GB200 GPU",),
+    "nvidia-rtx-pro-6000": ("Nvidia RTX PRO 6000 GPU", "Nvidia RTX Pro 6000 GPU"),
+}
 PRICE_INDEX_CACHE: dict[str, Any] = {
     "loaded_at": 0.0,
     "currency": "",
@@ -517,6 +532,32 @@ def gpu_billing_label(gpu_type: str) -> str:
     return "Nvidia " + " ".join(part.upper() if any(ch.isdigit() for ch in part) else part.title() for part in parts)
 
 
+def is_priceable_gpu_accelerator(accelerator_name: str) -> bool:
+    return accelerator_name in GPU_PRICE_DESCRIPTION_ALIASES
+
+
+def is_standard_gpu_price_description(description: str, gpu_type: str) -> bool:
+    normalized = " ".join(str(description or "").split())
+    if not normalized:
+        return False
+
+    excluded_markers = (
+        "attached to DWS Defined Duration VMs",
+        "attached to Spot Preemptible VMs",
+        "Commitment ",
+        "DWS Calendar Mode",
+        "Reserved ",
+        "Spot Preemptible ",
+    )
+    if any(marker in normalized for marker in excluded_markers):
+        return False
+
+    for alias in GPU_PRICE_DESCRIPTION_ALIASES.get(gpu_type, (gpu_billing_label(gpu_type),)):
+        if normalized.startswith(f"{alias} running in "):
+            return True
+    return False
+
+
 def price_key_for_sku(sku: dict[str, Any]) -> tuple[str, str] | None:
     category = sku.get("category", {}) or {}
     if category.get("usageType") != "OnDemand":
@@ -536,17 +577,9 @@ def price_key_for_sku(sku: dict[str, Any]) -> tuple[str, str] | None:
     if description.startswith("G2 Instance Ram "):
         return ("g2", "ram")
 
-    known_gpu_types = (
-        "nvidia-l4",
-        "nvidia-tesla-t4",
-        "nvidia-tesla-p4",
-        "nvidia-tesla-p100",
-        "nvidia-tesla-v100",
-        "nvidia-tesla-a100",
-        "nvidia-a100-80gb",
-    )
+    known_gpu_types = tuple(GPU_PRICE_DESCRIPTION_ALIASES)
     for gpu_type in known_gpu_types:
-        if description.startswith(f"{gpu_billing_label(gpu_type)} GPU "):
+        if is_standard_gpu_price_description(description, gpu_type):
             return ("gpu", gpu_type)
     return None
 
@@ -755,6 +788,27 @@ def safe_price_estimate(
         }
 
 
+def priced_gpu_regions(gpu_type: str) -> set[str] | None:
+    try:
+        price_index = refresh_price_index(PRICE_CURRENCY_CODE)
+    except Exception as error:
+        logging.warning("Unable to filter GPU zones by pricing catalog: %s", error)
+        return None
+
+    regions: set[str] = set()
+    for region, region_prices in (price_index.get("index", {}) or {}).items():
+        if isinstance(region_prices, dict) and ("gpu", gpu_type) in region_prices:
+            regions.add(str(region))
+    return regions
+
+
+def filter_zones_by_gpu_price(gpu_type: str, zones: list[str]) -> list[str]:
+    priced_regions = priced_gpu_regions(gpu_type)
+    if priced_regions is None:
+        return zones
+    return [zone for zone in zones if zone_region(zone) in priced_regions]
+
+
 def hardware_profile(
     *,
     hardware_id: str,
@@ -796,7 +850,7 @@ def build_hardware_payload() -> dict[str, Any]:
             gpu_type="nvidia-tesla-t4",
             gpu_count=1,
             accelerator_mode="attached",
-            zones=by_accelerator.get("nvidia-tesla-t4", []),
+            zones=filter_zones_by_gpu_price("nvidia-tesla-t4", by_accelerator.get("nvidia-tesla-t4", [])),
         ),
         hardware_profile(
             hardware_id="nvidia-l4",
@@ -805,13 +859,16 @@ def build_hardware_payload() -> dict[str, Any]:
             gpu_type="nvidia-l4",
             gpu_count=1,
             accelerator_mode="builtin",
-            zones=by_accelerator.get("nvidia-l4", []),
+            zones=filter_zones_by_gpu_price("nvidia-l4", by_accelerator.get("nvidia-l4", [])),
         ),
     ]
 
     known = {str(profile["id"]) for profile in profiles}
     for accelerator_name, accelerator_zone_list in by_accelerator.items():
-        if accelerator_name in known:
+        if accelerator_name in known or not is_priceable_gpu_accelerator(accelerator_name):
+            continue
+        priced_zones = filter_zones_by_gpu_price(accelerator_name, accelerator_zone_list)
+        if not priced_zones:
             continue
         profiles.append(
             hardware_profile(
@@ -821,7 +878,7 @@ def build_hardware_payload() -> dict[str, Any]:
                 gpu_type=accelerator_name,
                 gpu_count=1,
                 accelerator_mode="attached",
-                zones=accelerator_zone_list,
+                zones=priced_zones,
             )
         )
 

@@ -160,9 +160,6 @@
     if (elements.hardwareSelect && saved.hardwareId) {
       elements.hardwareSelect.dataset.savedValue = String(saved.hardwareId);
     }
-    if (elements.zoneSelect && saved.zone) {
-      elements.zoneSelect.dataset.savedValue = String(saved.zone);
-    }
     renderHistory();
     renderTargetSummary();
     renderBackupOptions(null);
@@ -503,6 +500,10 @@
     return String(elements.zoneSelect && elements.zoneSelect.value || "").trim();
   }
 
+  function firstEuropeZone(zones) {
+    return zones.find((zone) => String(zone || "").startsWith("europe-")) || "";
+  }
+
   function selectedHardwareLabel() {
     const profile = selectedHardwareProfile();
     return profile ? String(profile.label || profile.id) : "";
@@ -605,7 +606,7 @@
     if (zones.includes(previousZone)) {
       elements.zoneSelect.value = previousZone;
     } else {
-      elements.zoneSelect.value = zones[0];
+      elements.zoneSelect.value = firstEuropeZone(zones) || zones[0];
     }
     elements.zoneSelect.dataset.savedValue = "";
     if (elements.hardwareOptionsStatus) {
