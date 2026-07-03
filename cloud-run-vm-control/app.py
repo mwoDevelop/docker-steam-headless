@@ -2442,7 +2442,7 @@ def build_minecraft_status(instance: dict[str, Any] | None) -> dict[str, str]:
         "not_installed": "Not installed",
         "installing": "Installing",
         "starting": "Starting",
-        "running": "Running",
+        "running": "Ready",
         "stopping": "Stopping",
         "stopped": "Stopped",
         "backup": "Backup in progress",
