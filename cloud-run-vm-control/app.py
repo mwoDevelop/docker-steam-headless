@@ -1460,17 +1460,17 @@ def attached_accelerator_matches(instance: dict[str, Any], gpu_type: str, gpu_co
 
 
 def instance_hardware_matches_selection(instance: dict[str, Any]) -> bool:
-    if instance_machine_type(instance) != selected_machine_type():
-        return False
-    if metadata_gpu_count(instance) != selected_gpu_count():
-        return False
-    if metadata_value(instance, "vm-gpu-type").strip() != selected_gpu_type():
-        return False
-    if selected_accelerator_mode() == "attached":
-        return attached_accelerator_matches(instance, selected_gpu_type(), selected_gpu_count())
-    if selected_accelerator_mode() in {"none", "builtin"}:
-        return attached_accelerator_matches(instance, "", 0)
-    return False
+    actual = instance_hardware_selection(instance)
+    try:
+        actual_gpu_count = int(actual.get("gpuCount", 0) or 0)
+    except (TypeError, ValueError):
+        actual_gpu_count = 0
+    return (
+        str(actual.get("machineType", "")) == selected_machine_type()
+        and str(actual.get("gpuType", "")) == selected_gpu_type()
+        and actual_gpu_count == selected_gpu_count()
+        and str(actual.get("acceleratorMode", "")) == selected_accelerator_mode()
+    )
 
 
 def instance_metadata_items(instance: dict[str, Any]) -> list[dict[str, str]]:
