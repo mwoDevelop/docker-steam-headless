@@ -1091,7 +1091,7 @@
     if (!target) {
       return false;
     }
-    target.scrollIntoView({ behavior: options && options.smooth ? "smooth" : "auto", block: "start" });
+    target.scrollIntoView({ behavior: options && options.smooth ? "smooth" : "auto", block: "center" });
     if (typeof target.focus === "function") {
       target.focus({ preventScroll: true });
     }
