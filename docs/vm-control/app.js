@@ -153,6 +153,7 @@
     commandStatusRefreshTimer: null,
     history: [],
     isInitialLoad: true,
+    scrolledInitialHash: "",
   };
 
   function setPageLoading(message) {
@@ -1076,7 +1077,36 @@
     renderAutoStopStatus(payload);
     renderHardwarePriceEstimate(selectedPriceEstimate());
     renderAccess(payload);
+    scrollToCurrentHashOnce();
     updateActionAvailability();
+  }
+
+  function scrollToHashTarget(hash, options) {
+    const rawHash = String(hash || "");
+    const targetId = rawHash.startsWith("#") ? rawHash.slice(1) : rawHash;
+    if (!targetId) {
+      return false;
+    }
+    const target = document.getElementById(targetId);
+    if (!target) {
+      return false;
+    }
+    target.scrollIntoView({ behavior: options && options.smooth ? "smooth" : "auto", block: "start" });
+    if (typeof target.focus === "function") {
+      target.focus({ preventScroll: true });
+    }
+    return true;
+  }
+
+  function scrollToCurrentHashOnce() {
+    if (!window.location.hash || state.scrolledInitialHash === window.location.hash) {
+      return;
+    }
+    window.setTimeout(() => {
+      if (scrollToHashTarget(window.location.hash, { smooth: false })) {
+        state.scrolledInitialHash = window.location.hash;
+      }
+    }, 100);
   }
 
   function formatLocalDateTime(value) {
@@ -1746,6 +1776,9 @@
     const minecraftStatus = payload.minecraftStatus || {};
     const state = escapeToken(minecraftStatus.state || "not_installed");
     const label = escapeHtml(minecraftStatus.label || "Not installed");
+    const version = minecraftStatus.version
+      ? `<p class="access-meta">Version: <code>${escapeHtml(minecraftStatus.version)}</code></p>`
+      : "";
     const detail = minecraftStatus.detail
       ? `<p class="access-meta">Status detail: <span>${escapeHtml(minecraftStatus.detail)}</span></p>`
       : "";
@@ -1754,6 +1787,7 @@
         <span class="service-status-dot" aria-hidden="true"></span>
         <span>Status: ${label}</span>
       </div>
+      ${version}
       ${detail}
     `;
   }
@@ -2132,7 +2166,7 @@
           <p class="access-meta">Address: <code>${minecraftAddressEscaped}</code></p>
           ${minecraftStatusMeta}
           <div class="access-links">
-            <a href="#minecraft-address">Open management controls</a>
+            <a href="#minecraft-management-controls" data-scroll-target="minecraft-management-controls">Open management controls</a>
           </div>
         </article>
 
@@ -2224,6 +2258,23 @@
       }
     });
   }
+
+  document.addEventListener("click", (event) => {
+    const link = event.target.closest("[data-scroll-target]");
+    if (!link) {
+      return;
+    }
+    const targetId = String(link.getAttribute("data-scroll-target") || "").trim();
+    if (!targetId) {
+      return;
+    }
+    event.preventDefault();
+    if (window.location.hash !== `#${targetId}`) {
+      window.history.pushState(null, "", `#${targetId}`);
+    }
+    state.scrolledInitialHash = "";
+    scrollToHashTarget(targetId, { smooth: true });
+  });
 
   elements.actionButtons.forEach((button) => {
     button.addEventListener("click", async () => {
