@@ -2382,6 +2382,34 @@ def build_minecraft_status(instance: dict[str, Any] | None) -> dict[str, str]:
     phase, power_action, _ = parse_power_action_status(
         metadata_value(instance, POWER_ACTION_STATUS_METADATA_KEY)
     )
+    if power_action == "create-backup" and phase in {"requested", "running"}:
+        return {
+            "state": "backup",
+            "label": "Backup in progress",
+            "detail": detail or "Minecraft server is temporarily stopped while the manual backup is running.",
+            "version": version,
+        }
+    if power_action == "restore-backup" and phase in {"requested", "running"}:
+        return {
+            "state": "restore",
+            "label": "Restore in progress",
+            "detail": detail or "Minecraft server is temporarily stopped while the selected backup is restored.",
+            "version": version,
+        }
+    if power_action in {"stop", "delete", "auto-stop"} and phase in {"requested", "running", "backed-up", "stopping"}:
+        return {
+            "state": "stopping",
+            "label": "Stopping",
+            "detail": detail or "VM is stopping. Minecraft server is not expected to be reachable.",
+            "version": version,
+        }
+    if power_action == "restart" and phase in {"requested", "running", "rebooting"}:
+        return {
+            "state": "starting",
+            "label": "Restarting",
+            "detail": detail or "VM is restarting. Waiting for Minecraft server status.",
+            "version": version,
+        }
     if power_action in {
         "install-minecraft",
         "start-minecraft",
@@ -2396,8 +2424,15 @@ def build_minecraft_status(instance: dict[str, Any] | None) -> dict[str, str]:
             "restart-minecraft": "Restarting",
             "remove-minecraft": "Removing",
         }
+        action_states = {
+            "install-minecraft": "installing",
+            "start-minecraft": "starting",
+            "stop-minecraft": "stopping",
+            "restart-minecraft": "starting",
+            "remove-minecraft": "removing",
+        }
         return {
-            "state": "starting" if power_action != "stop-minecraft" else "stopping",
+            "state": action_states.get(power_action, "starting"),
             "label": action_labels.get(power_action, "Updating"),
             "detail": detail or "Minecraft server action is running.",
             "version": version,
@@ -2410,6 +2445,9 @@ def build_minecraft_status(instance: dict[str, Any] | None) -> dict[str, str]:
         "running": "Running",
         "stopping": "Stopping",
         "stopped": "Stopped",
+        "backup": "Backup in progress",
+        "restore": "Restore in progress",
+        "removing": "Removing",
         "removed": "Removed",
         "error": "Error",
     }

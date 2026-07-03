@@ -1128,7 +1128,7 @@
       .trim()
       .toLowerCase();
     return ["starting", "stopping", "backup", "restore"].includes(sunshineState)
-      || ["installing", "starting", "stopping"].includes(minecraftState);
+      || ["installing", "starting", "stopping", "backup", "restore", "removing"].includes(minecraftState);
   }
 
   async function waitForStatusSettled(command, initialPayload) {
