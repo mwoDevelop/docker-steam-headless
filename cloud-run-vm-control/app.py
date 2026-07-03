@@ -1429,13 +1429,15 @@ def require_admin_user() -> dict[str, Any]:
 
 def build_admin_users_payload(admin_user: dict[str, Any]) -> dict[str, Any]:
     managed_users = managed_allowed_emails()
+    admin_emails = admin_google_emails()
+    configured_users = configured_allowed_emails() - admin_emails
     return {
         "user": admin_user,
-        "adminEmails": sorted(admin_google_emails()),
-        "configuredEmails": sorted(configured_allowed_emails()),
+        "adminEmails": sorted(admin_emails),
+        "configuredEmails": sorted(configured_users),
         "configuredDomains": sorted(CONFIG["allowed_google_domains"]),
         "managedUsers": sorted(managed_users),
-        "effectiveDirectEmails": sorted(configured_allowed_emails() | admin_google_emails() | managed_users),
+        "effectiveDirectEmails": sorted(configured_users | admin_emails | managed_users),
     }
 
 
