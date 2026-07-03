@@ -126,6 +126,7 @@
     applicationOptionsStatus: document.querySelector("#application-options-status"),
     minecraftAddress: document.querySelector("#minecraft-address"),
     minecraftVersionSelect: document.querySelector("#minecraft-version-select"),
+    refreshMinecraftVersions: document.querySelector("#refresh-minecraft-versions"),
     minecraftOptionsStatus: document.querySelector("#minecraft-options-status"),
     banner: document.querySelector("#banner"),
     commandStatus: document.querySelector("#command-status"),
@@ -247,6 +248,9 @@
     if (elements.refreshInstances) {
       elements.refreshInstances.disabled = nextBusy || !state.user;
     }
+    if (elements.refreshMinecraftVersions) {
+      elements.refreshMinecraftVersions.disabled = nextBusy || !state.user || !state.backendConfig;
+    }
     updateActionAvailability();
 
     const canSetSunshine = canSetSunshinePassword(state.lastStatus);
@@ -350,6 +354,9 @@
         || !allowed.has("install-minecraft")
         || !minecraftCommandAvailable("install-minecraft")
         || getMinecraftVersionCatalog(state.lastStatus).length === 0;
+    }
+    if (elements.refreshMinecraftVersions) {
+      elements.refreshMinecraftVersions.disabled = state.isBusy || !state.user || !state.backendConfig;
     }
     elements.actionButtons.forEach((button) => {
       const command = button.dataset.command;
@@ -1705,6 +1712,61 @@
       || defaultMinecraftVersion(state.lastStatus);
   }
 
+  function applyMinecraftVersionPayload(payload) {
+    if (!payload || !Array.isArray(payload.versions) || !payload.versions.length) {
+      return false;
+    }
+    state.backendConfig = {
+      ...(state.backendConfig || {}),
+      minecraftServer: {
+        ...(state.backendConfig && state.backendConfig.minecraftServer ? state.backendConfig.minecraftServer : {}),
+        versions: payload.versions,
+        defaultVersion: payload.defaultVersion || payload.versions[0],
+        source: payload.source || "backend",
+        updatedAt: payload.updatedAt || "",
+        error: payload.error || "",
+      },
+    };
+    if (state.lastStatus) {
+      state.lastStatus = {
+        ...state.lastStatus,
+        minecraft: {
+          ...(state.lastStatus.minecraft || {}),
+          versions: payload.versions,
+          defaultVersion: payload.defaultVersion || payload.versions[0],
+          source: payload.source || "backend",
+          updatedAt: payload.updatedAt || "",
+          error: payload.error || "",
+        },
+      };
+    }
+    return true;
+  }
+
+  async function refreshMinecraftVersions() {
+    if (!state.user) {
+      throw new Error("Sign in with Google first.");
+    }
+    if (elements.minecraftOptionsStatus) {
+      elements.minecraftOptionsStatus.textContent = "Refreshing Minecraft server versions from PaperMC...";
+    }
+    const previousVersion = selectedMinecraftVersion();
+    const data = await fetchApi("/api/minecraft/versions", { method: "POST" });
+    const updated = applyMinecraftVersionPayload(data);
+    if (updated && elements.minecraftVersionSelect) {
+      elements.minecraftVersionSelect.dataset.savedValue = previousVersion;
+    }
+    renderMinecraftOptions(state.lastStatus);
+    if (data && data.error) {
+      setCommandStatus(`Minecraft versions refresh failed. Keeping previous list. ${data.error}`, "warning");
+    } else {
+      const source = data && data.source ? ` Source: ${data.source}.` : "";
+      const updatedAt = data && data.updatedAt ? ` Updated: ${data.updatedAt}.` : "";
+      setCommandStatus(`Minecraft versions refreshed.${source}${updatedAt}`, "success");
+    }
+    return data;
+  }
+
   function renderMinecraftOptions(payload) {
     if (!elements.minecraftAddress) {
       return;
@@ -1738,7 +1800,10 @@
       const label = payload && payload.minecraftStatus && payload.minecraftStatus.label
         ? payload.minecraftStatus.label
         : "Unknown";
-      elements.minecraftOptionsStatus.textContent = `Minecraft status: ${label}. Server address: ${address}. Version: ${selectedMinecraftVersion()}.`;
+      const versionPayload = payload && payload.minecraft ? payload.minecraft : state.backendConfig && state.backendConfig.minecraftServer || {};
+      const versionSource = versionPayload.source ? ` Source: ${versionPayload.source}.` : "";
+      const versionUpdatedAt = versionPayload.updatedAt ? ` Versions updated: ${versionPayload.updatedAt}.` : "";
+      elements.minecraftOptionsStatus.textContent = `Minecraft status: ${label}. Server address: ${address}. Version: ${selectedMinecraftVersion()}.${versionSource}${versionUpdatedAt}`;
     }
     updateActionAvailability();
   }
@@ -2123,6 +2188,23 @@
     elements.minecraftVersionSelect.addEventListener("change", () => {
       saveConfig();
       renderMinecraftOptions(state.lastStatus);
+    });
+  }
+
+  if (elements.refreshMinecraftVersions) {
+    elements.refreshMinecraftVersions.addEventListener("click", async () => {
+      if (state.isBusy) {
+        return;
+      }
+      try {
+        setBusy(true);
+        await refreshMinecraftVersions();
+      } catch (error) {
+        handleError(error);
+        renderMinecraftOptions(state.lastStatus);
+      } finally {
+        setBusy(false);
+      }
     });
   }
 

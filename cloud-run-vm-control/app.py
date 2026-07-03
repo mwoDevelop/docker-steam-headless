@@ -192,6 +192,14 @@ APPLICATION_CATALOG: Final = [
 ]
 APPLICATION_IDS: Final = {str(app["id"]) for app in APPLICATION_CATALOG}
 SECRET_MANAGER_BASE_URL = "https://secretmanager.googleapis.com/v1"
+PAPERMC_PROJECT_URL = "https://fill.papermc.io/v3/projects/paper"
+PAPERMC_USER_AGENT = "docker-steam-headless-vm-control/1.0"
+MINECRAFT_VERSION_CACHE: dict[str, Any] = {
+    "versions": [],
+    "source": "static",
+    "updatedAt": "",
+    "lastError": "",
+}
 
 
 def normalize_minecraft_version(raw_version: Any) -> str:
@@ -206,7 +214,7 @@ def normalize_minecraft_version(raw_version: Any) -> str:
     return version
 
 
-def minecraft_version_options() -> list[str]:
+def configured_minecraft_version_options() -> list[str]:
     versions: list[str] = []
     for raw_version in CONFIG["minecraft_versions"]:
         try:
@@ -221,8 +229,105 @@ def minecraft_version_options() -> list[str]:
     return versions
 
 
+def minecraft_version_options() -> list[str]:
+    cached_versions = MINECRAFT_VERSION_CACHE.get("versions")
+    if isinstance(cached_versions, list) and cached_versions:
+        return [str(version) for version in cached_versions if str(version or "").strip()]
+    return configured_minecraft_version_options()
+
+
 def default_minecraft_version() -> str:
     return minecraft_version_options()[0]
+
+
+def minecraft_version_payload(*, refreshed: bool = False, error: str = "") -> dict[str, Any]:
+    return {
+        "versions": minecraft_version_options(),
+        "defaultVersion": default_minecraft_version(),
+        "source": MINECRAFT_VERSION_CACHE.get("source") or "static",
+        "updatedAt": MINECRAFT_VERSION_CACHE.get("updatedAt") or "",
+        "refreshed": refreshed,
+        "error": error,
+    }
+
+
+def minecraft_version_sort_key(version: str) -> tuple[int, list[int], str]:
+    if version.upper() == "LATEST":
+        return (2, [9999], version)
+    core = version.split("-", 1)[0]
+    parts: list[int] = []
+    for part in core.split("."):
+        try:
+            parts.append(int(part))
+        except ValueError:
+            parts.append(-1)
+    return (1 if "-" not in version else 0, parts, version)
+
+
+def refresh_minecraft_versions_from_papermc() -> dict[str, Any]:
+    previous_versions = minecraft_version_options()
+    session = requests.Session()
+    headers = {"User-Agent": PAPERMC_USER_AGENT, "Accept": "application/json"}
+    try:
+        response = session.get(PAPERMC_PROJECT_URL, headers=headers, timeout=20)
+        if response.status_code >= 400:
+            raise ApiError(f"PaperMC version API returned {response.status_code}.", 502)
+        data = response.json()
+        grouped_versions = data.get("versions", {})
+        if not isinstance(grouped_versions, dict):
+            raise ApiError("PaperMC version API returned an unexpected payload.", 502)
+
+        raw_versions: list[str] = []
+        for values in grouped_versions.values():
+            if isinstance(values, list):
+                raw_versions.extend(str(value) for value in values if value)
+        raw_versions = sorted(set(raw_versions), key=minecraft_version_sort_key, reverse=True)
+
+        stable_versions: list[str] = []
+        for version in raw_versions:
+            builds_response = session.get(
+                f"{PAPERMC_PROJECT_URL}/versions/{version}/builds",
+                headers=headers,
+                timeout=15,
+            )
+            if builds_response.status_code >= 400:
+                continue
+            builds = builds_response.json()
+            if not isinstance(builds, list):
+                continue
+            has_stable_server = any(
+                isinstance(build, dict)
+                and str(build.get("channel", "")).upper() == "STABLE"
+                and isinstance(build.get("downloads"), dict)
+                and "server:default" in build.get("downloads", {})
+                for build in builds
+            )
+            if has_stable_server:
+                stable_versions.append(version)
+
+        if not stable_versions:
+            raise ApiError("PaperMC did not return any stable server versions.", 502)
+
+        versions = ["LATEST", *[version for version in stable_versions if version != "LATEST"]]
+        MINECRAFT_VERSION_CACHE.update(
+            {
+                "versions": versions,
+                "source": "papermc",
+                "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "lastError": "",
+            }
+        )
+        return minecraft_version_payload(refreshed=True)
+    except Exception as error:
+        message = error.message if isinstance(error, ApiError) else str(error)
+        MINECRAFT_VERSION_CACHE.update(
+            {
+                "versions": previous_versions,
+                "source": MINECRAFT_VERSION_CACHE.get("source") or "static",
+                "lastError": message,
+            }
+        )
+        return minecraft_version_payload(refreshed=False, error=message)
 
 
 def parse_minecraft_version(payload: Any) -> str:
@@ -1112,6 +1217,7 @@ def handle_unexpected_error(error: Exception):
 @app.route("/api/hardware", methods=["GET", "OPTIONS"])
 @app.route("/api/instances", methods=["GET", "OPTIONS"])
 @app.route("/api/price", methods=["GET", "OPTIONS"])
+@app.route("/api/minecraft/versions", methods=["GET", "POST", "OPTIONS"])
 @app.route("/api/me", methods=["GET", "OPTIONS"])
 @app.route("/api/status", methods=["GET", "OPTIONS"])
 @app.route("/api/command", methods=["POST", "OPTIONS"])
@@ -1141,10 +1247,7 @@ def options_passthrough():
                     "sunshine": CONFIG["sunshine_port"],
                     "minecraft": CONFIG["minecraft_port"],
                 },
-                "minecraftServer": {
-                    "versions": minecraft_version_options(),
-                    "defaultVersion": default_minecraft_version(),
-                },
+                "minecraftServer": minecraft_version_payload(),
             }
         )
 
@@ -1197,6 +1300,12 @@ def options_passthrough():
                 ),
             }
         )
+
+    if request.path == "/api/minecraft/versions":
+        require_user()
+        if request.method == "POST":
+            return jsonify(refresh_minecraft_versions_from_papermc())
+        return jsonify(minecraft_version_payload())
 
     if request.path == "/api/me":
         return jsonify({"user": require_user()})
@@ -2654,8 +2763,7 @@ def build_status_payload(
             "sunshineStatus": build_sunshine_status(None),
             "minecraftStatus": build_minecraft_status(None),
             "minecraft": {
-                "versions": minecraft_version_options(),
-                "defaultVersion": default_minecraft_version(),
+                **minecraft_version_payload(),
             },
             "persistence": build_persistence_status(None),
             "powerAction": build_power_action_status(None),
@@ -2696,8 +2804,7 @@ def build_status_payload(
         "sunshineStatus": build_sunshine_status(instance),
         "minecraftStatus": build_minecraft_status(instance),
         "minecraft": {
-            "versions": minecraft_version_options(),
-            "defaultVersion": default_minecraft_version(),
+            **minecraft_version_payload(),
         },
         "persistence": build_persistence_status(instance),
         "powerAction": build_power_action_status(instance),

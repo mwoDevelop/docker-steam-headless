@@ -489,7 +489,7 @@ select {
 }
 
 .minecraft-options {
-  grid-template-columns: minmax(220px, 1fr) minmax(160px, 220px) minmax(0, 1.2fr);
+  grid-template-columns: minmax(220px, 1fr) minmax(160px, 220px) auto minmax(0, 1.2fr);
 }
 
 .start-options p,
