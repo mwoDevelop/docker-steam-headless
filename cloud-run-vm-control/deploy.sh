@@ -115,7 +115,8 @@ EOF
 [[ -n "${GCP_ZONE:-}" ]] || err "GCP_ZONE is required"
 [[ -n "${GCE_NAME:-}" ]] || err "GCE_NAME is required"
 [[ -n "$GOOGLE_CLIENT_ID" ]] || err "GOOGLE_CLIENT_ID is required"
-[[ -n "$ALLOWED_GOOGLE_EMAILS" || -n "$ALLOWED_GOOGLE_DOMAINS" ]] || err "Set ALLOWED_GOOGLE_EMAILS or ALLOWED_GOOGLE_DOMAINS"
+[[ -n "$ALLOWED_GOOGLE_EMAILS" || -n "$ALLOWED_GOOGLE_DOMAINS" || ( -n "$ADMIN_GOOGLE_EMAILS" && -n "$ACCESS_USERS_SECRET_NAME" ) ]] \
+  || err "Set ALLOWED_GOOGLE_EMAILS, ALLOWED_GOOGLE_DOMAINS, or ADMIN_GOOGLE_EMAILS with ACCESS_USERS_SECRET_NAME"
 
 gcloud config set project "$GCP_PROJECT" >/dev/null
 
