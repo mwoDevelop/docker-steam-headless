@@ -149,7 +149,7 @@
 
         <div class="start-options">
           <label>
-            <span>Auto-stop after start</span>
+            <span>Auto-stop hours</span>
             <input
               id="auto-stop-hours"
               name="auto-stop-hours"
@@ -162,7 +162,9 @@
               placeholder="Hours, optional"
             >
           </label>
-          <p>Leave empty to run without a scheduled shutdown. Applies when creating a VM or starting a stopped one.</p>
+          <button class="action status" type="button" data-command="set-auto-stop">Extend Auto-stop</button>
+          <p id="auto-stop-status">Auto-stop schedule will appear after VM status is loaded.</p>
+          <p>Leave empty to run without a scheduled shutdown during create/start. Use Extend Auto-stop on a running VM to reset the timer from now.</p>
         </div>
 
         <div class="backup-options">
@@ -254,6 +256,6 @@
       </section>
     </main>
 
-    <script src="./app.js?v=vm-action-minecraft-status-20260703"></script>
+    <script src="./app.js?v=auto-stop-schedule-20260703"></script>
   </body>
 </html>

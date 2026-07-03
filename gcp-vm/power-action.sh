@@ -436,14 +436,26 @@ schedule_auto_shutdown() {
   if ! [[ "$hours" =~ ^[0-9]+$ ]] || [ "$hours" -lt 1 ] || [ "$hours" -gt 24 ]; then
     systemctl stop vm-ctl-auto-shutdown.timer vm-ctl-auto-shutdown.service >/dev/null 2>&1 || true
     systemctl reset-failed vm-ctl-auto-shutdown.timer vm-ctl-auto-shutdown.service >/dev/null 2>&1 || true
+    set_instance_metadata_values "$(jq -n '{\"vm-auto-shutdown-at\": null}')"
     return 0
   fi
 
   systemctl stop vm-ctl-auto-shutdown.timer vm-ctl-auto-shutdown.service >/dev/null 2>&1 || true
   systemctl reset-failed vm-ctl-auto-shutdown.timer vm-ctl-auto-shutdown.service >/dev/null 2>&1 || true
   systemd-run --unit=vm-ctl-auto-shutdown --on-active="${hours}h" /usr/local/bin/vm-power-action auto-stop >/dev/null
+  set_instance_metadata_values "$(jq -n --arg value "$(date -u -d "+${hours} hours" +"%Y-%m-%dT%H:%M:%SZ")" '{\"vm-auto-shutdown-at\": $value}')"
   next_at="$(systemctl show vm-ctl-auto-shutdown.timer --property=NextElapseUSecRealtime --value 2>/dev/null || true)"
   log "Auto-shutdown re-scheduled (${context}) in ${hours}h${next_at:+ at ${next_at}}"
+}
+
+update_auto_stop_timer() {
+  local action="$1"
+  local token="$2"
+
+  log "Updating auto-stop timer token=${token}"
+  set_power_action_status "$action" "$token" "running"
+  schedule_auto_shutdown "manual-update"
+  set_power_action_status "$action" "$token" "scheduled" ""
 }
 
 ensure_persist_script() {
@@ -840,6 +852,9 @@ run_daemon() {
           ;;
         apply-sunshine-password)
           apply_sunshine_password "$action" "$token" || true
+          ;;
+        set-auto-stop)
+          update_auto_stop_timer "$action" "$token" || true
           ;;
         install-app|uninstall-app)
           run_application_action "$action" "$token" || true

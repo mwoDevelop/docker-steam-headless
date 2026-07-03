@@ -488,8 +488,16 @@ select {
   grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
 }
 
+.start-options {
+  grid-template-columns: minmax(220px, 320px) auto minmax(0, 1fr);
+}
+
 .minecraft-options {
   grid-template-columns: minmax(220px, 1fr) minmax(160px, 220px) auto minmax(0, 1.2fr);
+}
+
+.start-options .action {
+  min-height: 44px;
 }
 
 .start-options p,

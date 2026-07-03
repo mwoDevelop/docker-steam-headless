@@ -5,6 +5,7 @@ import logging
 import os
 import secrets
 import time
+from datetime import datetime, timedelta, timezone
 from typing import Final
 from functools import lru_cache
 from typing import Any
@@ -110,6 +111,7 @@ CONFIG = {
 SUNSHINE_HEALTHCHECK_TIMEOUT_SECONDS: Final = 8
 
 AUTO_STOP_METADATA_KEY = "vm-auto-shutdown-hours"
+AUTO_STOP_AT_METADATA_KEY = "vm-auto-shutdown-at"
 STEAM_ENV_METADATA_KEY = "steam-headless-env"
 SUNSHINE_STATUS_METADATA_KEY = "vm-sunshine-status"
 SUNSHINE_STATUS_DETAIL_METADATA_KEY = "vm-sunshine-status-detail"
@@ -1331,6 +1333,7 @@ def options_passthrough():
             "create-backup",
             "restore-backup",
             "remove-backup",
+            "set-auto-stop",
             "set-sunshine-password",
             "install-app",
             "uninstall-app",
@@ -1705,6 +1708,7 @@ def start_metadata_updates(
             }
         ),
         AUTO_STOP_METADATA_KEY: str(auto_stop_hours) if auto_stop_hours is not None else None,
+        AUTO_STOP_AT_METADATA_KEY: None,
         POWER_ACTION_METADATA_KEY: None,
         POWER_ACTION_STATUS_METADATA_KEY: None,
         SUNSHINE_STATUS_METADATA_KEY: "starting" if selected_gpu_count() > 0 else "disabled",
@@ -1759,6 +1763,81 @@ def parse_auto_stop_hours(payload: dict[str, Any]) -> int | None:
             400,
         )
     return value
+
+
+def parse_datetime_utc(raw_value: str) -> datetime | None:
+    value = str(raw_value or "").strip()
+    if not value:
+        return None
+    if value.endswith("Z"):
+        value = f"{value[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def format_datetime_utc(value: datetime) -> str:
+    return value.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def estimated_auto_stop_at(instance: dict[str, Any], hours: int) -> str:
+    base = parse_datetime_utc(metadata_value(instance, BACKUP_READY_AT_METADATA_KEY))
+    if base is None:
+        base = parse_datetime_utc(str(instance.get("lastStartTimestamp", "") or ""))
+    if base is None:
+        base = parse_datetime_utc(str(instance.get("creationTimestamp", "") or ""))
+    if base is None:
+        return ""
+    return format_datetime_utc(base + timedelta(hours=hours))
+
+
+def build_auto_stop_status(instance: dict[str, Any] | None) -> dict[str, Any]:
+    if instance is None:
+        return {
+            "hours": "",
+            "scheduledAt": "",
+            "remainingSeconds": None,
+            "source": "",
+            "label": "VM not created",
+        }
+
+    hours_raw = metadata_value(instance, AUTO_STOP_METADATA_KEY).strip()
+    if not hours_raw:
+        return {
+            "hours": "",
+            "scheduledAt": "",
+            "remainingSeconds": None,
+            "source": "",
+            "label": "Disabled",
+        }
+
+    scheduled_at = metadata_value(instance, AUTO_STOP_AT_METADATA_KEY).strip()
+    source = "metadata" if scheduled_at else ""
+    try:
+        hours = int(hours_raw)
+    except ValueError:
+        hours = None
+
+    if not scheduled_at and hours is not None and str(instance.get("status", "")).upper() == "RUNNING":
+        scheduled_at = estimated_auto_stop_at(instance, hours)
+        source = "estimated" if scheduled_at else ""
+
+    remaining_seconds: int | None = None
+    scheduled_dt = parse_datetime_utc(scheduled_at)
+    if scheduled_dt is not None:
+        remaining_seconds = max(0, int((scheduled_dt - datetime.now(timezone.utc)).total_seconds()))
+
+    return {
+        "hours": hours_raw,
+        "scheduledAt": scheduled_at,
+        "remainingSeconds": remaining_seconds,
+        "source": source,
+        "label": "Scheduled" if scheduled_at else f"Scheduled after {hours_raw}h",
+    }
 
 
 def metadata_env_value(raw_env: str, key: str) -> str:
@@ -2691,7 +2770,7 @@ def allowed_commands(instance: dict[str, Any] | None) -> list[str]:
     if status == "RUNNING":
         if active_power_action(instance):
             return ["status"]
-        commands = ["status", "set-sunshine-password"]
+        commands = ["status", "set-sunshine-password", "set-auto-stop"]
         if is_live_backup_ready(instance):
             commands.extend([
                 "restart",
@@ -2744,6 +2823,7 @@ def build_power_action_status(instance: dict[str, Any] | None) -> dict[str, str]
         "rebooting": "Rebooting",
         "restarted": "Restarted",
         "restored": "Restored",
+        "scheduled": "Scheduled",
         "stopping": "Stopping",
         "failed": "Failed",
     }
@@ -2796,6 +2876,7 @@ def build_status_payload(
             "urls": build_urls(""),
             "user": user,
             "autoStopHours": "",
+            "autoStop": build_auto_stop_status(None),
             "sunshineCredentials": {
                 "username": SUNSHINE_USERNAME,
                 "password": "",
@@ -2840,6 +2921,7 @@ def build_status_payload(
         "urls": build_urls(external_ip),
         "user": user,
         "autoStopHours": metadata_value(instance, AUTO_STOP_METADATA_KEY),
+        "autoStop": build_auto_stop_status(instance),
         "sunshineCredentials": normalize_sunshine_credentials_for_response(credentials),
         "sunshineStatus": build_sunshine_status(instance),
         "minecraftStatus": build_minecraft_status(instance),
@@ -3096,6 +3178,29 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
             sunshine_credentials=sunshine_credentials,
         )
 
+    if command == "set-auto-stop":
+        if current_instance is None:
+            raise ApiError("Instance does not exist. Use Create first.", 400)
+        if current_status != "RUNNING":
+            raise ApiError("Auto-stop can only be extended while the VM is running.", 400)
+        auto_stop_hours = parse_auto_stop_hours(payload)
+        if auto_stop_hours is None:
+            raise ApiError("Auto-stop hours are required.", 400)
+        current_instance, token = request_live_power_action(
+            current_instance,
+            action="set-auto-stop",
+            status_detail="Updating auto-stop timer.",
+            extra_metadata={AUTO_STOP_METADATA_KEY: str(auto_stop_hours)},
+            sunshine_state=None,
+        )
+        final_instance = wait_for_power_action_phase(
+            action="set-auto-stop",
+            token=token,
+            target_phase="scheduled",
+            timeout_seconds=120,
+        )
+        return build_status_payload(final_instance, user=user, command=command)
+
     if command == "stop":
         if current_instance is None:
             raise ApiError("Instance does not exist.", 400)
@@ -3114,6 +3219,7 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
             final_instance,
             {
                 AUTO_STOP_METADATA_KEY: None,
+                AUTO_STOP_AT_METADATA_KEY: None,
                 SUNSHINE_STATUS_METADATA_KEY: "stopped",
                 SUNSHINE_STATUS_DETAIL_METADATA_KEY: None,
             },

@@ -120,6 +120,7 @@
     instancesList: document.querySelector("#instances-list"),
     instancesStatus: document.querySelector("#instances-status"),
     autoStopHours: document.querySelector("#auto-stop-hours"),
+    autoStopStatus: document.querySelector("#auto-stop-status"),
     backupSelect: document.querySelector("#backup-select"),
     backupOptionsStatus: document.querySelector("#backup-options-status"),
     applicationSelect: document.querySelector("#application-select"),
@@ -334,7 +335,8 @@
     if (elements.zoneSelect) {
       elements.zoneSelect.disabled = state.isBusy || !state.user || !selectedHardwareProfile();
     }
-    elements.autoStopHours.disabled = state.isBusy || !state.user || (!allowed.has("start") && !allowed.has("create"));
+    const canEditAutoStop = allowed.has("start") || allowed.has("create") || allowed.has("set-auto-stop");
+    elements.autoStopHours.disabled = state.isBusy || !state.user || !canEditAutoStop;
     if (elements.backupSelect) {
       const hasBackups = getAvailableBackups(state.lastStatus).length > 0;
       const canUseBackupSelection = allowed.has("restore-backup") || allowed.has("remove-backup");
@@ -1071,9 +1073,72 @@
     renderBackupOptions(payload);
     renderApplicationOptions(payload);
     renderMinecraftOptions(payload);
+    renderAutoStopStatus(payload);
     renderHardwarePriceEstimate(selectedPriceEstimate());
     renderAccess(payload);
     updateActionAvailability();
+  }
+
+  function formatLocalDateTime(value) {
+    const raw = String(value || "").trim();
+    if (!raw) {
+      return "";
+    }
+    const date = new Date(raw);
+    if (Number.isNaN(date.getTime())) {
+      return raw;
+    }
+    return date.toLocaleString("pl-PL", {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+  }
+
+  function formatRemainingSeconds(value) {
+    const seconds = Number(value);
+    if (!Number.isFinite(seconds) || seconds < 0) {
+      return "";
+    }
+    const totalMinutes = Math.ceil(seconds / 60);
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+    if (hours && minutes) {
+      return `${hours}h ${minutes}min`;
+    }
+    if (hours) {
+      return `${hours}h`;
+    }
+    return `${minutes}min`;
+  }
+
+  function autoStopSummary(payload) {
+    const autoStop = payload && payload.autoStop ? payload.autoStop : {};
+    const hours = autoStop.hours || payload && payload.autoStopHours || "";
+    const scheduledAt = autoStop.scheduledAt || "";
+    if (!hours) {
+      return "Auto-stop: disabled.";
+    }
+    if (!scheduledAt) {
+      return `Auto-stop: scheduled after ${hours}h.`;
+    }
+    const remaining = formatRemainingSeconds(autoStop.remainingSeconds);
+    const source = autoStop.source === "estimated" ? " estimated" : "";
+    return `Auto-stop: ${formatLocalDateTime(scheduledAt)}${remaining ? ` (${remaining} left)` : ""}${source}.`;
+  }
+
+  function renderAutoStopStatus(payload) {
+    if (!elements.autoStopStatus) {
+      return;
+    }
+    if (!payload || payload.instanceExists === false || payload.status === "NOT_FOUND") {
+      elements.autoStopStatus.textContent = "Auto-stop schedule will appear after VM status is loaded.";
+      return;
+    }
+    elements.autoStopStatus.textContent = autoStopSummary(payload);
   }
 
   function withSunshineStatus(payload, sunshineStatus) {
@@ -1188,6 +1253,9 @@
       ? `<p><strong>DuckDNS:</strong> <code>${escapeHtml(config.duckdnsDomains.join(", "))}</code></p>`
       : "<p><strong>DuckDNS:</strong> not configured</p>";
     const persistence = state.lastStatus && state.lastStatus.persistence ? state.lastStatus.persistence : null;
+    const autoStopMeta = state.lastStatus
+      ? `<p><strong>Auto-stop:</strong> <code>${escapeHtml(autoStopSummary(state.lastStatus))}</code></p>`
+      : "";
     const persistenceMeta = persistence
       ? `
         <p><strong>Data disk:</strong> <code>${escapeHtml(persistence.dataDisk && persistence.dataDisk.label || "unknown")}</code></p>
@@ -1215,6 +1283,7 @@
       <p><strong>Instance:</strong> <code>${escapeHtml(target.instance || "unknown")}</code></p>
       ${domains}
       ${hardwareMeta}
+      ${autoStopMeta}
       ${persistenceMeta}
     `;
   }
@@ -1517,7 +1586,7 @@
         ? " DuckDNS refreshed."
         : "";
       const autoStop = data.autoStopHours
-        ? ` Auto-stop scheduled after ${data.autoStopHours}h.`
+        ? ` ${autoStopSummary(data)}`
         : "";
       const powerActionPhase = String(data.powerAction && data.powerAction.phase ? data.powerAction.phase : "").toLowerCase();
       const bannerTone = powerActionPhase === "failed" ? "warning" : "success";
@@ -1618,12 +1687,15 @@
   }
 
   function readAutoStopHours(command) {
-    if (command !== "start" && command !== "create") {
+    if (command !== "start" && command !== "create" && command !== "set-auto-stop") {
       return null;
     }
 
     const raw = String(elements.autoStopHours.value || "").trim();
     if (!raw) {
+      if (command === "set-auto-stop") {
+        throw new Error("Enter auto-stop hours before extending the timer.");
+      }
       return null;
     }
 
@@ -1640,7 +1712,7 @@
       parts.push(`External IP: ${data.externalIp}`);
     }
     if (data.autoStopHours) {
-      parts.push(`Auto-stop: ${data.autoStopHours}h`);
+      parts.push(autoStopSummary(data));
     }
     if (data.sunshineStatus && data.sunshineStatus.label) {
       parts.push(`Sunshine: ${data.sunshineStatus.label}`);

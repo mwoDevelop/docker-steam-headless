@@ -287,6 +287,7 @@ schedule_auto_shutdown() {
   if ! [[ "$hours" =~ ^[0-9]+$ ]] || [ "$hours" -lt 1 ] || [ "$hours" -gt 24 ]; then
     systemctl stop vm-ctl-auto-shutdown.timer vm-ctl-auto-shutdown.service >/dev/null 2>&1 || true
     systemctl reset-failed vm-ctl-auto-shutdown.timer vm-ctl-auto-shutdown.service >/dev/null 2>&1 || true
+    set_instance_metadata_value vm-auto-shutdown-at ""
     log "Auto-shutdown is disabled (vm-auto-shutdown-hours is empty or invalid); cleared existing timer."
     return 0
   fi
@@ -294,6 +295,7 @@ schedule_auto_shutdown() {
   systemctl stop vm-ctl-auto-shutdown.timer vm-ctl-auto-shutdown.service >/dev/null 2>&1 || true
   systemctl reset-failed vm-ctl-auto-shutdown.timer vm-ctl-auto-shutdown.service >/dev/null 2>&1 || true
   systemd-run --unit=vm-ctl-auto-shutdown --on-active="${hours}h" /usr/local/bin/vm-power-action auto-stop >/dev/null
+  set_instance_metadata_value vm-auto-shutdown-at "$(date -u -d "+${hours} hours" +"%Y-%m-%dT%H:%M:%SZ")"
   next_at="$(systemctl show vm-ctl-auto-shutdown.timer --property=NextElapseUSecRealtime --value 2>/dev/null || true)"
   log "Auto-shutdown scheduled in ${hours}h${next_at:+ at ${next_at}}"
 }
