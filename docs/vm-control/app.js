@@ -1092,6 +1092,16 @@
     await refreshStatus({ silent: true });
   }
 
+  function backupDisplayLabel(backup) {
+    const id = String(backup && backup.id || "");
+    const label = String(backup && backup.label || "");
+    const prefixed = /^(.+)-([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z)$/.exec(id);
+    if (prefixed && (!label || label === id)) {
+      return `${prefixed[1]} · ${prefixed[2]}`;
+    }
+    return label || String(backup && backup.createdAt || id);
+  }
+
   function renderBackupOptions(payload) {
     if (!elements.backupSelect) {
       return;
@@ -1112,7 +1122,7 @@
       '<option value="">Select backup...</option>',
       ...backups.map((backup) => {
         const id = String(backup.id || "");
-        const label = String(backup.label || backup.createdAt || id);
+        const label = backupDisplayLabel(backup);
         return `<option value="${escapeHtml(id)}">${escapeHtml(label)}</option>`;
       }),
     ].join("");
