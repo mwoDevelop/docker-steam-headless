@@ -1639,6 +1639,7 @@
       }
     }
 
+    setPageLoading(`Running "${command}"...`);
     setBusy(true);
     const appLabel = command === "install-app" || command === "uninstall-app"
       ? ` for ${selectedApplicationLabel()}`
@@ -1730,6 +1731,7 @@
       }
     } finally {
       setBusy(false);
+      markPageReady("Ready.");
     }
   }
 
@@ -1746,6 +1748,7 @@
       throw new Error("Create or discover the VM first.");
     }
 
+    setPageLoading("Updating Sunshine password...");
     setBusy(true);
     setBanner("Updating Sunshine password...", "warning");
     schedulePostCommandStatusRefresh("set-sunshine-password");
@@ -1791,6 +1794,7 @@
       });
     } finally {
       setBusy(false);
+      markPageReady("Ready.");
     }
   }
 
@@ -2325,6 +2329,7 @@
       handleError(error);
     } finally {
       setBusy(false);
+      markPageReady("Ready.");
     }
   });
 
@@ -2424,6 +2429,7 @@
         return;
       }
       try {
+        setPageLoading("Refreshing Minecraft versions...");
         setBusy(true);
         await refreshMinecraftVersions();
       } catch (error) {
@@ -2431,6 +2437,7 @@
         renderMinecraftOptions(state.lastStatus);
       } finally {
         setBusy(false);
+        markPageReady("Ready.");
       }
     });
   }
@@ -2438,6 +2445,7 @@
   if (elements.hardwareSelect) {
     elements.hardwareSelect.addEventListener("change", async () => {
       try {
+        setPageLoading("Loading selected hardware status...");
         if (state.user) {
           await refreshHardwareOptions({ silent: false });
         } else {
@@ -2447,12 +2455,15 @@
         await refreshStatus({ silent: true });
       } catch (error) {
         handleError(error);
+      } finally {
+        markPageReady("Ready.");
       }
     });
   }
 
   if (elements.zoneSelect) {
     elements.zoneSelect.addEventListener("change", async () => {
+      setPageLoading("Loading selected zone status...");
       saveConfig();
       renderTargetSummary();
       renderHardwarePriceEstimate(selectedPriceEstimate());
@@ -2464,6 +2475,8 @@
         }
       } catch (error) {
         handleError(error);
+      } finally {
+        markPageReady("Ready.");
       }
     });
   }
@@ -2471,6 +2484,7 @@
   if (elements.refreshHardware) {
     elements.refreshHardware.addEventListener("click", async () => {
       try {
+        setPageLoading("Refreshing hardware availability...");
         setBusy(true);
         await refreshHardwareOptions({ silent: false });
         await refreshInstances({ silent: true });
@@ -2481,6 +2495,7 @@
         handleError(error);
       } finally {
         setBusy(false);
+        markPageReady("Ready.");
       }
     });
   }
@@ -2488,6 +2503,7 @@
   if (elements.refreshInstances) {
     elements.refreshInstances.addEventListener("click", async () => {
       try {
+        setPageLoading("Refreshing created instances...");
         setBusy(true);
         await refreshInstances({ silent: false, autoSelect: true });
         setBanner("Created instances refreshed.", "success");
@@ -2495,6 +2511,7 @@
         handleError(error);
       } finally {
         setBusy(false);
+        markPageReady("Ready.");
       }
     });
   }
@@ -2506,12 +2523,14 @@
         return;
       }
       try {
+        setPageLoading("Loading selected instance status...");
         setBusy(true);
         await selectCreatedInstance(Number(button.dataset.instanceIndex));
       } catch (error) {
         handleError(error);
       } finally {
         setBusy(false);
+        markPageReady("Ready.");
       }
     });
   }
