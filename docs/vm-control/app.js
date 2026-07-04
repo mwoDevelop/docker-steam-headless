@@ -537,7 +537,7 @@
       return `${prefix}. VM not created for ${zone}/${instance}.`;
     }
     if (data && !selectedHardwareMatchesPayload(data)) {
-      return `${prefix}. Current VM state: ${data.status || "UNKNOWN"}, selected hardware does not match existing VM (${actualHardwareLabel(data)}). Select the matching hardware profile to manage running services.`;
+      return `${prefix}. Current VM state: ${data.status || "UNKNOWN"}, selected hardware does not match existing VM (${actualHardwareLabel(data)}). ${selectedHardwareMismatchMessage(data)}`;
     }
     const parts = [`${prefix}. Current VM state: ${data.status || "UNKNOWN"}`];
     if (data.sunshineStatus && data.sunshineStatus.label) {
