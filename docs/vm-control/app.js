@@ -444,7 +444,27 @@
       return "";
     }
     const selected = selectedHardwareLabel() || hardwareLabelFromSelection(selectedTargetParams());
+    const status = String(payload && payload.status || "UNKNOWN").toUpperCase();
+    if (status === "RUNNING") {
+      return `Existing VM uses ${actualHardwareLabel(payload)}, but the selected profile is ${selected}. Stop or delete the running VM before creating the selected profile, or select the existing VM profile to manage running services.`;
+    }
+    if (status === "TERMINATED") {
+      return `Existing VM uses ${actualHardwareLabel(payload)}, but the selected profile is ${selected}. Use Create to reconfigure and start the stopped VM with the selected profile, or select the existing VM profile to start it unchanged.`;
+    }
     return `Existing VM uses ${actualHardwareLabel(payload)}, but the selected profile is ${selected}. Select the existing VM profile to manage running services.`;
+  }
+
+  function allowedMismatchCommands(payload, fallbackCommands) {
+    const allowed = new Set(Array.isArray(payload && payload.allowedCommands) ? payload.allowedCommands : fallbackCommands);
+    const keep = (commands) => commands.filter((command) => allowed.has(command));
+    const status = String(payload && payload.status || "UNKNOWN").toUpperCase();
+    if (status === "TERMINATED") {
+      return keep(["status", "create", "delete", "set-sunshine-password"]);
+    }
+    if (status === "RUNNING") {
+      return keep(["status", "stop", "delete"]);
+    }
+    return keep(["status", "delete"]);
   }
 
   function allowedCommandsForCurrentSelection(payload) {
@@ -454,14 +474,7 @@
     if (selectedHardwareMatchesPayload(payload)) {
       return payload.allowedCommands;
     }
-    const status = String(payload.status || "UNKNOWN").toUpperCase();
-    if (status === "TERMINATED") {
-      return ["status", "create", "delete", "set-sunshine-password"];
-    }
-    if (status === "RUNNING") {
-      return ["status"];
-    }
-    return ["status", "delete"];
+    return allowedMismatchCommands(payload, ["status"]);
   }
 
   function setBanner(message, tone) {

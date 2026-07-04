@@ -688,11 +688,61 @@ refresh_backup_list() {
         | jq -R -s '
             split("\n")
             | map(select(length > 0))
-            | map({id: ., label: ., createdAt: .})
+            | map(
+                . as $id
+                | (
+                    capture("^(?<hardware>.+)-(?<createdAt>[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z)$")?
+                    // {hardware: "", createdAt: $id}
+                  )
+                | {
+                    id: $id,
+                    label: (if .hardware == "" then $id else (.hardware + " · " + .createdAt) end),
+                    createdAt: .createdAt,
+                    hardware: .hardware
+                  }
+              )
+            | sort_by(.createdAt, .id)
+            | reverse
           '
     )"
   fi
   set_backups_json "$json"
+}
+
+sanitize_backup_prefix_part() {
+  local value="$1"
+  value="$(printf '%s' "$value" | tr '[:lower:]' '[:upper:]' | sed -E 's/[^A-Z0-9]+/-/g; s/^-+//; s/-+$//')"
+  printf '%s\n' "$value"
+}
+
+backup_hardware_prefix() {
+  local gpu_count gpu_type short
+  gpu_count="$(metadata_get vm-gpu-count | tr -dc '0-9' || true)"
+  gpu_type="$(metadata_get vm-gpu-type | tr -d '\r\n' || true)"
+
+  if [[ "$gpu_count" =~ ^[0-9]+$ ]] && (( gpu_count > 0 )); then
+    case "$gpu_type" in
+      nvidia-tesla-t4)
+        printf 'GPU-T4\n'
+        ;;
+      nvidia-l4)
+        printf 'GPU-L4\n'
+        ;;
+      "")
+        printf 'GPU\n'
+        ;;
+      nvidia-*)
+        short="${gpu_type#nvidia-}"
+        printf 'GPU-%s\n' "$(sanitize_backup_prefix_part "$short")"
+        ;;
+      *)
+        printf 'GPU-%s\n' "$(sanitize_backup_prefix_part "$gpu_type")"
+        ;;
+    esac
+    return 0
+  fi
+
+  printf 'CPU\n'
 }
 
 backup_is_ready() {
@@ -833,10 +883,11 @@ backup_games_archive() {
 }
 
 backup_manual_state() {
-  local root timestamp backup_id backup_remote home_remote games_remote manifest_file size_bytes
+  local root timestamp hardware_prefix backup_id backup_remote home_remote games_remote manifest_file size_bytes
   root="$(remote_root)"
   timestamp="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-  backup_id="$timestamp"
+  hardware_prefix="$(backup_hardware_prefix)"
+  backup_id="${hardware_prefix}-${timestamp}"
   backup_remote="${REMOTE_NAME}:${root}/backups/${backup_id}"
   home_remote="${backup_remote}/home.tar.zst"
   games_remote="${backup_remote}/games.tar.zst"
@@ -871,6 +922,7 @@ backup_manual_state() {
   jq -n \
     --arg id "$backup_id" \
     --arg timestamp "$timestamp" \
+    --arg hardware_prefix "$hardware_prefix" \
     --arg root "$root" \
     --arg home_path "backups/${backup_id}/home.tar.zst" \
     --arg games_path "backups/${backup_id}/games.tar.zst" \
@@ -879,6 +931,7 @@ backup_manual_state() {
     '{
       id: $id,
       timestamp: $timestamp,
+      hardwarePrefix: $hardware_prefix,
       backupRoot: $root,
       homeArchivePath: $home_path,
       gamesArchivePath: $games_path,
