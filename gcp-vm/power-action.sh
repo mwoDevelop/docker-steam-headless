@@ -459,6 +459,15 @@ update_auto_stop_timer() {
 }
 
 ensure_persist_script() {
+  local payload tmp
+  payload="$(metadata_get vm-persist-script || true)"
+  payload="$(normalize_metadata_value "$payload")"
+  if [[ -n "$payload" ]]; then
+    tmp="$(mktemp)"
+    printf '%s\n' "$payload" > "$tmp"
+    install -m 0755 "$tmp" "$PERSIST_SCRIPT"
+    rm -f "$tmp"
+  fi
   [[ -x "$PERSIST_SCRIPT" ]]
 }
 
