@@ -2518,7 +2518,7 @@ def build_sunshine_status(instance: dict[str, Any] | None) -> dict[str, str]:
         return {
             "state": "disabled",
             "label": "Disabled",
-            "detail": detail or "GPU disabled for this VM; Sunshine stack was not started.",
+            "detail": "GPU disabled for this VM; Sunshine stack was not started.",
         }
     if is_sunshine_started(instance, state, detail):
         state = "ready"
