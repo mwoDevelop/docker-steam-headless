@@ -153,10 +153,12 @@
     commandStatusRefreshTimer: null,
     history: [],
     isPageLoading: true,
+    pageLoadingToken: 0,
     scrolledInitialHash: "",
   };
 
   function setPageLoading(message) {
+    state.pageLoadingToken += 1;
     state.isPageLoading = true;
     document.body.classList.add("is-page-loading");
     if (!elements.pageLoader) {
@@ -170,9 +172,13 @@
     if (elements.pageLoaderMessage && message) {
       elements.pageLoaderMessage.textContent = message;
     }
+    return state.pageLoadingToken;
   }
 
-  function markPageReady(message) {
+  function markPageReady(message, token) {
+    if (token && token !== state.pageLoadingToken) {
+      return;
+    }
     state.isPageLoading = false;
     if (elements.pageLoaderMessage && message) {
       elements.pageLoaderMessage.textContent = message;
@@ -1639,7 +1645,7 @@
       }
     }
 
-    setPageLoading(`Running "${command}"...`);
+    const loadingToken = setPageLoading(`Running "${command}"...`);
     setBusy(true);
     const appLabel = command === "install-app" || command === "uninstall-app"
       ? ` for ${selectedApplicationLabel()}`
@@ -1731,7 +1737,7 @@
       }
     } finally {
       setBusy(false);
-      markPageReady("Ready.");
+      markPageReady("Ready.", loadingToken);
     }
   }
 
@@ -1748,7 +1754,7 @@
       throw new Error("Create or discover the VM first.");
     }
 
-    setPageLoading("Updating Sunshine password...");
+    const loadingToken = setPageLoading("Updating Sunshine password...");
     setBusy(true);
     setBanner("Updating Sunshine password...", "warning");
     schedulePostCommandStatusRefresh("set-sunshine-password");
@@ -1794,7 +1800,7 @@
       });
     } finally {
       setBusy(false);
-      markPageReady("Ready.");
+      markPageReady("Ready.", loadingToken);
     }
   }
 
@@ -2323,6 +2329,7 @@
       return;
     }
     try {
+      setPageLoading("Connecting to Cloud Run backend...");
       setBusy(true);
       await connectBackend();
     } catch (error) {
@@ -2389,11 +2396,14 @@
     button.addEventListener("click", async () => {
       const command = button.dataset.command;
       if (command === "status") {
+        const loadingToken = setPageLoading("Refreshing VM status...");
         try {
           const data = await refreshStatus({ silent: true });
           setCommandStatus(statusBannerMessage("VM status loaded", data), statusMessageTone(data));
         } catch (error) {
           handleError(error);
+        } finally {
+          markPageReady("Ready.", loadingToken);
         }
         return;
       }
@@ -2428,8 +2438,8 @@
       if (state.isBusy) {
         return;
       }
+      const loadingToken = setPageLoading("Refreshing Minecraft versions...");
       try {
-        setPageLoading("Refreshing Minecraft versions...");
         setBusy(true);
         await refreshMinecraftVersions();
       } catch (error) {
@@ -2437,15 +2447,16 @@
         renderMinecraftOptions(state.lastStatus);
       } finally {
         setBusy(false);
-        markPageReady("Ready.");
+        markPageReady("Ready.", loadingToken);
       }
     });
   }
 
   if (elements.hardwareSelect) {
     elements.hardwareSelect.addEventListener("change", async () => {
+      const loadingToken = setPageLoading("Loading selected hardware status...");
       try {
-        setPageLoading("Loading selected hardware status...");
+        setBusy(true);
         if (state.user) {
           await refreshHardwareOptions({ silent: false });
         } else {
@@ -2456,19 +2467,21 @@
       } catch (error) {
         handleError(error);
       } finally {
-        markPageReady("Ready.");
+        setBusy(false);
+        markPageReady("Ready.", loadingToken);
       }
     });
   }
 
   if (elements.zoneSelect) {
     elements.zoneSelect.addEventListener("change", async () => {
-      setPageLoading("Loading selected zone status...");
+      const loadingToken = setPageLoading("Loading selected zone status...");
       saveConfig();
       renderTargetSummary();
       renderHardwarePriceEstimate(selectedPriceEstimate());
       updateActionAvailability();
       try {
+        setBusy(true);
         if (state.user) {
           await refreshPriceEstimate({ silent: false });
           await refreshStatus({ silent: true });
@@ -2476,15 +2489,16 @@
       } catch (error) {
         handleError(error);
       } finally {
-        markPageReady("Ready.");
+        setBusy(false);
+        markPageReady("Ready.", loadingToken);
       }
     });
   }
 
   if (elements.refreshHardware) {
     elements.refreshHardware.addEventListener("click", async () => {
+      const loadingToken = setPageLoading("Refreshing hardware availability...");
       try {
-        setPageLoading("Refreshing hardware availability...");
         setBusy(true);
         await refreshHardwareOptions({ silent: false });
         await refreshInstances({ silent: true });
@@ -2495,15 +2509,15 @@
         handleError(error);
       } finally {
         setBusy(false);
-        markPageReady("Ready.");
+        markPageReady("Ready.", loadingToken);
       }
     });
   }
 
   if (elements.refreshInstances) {
     elements.refreshInstances.addEventListener("click", async () => {
+      const loadingToken = setPageLoading("Refreshing created instances...");
       try {
-        setPageLoading("Refreshing created instances...");
         setBusy(true);
         await refreshInstances({ silent: false, autoSelect: true });
         setBanner("Created instances refreshed.", "success");
@@ -2511,7 +2525,7 @@
         handleError(error);
       } finally {
         setBusy(false);
-        markPageReady("Ready.");
+        markPageReady("Ready.", loadingToken);
       }
     });
   }
@@ -2522,15 +2536,15 @@
       if (!button || state.isBusy) {
         return;
       }
+      const loadingToken = setPageLoading("Loading selected instance status...");
       try {
-        setPageLoading("Loading selected instance status...");
         setBusy(true);
         await selectCreatedInstance(Number(button.dataset.instanceIndex));
       } catch (error) {
         handleError(error);
       } finally {
         setBusy(false);
-        markPageReady("Ready.");
+        markPageReady("Ready.", loadingToken);
       }
     });
   }
