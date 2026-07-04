@@ -8,9 +8,27 @@
     history: "vm-control-session-history",
   };
   const SUNSHINE_POLL_INTERVAL_MS = 3000;
-  const SUNSHINE_POLL_TIMEOUT_MS = 180000;
+  const SUNSHINE_POLL_TIMEOUT_MS = 1200000;
   const POST_COMMAND_STATUS_REFRESH_DELAY_MS = 2000;
-  const COMMAND_STATUS_POLL_TIMEOUT_MS = 300000;
+  const COMMAND_STATUS_POLL_TIMEOUT_MS = 1200000;
+  const COMMAND_STATUS_POLL_TIMEOUTS_MS = {
+    create: 1200000,
+    start: 1200000,
+    restart: 1200000,
+    stop: 1800000,
+    delete: 900000,
+    "create-backup": 3600000,
+    "restore-backup": 3600000,
+    "remove-backup": 900000,
+    "install-app": 1800000,
+    "uninstall-app": 1800000,
+    "install-minecraft": 1800000,
+    "start-minecraft": 900000,
+    "stop-minecraft": 900000,
+    "restart-minecraft": 900000,
+    "remove-minecraft": 900000,
+    "set-auto-stop": 120000,
+  };
   const COMMAND_SUNSHINE_TRANSITIONS = {
     create: {
       state: "starting",
@@ -89,8 +107,12 @@
     "create",
     "start",
     "restart",
+    "stop",
+    "delete",
+    "set-auto-stop",
     "create-backup",
     "restore-backup",
+    "remove-backup",
     "install-app",
     "uninstall-app",
     "install-minecraft",
@@ -1342,6 +1364,38 @@
       return true;
     }
 
+    const vmState = String(payload.status || "").trim().toUpperCase();
+    const persistence = payload.persistence || {};
+    const dataDiskState = String(persistence.dataDisk && persistence.dataDisk.state || "")
+      .trim()
+      .toLowerCase();
+    const backupReadyState = String(persistence.backupReady && persistence.backupReady.state || "")
+      .trim()
+      .toLowerCase();
+    const restoreState = String(persistence.restore && persistence.restore.state || "")
+      .trim()
+      .toLowerCase();
+    const gamesArchiveState = String(persistence.gamesArchive && persistence.gamesArchive.state || "")
+      .trim()
+      .toLowerCase();
+    if (vmState === "RUNNING" && payload.instanceExists !== false) {
+      if (["pending", "attaching", "mounting", "preparing", "starting"].includes(dataDiskState)) {
+        return true;
+      }
+      if (!["ready", "error", "missing", "disabled"].includes(backupReadyState)) {
+        return true;
+      }
+      if (["pending", "starting", "preparing"].includes(backupReadyState)) {
+        return true;
+      }
+    }
+    if (["running", "restoring", "starting"].includes(restoreState)) {
+      return true;
+    }
+    if (["running", "archiving", "uploading"].includes(gamesArchiveState)) {
+      return true;
+    }
+
     const sunshineState = String(payload.sunshineStatus && payload.sunshineStatus.state || "")
       .trim()
       .toLowerCase();
@@ -1357,13 +1411,16 @@
       return initialPayload;
     }
 
-    const deadline = Date.now() + COMMAND_STATUS_POLL_TIMEOUT_MS;
+    const deadline = Date.now() + (COMMAND_STATUS_POLL_TIMEOUTS_MS[command] || COMMAND_STATUS_POLL_TIMEOUT_MS);
     let payload = initialPayload;
 
-    while (Date.now() < deadline && isTransitionalStatus(payload)) {
+    do {
       await wait(SUNSHINE_POLL_INTERVAL_MS);
-      payload = await refreshStatus({ silent: true });
-    }
+      payload = await refreshStatus({ silent: true, refreshInstances: false });
+      if (isTransitionalStatus(payload)) {
+        setCommandStatus(statusBannerMessage(`Command "${command}" still updating`, payload), "warning");
+      }
+    } while (Date.now() < deadline && isTransitionalStatus(payload));
 
     return payload;
   }
@@ -1760,12 +1817,12 @@
         body: JSON.stringify(body),
       });
       renderStatusPayload(data);
-      if (COMMANDS_TO_POLL_AFTER_RESPONSE.has(command) && isTransitionalStatus(data)) {
+      if (COMMANDS_TO_POLL_AFTER_RESPONSE.has(command)) {
         setCommandStatus(`Command "${command}" accepted. Waiting for current VM and Sunshine status...`, "warning");
         data = await waitForStatusSettled(command, data);
         renderStatusPayload(data);
       }
-      if (command === "create" || command === "delete") {
+      if (COMMANDS_TO_POLL_AFTER_RESPONSE.has(command)) {
         await refreshInstances({ silent: true, autoSelect: command === "delete" });
       }
 
