@@ -2546,6 +2546,17 @@ def build_sunshine_status(instance: dict[str, Any] | None) -> dict[str, str]:
             "detail": detail or "Steam Headless and Sunshine are stopping for the requested VM action.",
         }
     if is_gpu_disabled_for_instance(instance):
+        if state != "disabled":
+            gpu_disabled_pending_labels = {
+                "starting": "Starting",
+                "stopping": "Stopping",
+                "error": "Error",
+            }
+            return {
+                "state": state or "starting",
+                "label": gpu_disabled_pending_labels.get(state, state.title() if state else "Starting"),
+                "detail": detail or "VM startup in progress.",
+            }
         return {
             "state": "disabled",
             "label": "Disabled",
