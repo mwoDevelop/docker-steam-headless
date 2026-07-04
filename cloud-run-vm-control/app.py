@@ -1971,6 +1971,7 @@ def request_live_power_action(
 ) -> tuple[dict[str, Any], str]:
     token = generate_action_token()
     updates: dict[str, str | None] = {
+        "vm-persist-script": decode_config_b64("vm_persist_script_b64"),
         "vm-power-action-script": decode_config_b64("vm_power_action_script_b64"),
         POWER_ACTION_METADATA_KEY: f"{action}:{token}",
         POWER_ACTION_STATUS_METADATA_KEY: f"requested:{action}:{token}",
