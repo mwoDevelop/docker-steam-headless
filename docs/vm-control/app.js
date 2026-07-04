@@ -1416,7 +1416,7 @@
 
     do {
       await wait(SUNSHINE_POLL_INTERVAL_MS);
-      payload = await refreshStatus({ silent: true, refreshInstances: false });
+      payload = await refreshStatus({ silent: true, forceRender: true });
       if (isTransitionalStatus(payload)) {
         setCommandStatus(statusBannerMessage(`Command "${command}" still updating`, payload), "warning");
       }
@@ -2224,6 +2224,7 @@
 
   async function refreshStatus(options) {
     const silent = Boolean(options && options.silent);
+    const forceRender = Boolean(options && options.forceRender);
     if (!state.user) {
       throw new Error("Sign in with Google first.");
     }
@@ -2236,7 +2237,7 @@
     try {
       const requestTargetKey = selectedTargetKey();
       const data = await fetchApi(`/api/status${statusQueryString()}`, { method: "GET" });
-      if (requestTargetKey !== selectedTargetKey()) {
+      if (!forceRender && requestTargetKey !== selectedTargetKey()) {
         return data;
       }
       renderStatusPayload(data, requestTargetKey);
