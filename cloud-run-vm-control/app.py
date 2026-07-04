@@ -2249,6 +2249,37 @@ def wait_for_sunshine_status(
     raise ApiError("Timed out waiting for Sunshine status to settle.", 504)
 
 
+def wait_for_raw_sunshine_metadata_state(
+    target_state: str,
+    timeout_seconds: int = 300,
+) -> dict[str, Any]:
+    deadline = time.time() + timeout_seconds
+    last_instance: dict[str, Any] | None = None
+    target_state = target_state.strip().lower()
+    while time.time() < deadline:
+        last_instance = get_instance()
+        if str(last_instance.get("status", "")).upper() != "RUNNING":
+            time.sleep(3)
+            continue
+
+        current_state = metadata_value(last_instance, SUNSHINE_STATUS_METADATA_KEY).strip().lower()
+        if current_state == target_state:
+            return last_instance
+
+        time.sleep(4)
+
+    if last_instance:
+        return last_instance
+    raise ApiError("Timed out waiting for Sunshine metadata status to settle.", 504)
+
+
+def wait_for_remote_access_status(timeout_seconds: int = 300) -> dict[str, Any]:
+    instance = get_instance()
+    if is_gpu_disabled_for_instance(instance):
+        return wait_for_raw_sunshine_metadata_state("disabled", timeout_seconds=timeout_seconds)
+    return wait_for_sunshine_status("ready", timeout_seconds=timeout_seconds)
+
+
 def build_steam_env_value(overrides: dict[str, str]) -> str:
     raw_env = decode_config_b64("vm_steam_env_b64")
     updated_env = raw_env
@@ -3458,7 +3489,7 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
                 timeout_seconds=120,
             )
             final_instance = wait_for_external_ip(timeout_seconds=180)
-            final_instance = wait_for_sunshine_status("ready", timeout_seconds=240)
+            final_instance = wait_for_remote_access_status(timeout_seconds=240)
             set_instance_metadata_values(
                 final_instance,
                 {
