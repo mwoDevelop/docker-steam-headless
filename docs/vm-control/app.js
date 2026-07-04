@@ -410,6 +410,37 @@
       && String(actual.acceleratorMode || "") === String(selected.acceleratorMode || "");
   }
 
+  function hardwareLabelFromSelection(selection) {
+    if (!selection) {
+      return "unknown hardware";
+    }
+    if (selection.label) {
+      return String(selection.label);
+    }
+    if (selection.id === "cpu" || Number(selection.gpuCount || 0) <= 0) {
+      return "CPU";
+    }
+    if (selection.gpuType === "nvidia-tesla-t4") {
+      return "GPU T4";
+    }
+    if (selection.gpuType === "nvidia-l4") {
+      return "GPU L4";
+    }
+    return String(selection.gpuType || selection.id || "unknown hardware");
+  }
+
+  function actualHardwareLabel(payload) {
+    return hardwareLabelFromSelection(payload && payload.actualHardware);
+  }
+
+  function selectedHardwareMismatchMessage(payload) {
+    if (selectedHardwareMatchesPayload(payload)) {
+      return "";
+    }
+    const selected = selectedHardwareLabel() || hardwareLabelFromSelection(selectedTargetParams());
+    return `Existing VM uses ${actualHardwareLabel(payload)}, but the selected profile is ${selected}. Select the existing VM profile to manage running services.`;
+  }
+
   function allowedCommandsForCurrentSelection(payload) {
     if (!payload || !Array.isArray(payload.allowedCommands)) {
       return ["status"];
@@ -422,7 +453,7 @@
       return ["status", "create", "delete", "set-sunshine-password"];
     }
     if (status === "RUNNING") {
-      return ["status", "stop", "delete"];
+      return ["status"];
     }
     return ["status", "delete"];
   }
@@ -485,6 +516,9 @@
       const zone = hardware.zone || target.zone || "unknown";
       const instance = target.instance || "unknown";
       return `${prefix}. VM not created for ${zone}/${instance}.`;
+    }
+    if (data && !selectedHardwareMatchesPayload(data)) {
+      return `${prefix}. Current VM state: ${data.status || "UNKNOWN"}, selected hardware does not match existing VM (${actualHardwareLabel(data)}). Select the matching hardware profile to manage running services.`;
     }
     const parts = [`${prefix}. Current VM state: ${data.status || "UNKNOWN"}`];
     if (data.sunshineStatus && data.sunshineStatus.label) {
@@ -1801,6 +1835,16 @@
   }
 
   function renderSunshineStatusMeta(payload) {
+    const mismatch = selectedHardwareMismatchMessage(payload);
+    if (mismatch) {
+      return `
+      <div class="service-status disabled">
+        <span class="service-status-dot" aria-hidden="true"></span>
+        <span>Status: Hardware mismatch</span>
+      </div>
+      <p class="access-meta">Status detail: <span>${escapeHtml(mismatch)}</span></p>
+    `;
+    }
     const sunshineStatus = payload.sunshineStatus || {};
     const state = escapeToken(sunshineStatus.state || "starting");
     const label = escapeHtml(sunshineStatus.label || "Starting");
@@ -1817,6 +1861,16 @@
   }
 
   function renderMinecraftStatusMeta(payload) {
+    const mismatch = selectedHardwareMismatchMessage(payload);
+    if (mismatch) {
+      return `
+      <div class="service-status disabled">
+        <span class="service-status-dot" aria-hidden="true"></span>
+        <span>Status: Hardware mismatch</span>
+      </div>
+      <p class="access-meta">Status detail: <span>${escapeHtml(mismatch)}</span></p>
+    `;
+    }
     const minecraftStatus = payload.minecraftStatus || {};
     const state = escapeToken(minecraftStatus.state || "not_installed");
     const label = escapeHtml(minecraftStatus.label || "Not installed");
@@ -1947,6 +2001,12 @@
       elements.minecraftVersionSelect.dataset.savedValue = "";
     }
     if (elements.minecraftOptionsStatus) {
+      const mismatch = selectedHardwareMismatchMessage(payload);
+      if (mismatch) {
+        elements.minecraftOptionsStatus.textContent = `Minecraft status: Hardware mismatch. ${mismatch}`;
+        updateActionAvailability();
+        return;
+      }
       const label = payload && payload.minecraftStatus && payload.minecraftStatus.label
         ? payload.minecraftStatus.label
         : "Unknown";

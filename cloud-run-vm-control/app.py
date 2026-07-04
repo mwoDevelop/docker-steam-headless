@@ -2771,7 +2771,7 @@ def allowed_commands(instance: dict[str, Any] | None) -> list[str]:
         if active_power_action(instance):
             return ["status"]
         if not hardware_matches:
-            return ["status", "stop", "delete"]
+            return ["status"]
         commands = ["status", "set-sunshine-password", "set-auto-stop"]
         if is_live_backup_ready(instance):
             commands.extend([
