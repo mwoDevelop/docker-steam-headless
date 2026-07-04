@@ -591,7 +591,7 @@
       }
 
       try {
-        const data = await refreshStatus({ silent: true });
+        const data = await refreshStatus({ silent: true, forceRender: true });
         setCommandStatus(statusBannerMessage("VM status refreshed", data), statusMessageTone(data));
       } catch (error) {
         handleError(error);
