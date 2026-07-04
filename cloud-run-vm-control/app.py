@@ -1,5 +1,6 @@
 import base64
 import gzip
+import hashlib
 import json
 import logging
 import os
@@ -458,14 +459,90 @@ def selected_hardware_id() -> str:
     return str(request_override("target_hardware_id", default_hardware_selection()["id"]))
 
 
-def instance_url() -> str:
+def clean_resource_name_part(raw: str) -> str:
+    cleaned = "".join(ch.lower() if ch.isalnum() else "-" for ch in str(raw or ""))
+    cleaned = "-".join(part for part in cleaned.split("-") if part)
+    return cleaned or "target"
+
+
+def hardware_name_slug(hardware_id: str, gpu_type: str, gpu_count: int) -> str:
+    if int(gpu_count or 0) <= 0 or hardware_id == CPU_HARDWARE_ID:
+        return "cpu"
+    aliases = {
+        "nvidia-tesla-t4": "t4",
+        "nvidia-l4": "l4",
+    }
+    return aliases.get(gpu_type, aliases.get(hardware_id, clean_resource_name_part(gpu_type or hardware_id)))
+
+
+def bounded_gce_name(raw_name: str) -> str:
+    name = clean_resource_name_part(raw_name)
+    if not name or not name[0].isalpha():
+        name = f"vm-{name}"
+    if len(name) <= 63:
+        return name
+    digest = hashlib.sha1(name.encode("utf-8")).hexdigest()[:8]
+    return f"{name[:54].rstrip('-')}-{digest}"
+
+
+def target_instance_name_for(
+    *,
+    hardware_id: str,
+    gpu_type: str,
+    gpu_count: int,
+    zone: str,
+) -> str:
+    base = bounded_gce_name(require_env("instance"))
+    hardware_slug = hardware_name_slug(hardware_id, gpu_type, gpu_count)
+    return bounded_gce_name(f"{base}-{hardware_slug}-{zone}")
+
+
+def selected_computed_instance_name() -> str:
+    return target_instance_name_for(
+        hardware_id=selected_hardware_id(),
+        gpu_type=selected_gpu_type(),
+        gpu_count=selected_gpu_count(),
+        zone=selected_zone(),
+    )
+
+
+def explicit_instance_url(zone: str, instance: str) -> str:
     project = require_env("project")
-    zone = selected_zone()
-    instance = require_env("instance")
     return (
         "https://compute.googleapis.com/compute/v1/"
         f"projects/{project}/zones/{zone}/instances/{instance}"
     )
+
+
+def legacy_instance_for_current_selection() -> dict[str, Any] | None:
+    if not has_request_context():
+        return None
+    if hasattr(g, "legacy_instance_checked"):
+        return getattr(g, "legacy_instance_for_selection", None)
+    g.legacy_instance_checked = True
+    g.legacy_instance_for_selection = None
+    legacy_name = bounded_gce_name(require_env("instance"))
+    if legacy_name == selected_computed_instance_name():
+        return None
+    legacy = compute_request("GET", explicit_instance_url(selected_zone(), legacy_name), allow_404=True)
+    if isinstance(legacy, dict) and instance_hardware_matches_selection(legacy):
+        g.legacy_instance_for_selection = legacy
+        return legacy
+    return None
+
+
+def selected_instance_name() -> str:
+    if has_request_context() and hasattr(g, "target_instance_name"):
+        return str(getattr(g, "target_instance_name"))
+    legacy = legacy_instance_for_current_selection()
+    name = str(legacy.get("name", "")) if legacy else selected_computed_instance_name()
+    if has_request_context():
+        g.target_instance_name = name
+    return name
+
+
+def instance_url() -> str:
+    return explicit_instance_url(selected_zone(), selected_instance_name())
 
 
 def instances_collection_url() -> str:
@@ -507,6 +584,10 @@ def disk_type_path() -> str:
 
 def data_disk_type_path() -> str:
     return f"zones/{selected_zone()}/diskTypes/{CONFIG['data_disk_type']}"
+
+
+def data_disk_device_name() -> str:
+    return bounded_gce_name(f"{selected_instance_name()}-state")
 
 
 def network_path() -> str:
@@ -1109,9 +1190,16 @@ def build_instance_picker_entry(instance: dict[str, Any]) -> dict[str, Any]:
     zone = instance_zone_name(instance)
     hardware = instance_hardware_selection(instance)
     status = str(instance.get("status", "UNKNOWN") or "UNKNOWN")
+    name = str(instance.get("name", "") or CONFIG["instance"])
     return {
-        "name": str(instance.get("name", "") or CONFIG["instance"]),
+        "name": name,
         "zone": zone,
+        "targetName": target_instance_name_for(
+            hardware_id=str(hardware.get("id", "")),
+            gpu_type=str(hardware.get("gpuType", "")),
+            gpu_count=int(hardware.get("gpuCount", 0) or 0),
+            zone=zone,
+        ),
         "status": status,
         "externalIp": extract_external_ip(instance),
         "createdAt": str(instance.get("creationTimestamp", "") or ""),
@@ -1122,12 +1210,21 @@ def build_instance_picker_entry(instance: dict[str, Any]) -> dict[str, Any]:
 
 
 def list_created_instances() -> list[dict[str, Any]]:
+    return sorted(
+        [build_instance_picker_entry(instance) for instance in list_managed_compute_instances()],
+        key=lambda item: (str(item.get("name", "")), str(item.get("zone", ""))),
+    )
+
+
+def list_managed_compute_instances() -> list[dict[str, Any]]:
     project = require_env("project")
     url = f"https://compute.googleapis.com/compute/v1/projects/{project}/aggregated/instances"
     page_token = ""
     instances: list[dict[str, Any]] = []
+    base_name = bounded_gce_name(CONFIG["instance"])
+    name_prefix = f"{base_name}-"
     while True:
-        params = {"filter": f"name = {CONFIG['instance']}"}
+        params: dict[str, str] = {}
         if page_token:
             params["pageToken"] = page_token
         data = compute_request("GET", url, params=params)
@@ -1137,19 +1234,21 @@ def list_created_instances() -> list[dict[str, Any]]:
             if not isinstance(scoped_data, dict):
                 continue
             for instance in scoped_data.get("instances", []) or []:
-                if isinstance(instance, dict) and str(instance.get("name", "")) == CONFIG["instance"]:
-                    instances.append(build_instance_picker_entry(instance))
+                name = str(instance.get("name", ""))
+                if isinstance(instance, dict) and (name == base_name or name.startswith(name_prefix)):
+                    instances.append(instance)
         page_token = str(data.get("nextPageToken", "") or "")
         if not page_token:
             break
-    return sorted(instances, key=lambda item: (str(item.get("name", "")), str(item.get("zone", ""))))
+    return sorted(instances, key=lambda item: (str(item.get("name", "")), instance_zone_name(item)))
 
 
 def build_instances_payload() -> dict[str, Any]:
     return {
         "refreshedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "project": CONFIG["project"],
-        "instanceName": CONFIG["instance"],
+        "instanceName": selected_instance_name(),
+        "baseInstanceName": bounded_gce_name(CONFIG["instance"]),
         "instances": list_created_instances(),
     }
 
@@ -1241,7 +1340,8 @@ def options_passthrough():
                 "target": {
                     "project": CONFIG["project"],
                     "zone": CONFIG["zone"],
-                    "instance": CONFIG["instance"],
+                    "instance": selected_computed_instance_name(),
+                    "baseInstance": bounded_gce_name(CONFIG["instance"]),
                 },
                 "duckdnsDomains": CONFIG["duckdns_domains"],
                 "ports": {
@@ -1465,7 +1565,7 @@ def compute_request(method: str, url: str, *, allow_404: bool = False, **kwargs)
         if allow_404:
             return None
         raise ApiError(
-            f"Instance '{CONFIG['instance']}' was not found in {CONFIG['project']}/{CONFIG['zone']}.",
+            f"Compute resource was not found in project {CONFIG['project']}.",
             404,
         )
     if response.status_code >= 400:
@@ -1473,14 +1573,15 @@ def compute_request(method: str, url: str, *, allow_404: bool = False, **kwargs)
     return response.json()
 
 
-def wait_for_zone_operation(operation: dict[str, Any], timeout_seconds: int = 90) -> None:
+def wait_for_zone_operation(operation: dict[str, Any], timeout_seconds: int = 90, zone: str | None = None) -> None:
     operation_name = str(operation.get("name", "") or "")
     if not operation_name:
         return
+    operation_zone = zone or str(operation.get("zone", "") or "").rsplit("/", 1)[-1] or selected_zone()
 
     url = (
         "https://compute.googleapis.com/compute/v1/"
-        f"projects/{CONFIG['project']}/zones/{selected_zone()}/operations/{operation_name}"
+        f"projects/{CONFIG['project']}/zones/{operation_zone}/operations/{operation_name}"
     )
     deadline = time.time() + timeout_seconds
     while time.time() < deadline:
@@ -1527,6 +1628,15 @@ def get_instance() -> dict[str, Any]:
 def get_instance_or_none() -> dict[str, Any] | None:
     data = compute_request("GET", instance_url(), allow_404=True)
     return data if isinstance(data, dict) else None
+
+
+def instance_self_url(instance: dict[str, Any]) -> str:
+    self_link = str(instance.get("selfLink", "") or "")
+    if self_link:
+        return self_link
+    zone = instance_zone_name(instance) or selected_zone()
+    name = str(instance.get("name", "") or selected_instance_name())
+    return explicit_instance_url(zone, name)
 
 
 def extract_external_ip(instance: dict[str, Any]) -> str:
@@ -1614,13 +1724,13 @@ def set_instance_metadata_values(instance: dict[str, Any], updates: dict[str, st
 
     operation = compute_request(
         "POST",
-        f"{instance_url()}/setMetadata",
+        f"{instance_self_url(instance)}/setMetadata",
         json={
             "fingerprint": fingerprint,
             "items": items,
         },
     )
-    wait_for_zone_operation(operation)
+    wait_for_zone_operation(operation, zone=instance_zone_name(instance))
 
 
 def set_instance_metadata_value(instance: dict[str, Any], key: str, value: str | None) -> None:
@@ -1697,7 +1807,7 @@ def start_metadata_updates(
         "shutdown-script": decode_config_b64("vm_shutdown_script_b64"),
         "vm-persist-script": decode_config_b64("vm_persist_script_b64"),
         "vm-power-action-script": decode_config_b64("vm_power_action_script_b64"),
-        "vm-data-disk-device-name": CONFIG["data_disk_device_name"],
+        "vm-data-disk-device-name": data_disk_device_name(),
         "vm-data-disk-mount-root": CONFIG["data_disk_mount_root"],
         GPU_COUNT_METADATA_KEY: str(selected_gpu_count()),
         "vm-gpu-type": selected_gpu_type(),
@@ -1982,7 +2092,8 @@ def request_live_power_action(
     if extra_metadata:
         updates.update(extra_metadata)
     set_instance_metadata_values(instance, updates)
-    return get_instance(), token
+    refreshed = compute_request("GET", instance_self_url(instance))
+    return refreshed if isinstance(refreshed, dict) else get_instance(), token
 
 
 def wait_for_power_action_phase(
@@ -2157,7 +2268,7 @@ def build_instance_metadata_items(
         {"key": "shutdown-script", "value": decode_config_b64("vm_shutdown_script_b64")},
         {"key": "vm-persist-script", "value": decode_config_b64("vm_persist_script_b64")},
         {"key": "vm-power-action-script", "value": decode_config_b64("vm_power_action_script_b64")},
-        {"key": "vm-data-disk-device-name", "value": CONFIG["data_disk_device_name"]},
+        {"key": "vm-data-disk-device-name", "value": data_disk_device_name()},
         {"key": "vm-data-disk-mount-root", "value": CONFIG["data_disk_mount_root"]},
         {"key": "vm-gpu-count", "value": str(selected_gpu_count())},
         {"key": "vm-gpu-type", "value": selected_gpu_type()},
@@ -2257,7 +2368,7 @@ def build_instance_create_request(
         raise ApiError("Service is missing required configuration: vm_service_account_email", 500)
 
     request_body: dict[str, Any] = {
-        "name": CONFIG["instance"],
+        "name": selected_instance_name(),
         "machineType": machine_type_path(),
         "disks": [
             {
@@ -2274,9 +2385,9 @@ def build_instance_create_request(
             {
                 "boot": False,
                 "autoDelete": True,
-                "deviceName": CONFIG["data_disk_device_name"],
+                "deviceName": data_disk_device_name(),
                 "initializeParams": {
-                    "diskName": f"{CONFIG['instance']}-state",
+                    "diskName": data_disk_device_name(),
                     "diskSizeGb": parse_disk_size_gb(CONFIG["data_disk_size"]),
                     "diskType": data_disk_type_path(),
                 },
@@ -2581,7 +2692,7 @@ def has_attached_data_disk(instance: dict[str, Any] | None) -> bool:
     if instance is None:
         return False
 
-    expected_device_name = CONFIG["data_disk_device_name"].strip()
+    expected_device_name = metadata_value(instance, "vm-data-disk-device-name").strip() or data_disk_device_name()
     for disk in instance.get("disks", []) or []:
         if not isinstance(disk, dict):
             continue
@@ -2868,7 +2979,8 @@ def build_status_payload(
             "target": {
                 "project": CONFIG["project"],
                 "zone": selected_zone(),
-                "instance": CONFIG["instance"],
+                "instance": selected_instance_name(),
+                "baseInstance": bounded_gce_name(CONFIG["instance"]),
             },
             "hardware": hardware,
             "status": STATUS_NOT_FOUND,
@@ -2915,7 +3027,8 @@ def build_status_payload(
         "target": {
             "project": CONFIG["project"],
             "zone": selected_zone(),
-            "instance": CONFIG["instance"],
+            "instance": selected_instance_name(),
+            "baseInstance": bounded_gce_name(CONFIG["instance"]),
         },
         "hardware": hardware,
         "actualHardware": actual_hardware,
@@ -2963,6 +3076,90 @@ def poll_instance_status(target_status: str, timeout_seconds: int = 300) -> dict
             504,
         )
     raise ApiError(f"Timed out waiting for instance to reach {target_status}.", 504)
+
+
+def poll_specific_instance_status(
+    instance: dict[str, Any],
+    target_status: str,
+    timeout_seconds: int = 300,
+) -> dict[str, Any]:
+    deadline = time.time() + timeout_seconds
+    last_instance: dict[str, Any] | None = None
+    url = instance_self_url(instance)
+    while time.time() < deadline:
+        data = compute_request("GET", url, allow_404=True)
+        last_instance = data if isinstance(data, dict) else None
+        if last_instance and str(last_instance.get("status", "")).upper() == target_status.upper():
+            return last_instance
+        time.sleep(3)
+
+    if last_instance:
+        last_status = str(last_instance.get("status", "UNKNOWN"))
+        raise ApiError(
+            f"Timed out waiting for instance {instance.get('name', '<unknown>')} to reach {target_status}; last state was {last_status}.",
+            504,
+        )
+    raise ApiError(f"Timed out waiting for instance {instance.get('name', '<unknown>')} to reach {target_status}.", 504)
+
+
+def instance_identity(instance: dict[str, Any]) -> tuple[str, str]:
+    return (str(instance.get("name", "") or ""), instance_zone_name(instance))
+
+
+def is_selected_instance(instance: dict[str, Any]) -> bool:
+    return instance_identity(instance) == (selected_instance_name(), selected_zone())
+
+
+def running_managed_instances_except_selected() -> list[dict[str, Any]]:
+    return [
+        instance
+        for instance in list_managed_compute_instances()
+        if str(instance.get("status", "")).upper() == "RUNNING" and not is_selected_instance(instance)
+    ]
+
+
+def running_instance_summary(instance: dict[str, Any]) -> str:
+    hardware = instance_hardware_selection(instance)
+    label = str(hardware.get("label", "") or hardware.get("id", "") or "unknown hardware")
+    return f"{instance.get('name', '<unknown>')} ({label}, {instance_zone_name(instance)})"
+
+
+def ensure_no_other_running_instances_or_stop(payload: dict[str, Any], command: str) -> list[dict[str, Any]]:
+    running_instances = running_managed_instances_except_selected()
+    if not running_instances:
+        return []
+
+    summaries = ", ".join(running_instance_summary(instance) for instance in running_instances)
+    if not bool(payload.get("stopRunningInstances")):
+        raise ApiError(
+            f'Another VM is already running: {summaries}. Confirm stopping it before running "{command}".',
+            409,
+        )
+
+    stopped: list[dict[str, Any]] = []
+    for instance in running_instances:
+        require_no_active_power_action(instance, f"stop-before-{command}")
+        require_live_backup_ready(instance, f"stop-before-{command}")
+        updated_instance, token = request_live_power_action(
+            instance,
+            action="stop",
+            status_detail=f'Stopping this VM before running "{command}" on another target.',
+        )
+        final_instance = poll_specific_instance_status(updated_instance, "TERMINATED", timeout_seconds=900)
+        set_instance_metadata_values(
+            final_instance,
+            {
+                AUTO_STOP_METADATA_KEY: None,
+                AUTO_STOP_AT_METADATA_KEY: None,
+                SUNSHINE_STATUS_METADATA_KEY: "stopped",
+                SUNSHINE_STATUS_DETAIL_METADATA_KEY: None,
+                POWER_ACTION_STATUS_METADATA_KEY: f"stopped:stop:{token}",
+                POWER_ACTION_METADATA_KEY: None,
+            },
+        )
+        refreshed = compute_request("GET", instance_self_url(final_instance))
+        stopped.append(refreshed if isinstance(refreshed, dict) else final_instance)
+    return stopped
 
 
 def restart_instance_and_wait(current_instance: dict[str, Any], detail: str) -> dict[str, Any]:
@@ -3089,6 +3286,7 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
 
     if command == "create":
         auto_stop_hours = parse_auto_stop_hours(payload)
+        ensure_no_other_running_instances_or_stop(payload, command)
         if current_instance is not None:
             if current_status != "TERMINATED" or instance_hardware_matches_selection(current_instance):
                 raise ApiError("Instance already exists.", 400)
@@ -3149,6 +3347,7 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
         if current_instance is None:
             raise ApiError("Instance does not exist. Use Create first.", 400)
         auto_stop_hours = parse_auto_stop_hours(payload)
+        ensure_no_other_running_instances_or_stop(payload, command)
         if auto_stop_hours is not None and current_status == "RUNNING":
             raise ApiError("Auto-stop can only be scheduled while starting a stopped VM.", 400)
         if current_status == "RUNNING" and not instance_hardware_matches_selection(current_instance):
