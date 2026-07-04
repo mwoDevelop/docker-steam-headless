@@ -593,6 +593,9 @@
       try {
         const data = await refreshStatus({ silent: true, forceRender: true });
         setCommandStatus(statusBannerMessage("VM status refreshed", data), statusMessageTone(data));
+        if (state.isPageLoading && state.user) {
+          schedulePostCommandStatusRefresh(command);
+        }
       } catch (error) {
         handleError(error);
       }
