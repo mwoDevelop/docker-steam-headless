@@ -2770,6 +2770,8 @@ def allowed_commands(instance: dict[str, Any] | None) -> list[str]:
     if status == "RUNNING":
         if active_power_action(instance):
             return ["status"]
+        if not hardware_matches:
+            return ["status", "stop", "delete"]
         commands = ["status", "set-sunshine-password", "set-auto-stop"]
         if is_live_backup_ready(instance):
             commands.extend([
@@ -2897,6 +2899,8 @@ def build_status_payload(
             payload["duckdnsUpdated"] = duckdns_updated
         return payload
 
+    actual_hardware = instance_hardware_selection(instance)
+    hardware_matches = instance_hardware_matches_selection(instance)
     external_ip = extract_external_ip(instance)
     status = str(instance.get("status", "UNKNOWN"))
     credentials = sunshine_credentials or sunshine_credentials_from_instance(instance)
@@ -2913,6 +2917,8 @@ def build_status_payload(
             "instance": CONFIG["instance"],
         },
         "hardware": hardware,
+        "actualHardware": actual_hardware,
+        "hardwareMatchesSelection": hardware_matches,
         "status": status,
         "instanceExists": True,
         "allowedCommands": allowed_commands(instance),

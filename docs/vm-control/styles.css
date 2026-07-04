@@ -37,6 +37,11 @@ body.is-page-loading {
   overflow: hidden;
 }
 
+body.is-page-loading .shell {
+  opacity: 0;
+  pointer-events: none;
+}
+
 body::before {
   content: "";
   position: fixed;

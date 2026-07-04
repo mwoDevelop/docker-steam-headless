@@ -152,15 +152,16 @@
     isBusy: false,
     commandStatusRefreshTimer: null,
     history: [],
-    isInitialLoad: true,
+    isPageLoading: true,
     scrolledInitialHash: "",
   };
 
   function setPageLoading(message) {
-    if (!state.isInitialLoad || !elements.pageLoader) {
+    state.isPageLoading = true;
+    document.body.classList.add("is-page-loading");
+    if (!elements.pageLoader) {
       return;
     }
-    document.body.classList.add("is-page-loading");
     elements.pageLoader.hidden = false;
     elements.pageLoader.setAttribute("aria-busy", "true");
     if (elements.appShell) {
@@ -172,7 +173,7 @@
   }
 
   function markPageReady(message) {
-    state.isInitialLoad = false;
+    state.isPageLoading = false;
     if (elements.pageLoaderMessage && message) {
       elements.pageLoaderMessage.textContent = message;
     }
@@ -186,7 +187,7 @@
     elements.pageLoader.setAttribute("aria-busy", "false");
     document.body.classList.remove("is-page-loading");
     window.setTimeout(() => {
-      if (!state.isInitialLoad) {
+      if (!state.isPageLoading) {
         elements.pageLoader.hidden = true;
       }
     }, 220);
@@ -311,13 +312,11 @@
     const canUseLastStatus = state.lastStatus
       && state.lastStatusTargetKey
       && state.lastStatusTargetKey === selectedTargetKey();
-    const allowed = new Set(
-      state.user && canUseLastStatus && Array.isArray(state.lastStatus.allowedCommands)
-        ? state.lastStatus.allowedCommands
-        : state.user
-          ? ["status"]
-          : [],
-    );
+    const allowed = new Set(state.user && canUseLastStatus
+      ? allowedCommandsForCurrentSelection(state.lastStatus)
+      : state.user
+        ? ["status"]
+        : []);
 
     if (elements.refreshStatus) {
       elements.refreshStatus.disabled = !state.user;
@@ -383,9 +382,49 @@
     return Boolean(
       state.user &&
         state.lastStatus &&
-        Array.isArray(state.lastStatus.allowedCommands) &&
-        state.lastStatus.allowedCommands.includes(command),
+        state.lastStatusTargetKey === selectedTargetKey() &&
+        allowedCommandsForCurrentSelection(state.lastStatus).includes(command),
     );
+  }
+
+  function selectedHardwareMatchesPayload(payload) {
+    if (!payload || payload.instanceExists === false || payload.status === "NOT_FOUND") {
+      return true;
+    }
+    if (payload.hardwareMatchesSelection === false) {
+      return false;
+    }
+    const actual = payload.actualHardware || null;
+    if (!actual) {
+      return true;
+    }
+    const selected = selectedTargetParams();
+    if (!Object.keys(selected).length) {
+      return true;
+    }
+    const selectedGpuCount = Number(selected.gpuCount || 0);
+    const actualGpuCount = Number(actual.gpuCount || 0);
+    return String(actual.machineType || "") === String(selected.machineType || "")
+      && String(actual.gpuType || "") === String(selected.gpuType || "")
+      && actualGpuCount === selectedGpuCount
+      && String(actual.acceleratorMode || "") === String(selected.acceleratorMode || "");
+  }
+
+  function allowedCommandsForCurrentSelection(payload) {
+    if (!payload || !Array.isArray(payload.allowedCommands)) {
+      return ["status"];
+    }
+    if (selectedHardwareMatchesPayload(payload)) {
+      return payload.allowedCommands;
+    }
+    const status = String(payload.status || "UNKNOWN").toUpperCase();
+    if (status === "TERMINATED") {
+      return ["status", "create", "delete", "set-sunshine-password"];
+    }
+    if (status === "RUNNING") {
+      return ["status", "stop", "delete"];
+    }
+    return ["status", "delete"];
   }
 
   function setBanner(message, tone) {
@@ -1367,16 +1406,7 @@
     setBanner("Backend connected. Sign in with Google to unlock VM control.", "success");
 
     if (state.token) {
-      setPageLoading("Restoring Google session...");
-      await restoreSession();
-      setPageLoading("Loading hardware and zone availability...");
-      await refreshHardwareOptions({ silent: true });
-      setPageLoading("Loading created VM instances...");
-      await refreshInstances({ silent: true, autoSelect: true });
-      setPageLoading("Loading price estimate...");
-      await refreshPriceEstimate({ silent: true });
-      setPageLoading("Loading current VM and service status...");
-      await refreshStatus({ silent: true });
+      await loadAuthenticatedControls("Restoring Google session...");
     }
   }
 
@@ -1423,23 +1453,23 @@
   }
 
   async function handleGoogleToken(response) {
+    let loaded = false;
     try {
       if (response.error) {
         throw new Error(response.error_description || response.error);
       }
+      setPageLoading("Verifying Google session...");
       setBusy(true);
       setBanner("Verifying Google session...", "warning");
       storeSessionToken(response.access_token || "");
-      await restoreSession();
-      await refreshHardwareOptions({ silent: true });
-      await refreshInstances({ silent: true, autoSelect: true });
-      await refreshPriceEstimate({ silent: true });
-      await refreshStatus({ silent: true });
+      await loadAuthenticatedControls("Verifying Google session...");
+      loaded = true;
     } catch (error) {
       clearSession();
       handleError(error);
     } finally {
       setBusy(false);
+      markPageReady(loaded ? "Ready." : "Sign-in failed.");
     }
   }
 
@@ -1468,6 +1498,20 @@
     state.user = data.user;
     updateAuthUi();
     setBanner(`Signed in as ${state.user.email}.`, "success");
+  }
+
+  async function loadAuthenticatedControls(firstMessage) {
+    setPageLoading(firstMessage || "Loading authenticated controls...");
+    await restoreSession();
+    setPageLoading("Loading hardware and zone availability...");
+    await refreshHardwareOptions({ silent: true });
+    setPageLoading("Loading created VM instances...");
+    await refreshInstances({ silent: true, autoSelect: true });
+    setPageLoading("Loading price estimate...");
+    await refreshPriceEstimate({ silent: true });
+    setPageLoading("Loading current VM and service status...");
+    await refreshStatus({ silent: true });
+    updateActionAvailability();
   }
 
   async function fetchApi(path, options) {
