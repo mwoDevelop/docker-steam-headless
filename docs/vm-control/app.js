@@ -1851,12 +1851,32 @@
       const message = commandFailureMessage(command, error);
       setCommandStatus(message, "error");
       setBanner(message, "error");
-      if (previousStatus) {
+      let recoveredStatus = null;
+      if (COMMANDS_TO_POLL_AFTER_RESPONSE.has(command)) {
+        try {
+          setCommandStatus(
+            `Command "${command}" response was lost. Checking current VM status before restoring the previous view...`,
+            "warning",
+          );
+          recoveredStatus = await waitForStatusSettled(command, null);
+          renderStatusPayload(recoveredStatus);
+          await refreshInstances({ silent: true, autoSelect: command === "delete" });
+          setCommandStatus(
+            `${statusBannerMessage(`Command "${command}" status recovered`, recoveredStatus)}`,
+            statusMessageTone(recoveredStatus),
+          );
+        } catch (recoveryError) {
+          recoveredStatus = null;
+        }
+      }
+      if (!recoveredStatus && previousStatus) {
         state.lastStatus = previousStatus;
         state.lastStatusTargetKey = previousStatusTargetKey;
       }
       try {
-        await refreshStatus({ silent: true });
+        if (!recoveredStatus) {
+          await refreshStatus({ silent: true });
+        }
       } catch (refreshError) {
         if (previousStatus) {
           renderStatusPayload(previousStatus, previousStatusTargetKey);
