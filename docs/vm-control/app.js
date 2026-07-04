@@ -1878,7 +1878,11 @@
       }
       try {
         if (!recoveredStatus) {
-          await refreshStatus({ silent: true });
+          recoveredStatus = await refreshStatus({ silent: true, forceRender: true });
+          setCommandStatus(
+            `${statusBannerMessage(`Command "${command}" status recovered`, recoveredStatus)}`,
+            statusMessageTone(recoveredStatus),
+          );
         }
       } catch (refreshError) {
         if (previousStatus) {
