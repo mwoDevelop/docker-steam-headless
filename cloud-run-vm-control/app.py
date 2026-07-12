@@ -102,6 +102,7 @@ CONFIG = {
     "allowed_google_domains": {value.lower() for value in csv_env("ALLOWED_GOOGLE_DOMAINS")},
     "admin_google_emails": {value.lower() for value in (csv_env("ADMIN_GOOGLE_EMAILS") or ["mwodevelop@gmail.com"])},
     "access_users_secret_name": os.environ.get("ACCESS_USERS_SECRET_NAME", "steam-vm-control-allowed-users"),
+    "minecraft_versions_secret_name": os.environ.get("MINECRAFT_VERSIONS_SECRET_NAME", ""),
     "duckdns_domains": normalize_duckdns_domains(csv_env("DUCKDNS_DOMAINS")),
     "duckdns_token": os.environ.get("DUCKDNS_TOKEN", ""),
     "novnc_port": os.environ.get("VM_NOVNC_PORT", "8083"),
@@ -203,6 +204,7 @@ MINECRAFT_VERSION_CACHE: dict[str, Any] = {
     "source": "static",
     "updatedAt": "",
     "lastError": "",
+    "loaded": False,
 }
 
 
@@ -234,6 +236,7 @@ def configured_minecraft_version_options() -> list[str]:
 
 
 def minecraft_version_options() -> list[str]:
+    load_persisted_minecraft_versions()
     cached_versions = MINECRAFT_VERSION_CACHE.get("versions")
     if isinstance(cached_versions, list) and cached_versions:
         return [str(version) for version in cached_versions if str(version or "").strip()]
@@ -270,6 +273,7 @@ def minecraft_version_sort_key(version: str) -> tuple[int, list[int], str]:
 
 def refresh_minecraft_versions_from_papermc() -> dict[str, Any]:
     previous_versions = minecraft_version_options()
+    previous_cache = dict(MINECRAFT_VERSION_CACHE)
     session = requests.Session()
     headers = {"User-Agent": PAPERMC_USER_AGENT, "Accept": "application/json"}
     try:
@@ -313,12 +317,15 @@ def refresh_minecraft_versions_from_papermc() -> dict[str, Any]:
             raise ApiError("PaperMC did not return any stable server versions.", 502)
 
         versions = ["LATEST", *[version for version in stable_versions if version != "LATEST"]]
+        updated_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        save_persisted_minecraft_versions(versions, source="papermc", updated_at=updated_at)
         MINECRAFT_VERSION_CACHE.update(
             {
                 "versions": versions,
                 "source": "papermc",
-                "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "updatedAt": updated_at,
                 "lastError": "",
+                "loaded": True,
             }
         )
         return minecraft_version_payload(refreshed=True)
@@ -327,8 +334,10 @@ def refresh_minecraft_versions_from_papermc() -> dict[str, Any]:
         MINECRAFT_VERSION_CACHE.update(
             {
                 "versions": previous_versions,
-                "source": MINECRAFT_VERSION_CACHE.get("source") or "static",
+                "source": previous_cache.get("source") or "static",
+                "updatedAt": previous_cache.get("updatedAt") or "",
                 "lastError": message,
+                "loaded": True,
             }
         )
         return minecraft_version_payload(refreshed=False, error=message)
@@ -416,6 +425,81 @@ def write_access_users_secret(users: set[str]) -> None:
     )
     if response.status_code >= 400:
         raise ApiError(f"Unable to update managed access users: {response.text}", 502)
+
+
+def normalize_minecraft_version_list(raw_versions: Any) -> list[str]:
+    if not isinstance(raw_versions, list):
+        return []
+    versions: list[str] = []
+    for raw_version in raw_versions:
+        try:
+            version = normalize_minecraft_version(raw_version)
+        except ApiError:
+            continue
+        if version not in versions:
+            versions.append(version)
+    if not versions:
+        return []
+    return ["LATEST", *[version for version in versions if version != "LATEST"]]
+
+
+def load_persisted_minecraft_versions() -> None:
+    if MINECRAFT_VERSION_CACHE.get("loaded"):
+        return
+    MINECRAFT_VERSION_CACHE["loaded"] = True
+
+    secret_name = str(CONFIG["minecraft_versions_secret_name"] or "").strip()
+    if not secret_name:
+        return
+    try:
+        response = compute_session().get(
+            f"{SECRET_MANAGER_BASE_URL}/{secret_path(secret_name)}/versions/latest:access",
+            timeout=30,
+        )
+        if response.status_code == 404:
+            return
+        if response.status_code >= 400:
+            raise ApiError(f"Unable to read Minecraft versions cache: {response.text}", 502)
+        data = response.json()
+        encoded = (((data or {}).get("payload") or {}).get("data") or "")
+        payload = json.loads(base64.b64decode(encoded).decode("utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("cache payload is not an object")
+        versions = normalize_minecraft_version_list(payload.get("versions"))
+        if not versions:
+            raise ValueError("cache does not contain valid versions")
+        MINECRAFT_VERSION_CACHE.update(
+            {
+                "versions": versions,
+                "source": str(payload.get("source") or "cache"),
+                "updatedAt": str(payload.get("updatedAt") or ""),
+                "lastError": "",
+            }
+        )
+    except Exception as error:
+        logging.warning("Unable to load persisted Minecraft versions cache: %s", error)
+        MINECRAFT_VERSION_CACHE["lastError"] = str(error)
+
+
+def save_persisted_minecraft_versions(versions: list[str], *, source: str, updated_at: str) -> None:
+    secret_name = str(CONFIG["minecraft_versions_secret_name"] or "").strip()
+    if not secret_name:
+        raise ApiError("Minecraft versions cache secret is not configured.", 500)
+    payload = json.dumps(
+        {
+            "versions": versions,
+            "source": source,
+            "updatedAt": updated_at,
+        },
+        separators=(",", ":"),
+    ).encode("utf-8")
+    response = compute_session().post(
+        f"{SECRET_MANAGER_BASE_URL}/{secret_path(secret_name)}:addVersion",
+        json={"payload": {"data": base64.b64encode(payload).decode("ascii")}},
+        timeout=30,
+    )
+    if response.status_code >= 400:
+        raise ApiError(f"Unable to save Minecraft versions cache: {response.text}", 502)
 
 
 def configured_allowed_emails() -> set[str]:
