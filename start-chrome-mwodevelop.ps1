@@ -44,6 +44,32 @@ function Test-HelpRequested {
     return $false
 }
 
+function Test-WslInteropAvailable {
+    $InteropHandlerPaths = @(
+        '/proc/sys/fs/binfmt_misc/WSLInterop',
+        '/proc/sys/fs/binfmt_misc/WSLInterop-late'
+    )
+
+    foreach ($InteropHandlerPath in $InteropHandlerPaths) {
+        if (-not (Test-Path $InteropHandlerPath)) {
+            continue
+        }
+
+        try {
+            $InteropHandler = Get-Content -Path $InteropHandlerPath -Raw -ErrorAction Stop
+        }
+        catch {
+            continue
+        }
+
+        if ($InteropHandler -match '(?m)^enabled\s*$' -and $InteropHandler -match '(?m)^interpreter /init\s*$') {
+            return $true
+        }
+    }
+
+    return $false
+}
+
 function Get-ForwardArgumentsForWindows {
     param([string[]]$AllArguments)
 
@@ -129,6 +155,16 @@ $PwshMode = $PwshModeFromRawArguments
 if ($IsWslEnvironment) {
     if (-not $IsHelpRequested -and $PwshMode -ne 'linux') {
         Write-Error "W WSL uruchamiaj skrypt z: --pwsh linux"
+        exit 1
+    }
+
+    if (-not (Test-WslInteropAvailable)) {
+        Write-Error @'
+WSL Interop jest nieaktywny, dlatego nie mozna uruchomic Windows pwsh.exe ani Chrome z tej sesji WSL.
+W PowerShell lub cmd po stronie Windows uruchom: wsl --shutdown
+Nastepnie otworz nowa sesje WSL i uruchom skrypt ponownie.
+Jesli problem powroci, sprawdz, czy /etc/wsl.conf nie zawiera [interop] enabled=false.
+'@
         exit 1
     }
 
