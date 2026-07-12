@@ -2962,9 +2962,9 @@ def allowed_commands(instance: dict[str, Any] | None) -> list[str]:
                 "create-backup",
                 "restore-backup",
                 "remove-backup",
-                "install-app",
-                "uninstall-app",
             ])
+            if not is_gpu_disabled_for_instance(instance):
+                commands.extend(["install-app", "uninstall-app"])
             commands.extend(allowed_minecraft_commands(instance))
         return commands
     if status == "TERMINATED" and not hardware_matches:
