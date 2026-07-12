@@ -67,6 +67,7 @@ CONFIG = {
     "project": os.environ.get("GCP_PROJECT", ""),
     "zone": os.environ.get("GCP_ZONE", ""),
     "instance": os.environ.get("GCE_NAME", ""),
+    "legacy_instance_names": csv_env("LEGACY_GCE_NAMES"),
     "machine_type": os.environ.get("MACHINE_TYPE", "n1-standard-4"),
     "gpu_type": os.environ.get("GPU_TYPE", "nvidia-tesla-t4"),
     "gpu_count": int(os.environ.get("GPU_COUNT", "1") or "1"),
@@ -485,14 +486,24 @@ def bounded_gce_name(raw_name: str) -> str:
     return f"{name[:54].rstrip('-')}-{digest}"
 
 
+def managed_instance_base_names() -> list[str]:
+    names = [bounded_gce_name(require_env("instance"))]
+    for legacy_name in CONFIG["legacy_instance_names"]:
+        normalized = bounded_gce_name(legacy_name)
+        if normalized not in names:
+            names.append(normalized)
+    return names
+
+
 def target_instance_name_for(
     *,
     hardware_id: str,
     gpu_type: str,
     gpu_count: int,
     zone: str,
+    base_name: str | None = None,
 ) -> str:
-    base = bounded_gce_name(require_env("instance"))
+    base = bounded_gce_name(base_name or require_env("instance"))
     hardware_slug = hardware_name_slug(hardware_id, gpu_type, gpu_count)
     return bounded_gce_name(f"{base}-{hardware_slug}-{zone}")
 
@@ -521,13 +532,26 @@ def legacy_instance_for_current_selection() -> dict[str, Any] | None:
         return getattr(g, "legacy_instance_for_selection", None)
     g.legacy_instance_checked = True
     g.legacy_instance_for_selection = None
-    legacy_name = bounded_gce_name(require_env("instance"))
-    if legacy_name == selected_computed_instance_name():
-        return None
-    legacy = compute_request("GET", explicit_instance_url(selected_zone(), legacy_name), allow_404=True)
-    if isinstance(legacy, dict) and instance_hardware_matches_selection(legacy):
-        g.legacy_instance_for_selection = legacy
-        return legacy
+    selected_name = selected_computed_instance_name()
+    candidates: list[str] = []
+    for base_name in managed_instance_base_names():
+        candidates.extend([
+            target_instance_name_for(
+                hardware_id=selected_hardware_id(),
+                gpu_type=selected_gpu_type(),
+                gpu_count=selected_gpu_count(),
+                zone=selected_zone(),
+                base_name=base_name,
+            ),
+            base_name,
+        ])
+    for legacy_name in dict.fromkeys(candidates):
+        if legacy_name == selected_name:
+            continue
+        legacy = compute_request("GET", explicit_instance_url(selected_zone(), legacy_name), allow_404=True)
+        if isinstance(legacy, dict) and instance_hardware_matches_selection(legacy):
+            g.legacy_instance_for_selection = legacy
+            return legacy
     return None
 
 
@@ -1221,8 +1245,7 @@ def list_managed_compute_instances() -> list[dict[str, Any]]:
     url = f"https://compute.googleapis.com/compute/v1/projects/{project}/aggregated/instances"
     page_token = ""
     instances: list[dict[str, Any]] = []
-    base_name = bounded_gce_name(CONFIG["instance"])
-    name_prefix = f"{base_name}-"
+    base_names = managed_instance_base_names()
     while True:
         params: dict[str, str] = {}
         if page_token:
@@ -1235,7 +1258,10 @@ def list_managed_compute_instances() -> list[dict[str, Any]]:
                 continue
             for instance in scoped_data.get("instances", []) or []:
                 name = str(instance.get("name", ""))
-                if isinstance(instance, dict) and (name == base_name or name.startswith(name_prefix)):
+                if isinstance(instance, dict) and any(
+                    name == base_name or name.startswith(f"{base_name}-")
+                    for base_name in base_names
+                ):
                     instances.append(instance)
         page_token = str(data.get("nextPageToken", "") or "")
         if not page_token:
@@ -1249,6 +1275,7 @@ def build_instances_payload() -> dict[str, Any]:
         "project": CONFIG["project"],
         "instanceName": selected_instance_name(),
         "baseInstanceName": bounded_gce_name(CONFIG["instance"]),
+        "managedBaseInstanceNames": managed_instance_base_names(),
         "instances": list_created_instances(),
     }
 
@@ -3648,6 +3675,11 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
             raise ApiError("Instance does not exist. Create it first.", 400)
         if current_status != "RUNNING":
             raise ApiError("Application changes require a running VM.", 400)
+        if is_gpu_disabled_for_instance(current_instance):
+            raise ApiError(
+                "Application changes require a GPU-enabled VM because Steam Headless and Sunshine are not started on CPU-only VMs.",
+                409,
+            )
         require_live_backup_ready(current_instance, command)
         application_id = parse_application_id(payload)
         verb = "Installing" if command == "install-app" else "Uninstalling"

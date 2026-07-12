@@ -720,6 +720,11 @@ run_application_action() {
   container_id="$(docker ps --filter 'name=steam-headless' --format '{{.ID}}' | head -n 1 || true)"
   if [[ -z "$container_id" ]]; then
     log "steam-headless container not found."
+    if [[ "$(metadata_get vm-gpu-count || true)" == "0" ]]; then
+      set_sunshine_status "disabled" "GPU disabled for this VM; application changes require a GPU-enabled Steam Headless container."
+    else
+      set_sunshine_status "error" "Steam Headless container is not running; application change could not be completed."
+    fi
     set_power_action_status "$action" "$token" "failed" ""
     return 1
   fi

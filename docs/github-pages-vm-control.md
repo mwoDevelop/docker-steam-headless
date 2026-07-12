@@ -24,7 +24,7 @@ Set these **repository variables** in GitHub:
 
 - `GCP_PROJECT` – target Google Cloud project
 - `GCP_ZONE` – target VM zone, for example `europe-central2-b`
-- `GCE_NAME` – VM name, for example `steam-gpu`
+- `GCE_NAME` – VM name, for example `steam`
 
 Set this **repository secret** in GitHub:
 

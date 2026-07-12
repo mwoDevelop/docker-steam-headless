@@ -19,7 +19,7 @@ load_gcp_vm_env "$ROOT_DIR"
 # Defaults (overridable via environment or local gcp-vm/.env* files)
 GCP_PROJECT=${GCP_PROJECT:-}
 GCP_ZONE=${GCP_ZONE:-europe-central2-b}
-GCE_NAME=${GCE_NAME:-steam-gpu}
+GCE_NAME=${GCE_NAME:-steam}
 MACHINE_TYPE=${MACHINE_TYPE:-n1-standard-4}
 GPU_TYPE=${GPU_TYPE:-nvidia-tesla-t4}
 GPU_COUNT=${GPU_COUNT:-1}

@@ -25,7 +25,7 @@ load_gcp_vm_env "$ROOT_DIR"
 
 GCP_PROJECT=${GCP_PROJECT:-}
 GCP_ZONE=${GCP_ZONE:-europe-central2-b}
-GCE_NAME=${GCE_NAME:-steam-gpu}
+GCE_NAME=${GCE_NAME:-steam}
 FW_RULE_WEB=${FW_RULE_WEB:-allow-steam-headless-web}
 FW_RULE_SUN=${FW_RULE_SUN:-allow-sunshine}
 FW_TAGS=${FW_TAGS:-steam-headless}

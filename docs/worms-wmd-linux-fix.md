@@ -19,7 +19,7 @@ The container runs Debian 12, which provides `libidn.so.12` and a newer system `
 Run this from the workstation with `gcloud` access to the VM:
 
 ```bash
-gcloud compute ssh steam-gpu \
+gcloud compute ssh steam \
   --zone=europe-central2-b \
   --project=docker-414215 \
   --command '
@@ -52,7 +52,7 @@ After this, launch the game from Steam again.
 To confirm the original issue:
 
 ```bash
-gcloud compute ssh steam-gpu \
+gcloud compute ssh steam \
   --zone=europe-central2-b \
   --project=docker-414215 \
   --command '
@@ -67,7 +67,7 @@ sudo docker exec "$CID" bash -lc "
 To check whether the fix is already applied:
 
 ```bash
-gcloud compute ssh steam-gpu \
+gcloud compute ssh steam \
   --zone=europe-central2-b \
   --project=docker-414215 \
   --command '
@@ -84,7 +84,7 @@ sudo docker exec "$CID" bash -lc "
 If needed:
 
 ```bash
-gcloud compute ssh steam-gpu \
+gcloud compute ssh steam \
   --zone=europe-central2-b \
   --project=docker-414215 \
   --command '
