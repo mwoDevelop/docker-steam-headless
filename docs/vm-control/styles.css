@@ -116,6 +116,10 @@ body:not(.is-page-loading) .page-loader {
   line-height: 1.45;
 }
 
+.page-loader-cancel {
+  margin-top: 12px;
+}
+
 @keyframes page-loader-spin {
   to {
     transform: rotate(360deg);
