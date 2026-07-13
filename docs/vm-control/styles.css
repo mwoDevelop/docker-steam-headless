@@ -587,7 +587,32 @@ button:disabled {
 }
 
 .action.capacity-release {
+  position: relative;
   background: linear-gradient(135deg, #ffd6b0, #f2a45f);
+}
+
+.gpu-probe-count {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  display: grid;
+  min-width: 22px;
+  min-height: 22px;
+  place-items: center;
+  padding: 2px 6px;
+  border: 2px solid #0a1822;
+  border-radius: 999px;
+  background: #051015;
+  color: var(--accent);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1;
+  pointer-events: none;
+}
+
+.action.capacity-release:disabled .gpu-probe-count {
+  color: var(--muted);
 }
 
 .action.capacity-check[data-tone="success"],

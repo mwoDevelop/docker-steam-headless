@@ -153,6 +153,7 @@
     minecraftOptionsStatus: document.querySelector("#minecraft-options-status"),
     checkGpuCapacity: document.querySelector("#check-gpu-capacity"),
     releaseGpuCapacity: document.querySelector("#release-gpu-capacity"),
+    gpuProbeCount: document.querySelector("#gpu-probe-count"),
     banner: document.querySelector("#banner"),
     commandStatus: document.querySelector("#command-status"),
     access: document.querySelector("#access"),
@@ -2328,6 +2329,7 @@
         return data;
       }
       renderStatusPayload(data, requestTargetKey);
+      await refreshGpuCapacityReservationCount();
       if (!options || options.refreshInstances !== false) {
         try {
           await refreshInstances({ silent: true });
@@ -2564,8 +2566,38 @@
     if (!button) {
       return;
     }
-    button.textContent = label;
+    const labelElement = button.querySelector("[data-capacity-label]");
+    if (labelElement) {
+      labelElement.textContent = label;
+    } else {
+      button.textContent = label;
+    }
     button.dataset.tone = tone || "neutral";
+  }
+
+  function renderGpuCapacityReservationCount(rawCount) {
+    if (!elements.gpuProbeCount) {
+      return;
+    }
+    const count = Math.max(0, Number.parseInt(rawCount, 10) || 0);
+    elements.gpuProbeCount.textContent = String(count);
+    elements.gpuProbeCount.setAttribute(
+      "aria-label",
+      `${count} reserved GPU probe${count === 1 ? "" : "s"}`,
+    );
+  }
+
+  async function refreshGpuCapacityReservationCount() {
+    if (!state.user) {
+      renderGpuCapacityReservationCount(0);
+      return;
+    }
+    try {
+      const data = await fetchApi("/api/capacity-reservations", { method: "GET" });
+      renderGpuCapacityReservationCount(data && data.reservedGpuCount);
+    } catch (error) {
+      console.warn("Failed to refresh GPU capacity reservation count.", error);
+    }
   }
 
   function resetGpuCapacityProbeButton() {
@@ -2605,6 +2637,7 @@
       setCommandStatus(message, "error");
       setBanner(message, "error");
     } finally {
+      await refreshGpuCapacityReservationCount();
       setBusy(false);
       markPageReady("Ready.", loadingToken);
     }
@@ -2636,6 +2669,7 @@
       setCommandStatus(message, "error");
       setBanner(message, "error");
     } finally {
+      await refreshGpuCapacityReservationCount();
       setBusy(false);
       markPageReady("Ready.", loadingToken);
     }

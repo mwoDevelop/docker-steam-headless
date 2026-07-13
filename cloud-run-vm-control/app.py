@@ -1454,6 +1454,7 @@ def handle_unexpected_error(error: Exception):
 @app.route("/api/instances", methods=["GET", "OPTIONS"])
 @app.route("/api/price", methods=["GET", "OPTIONS"])
 @app.route("/api/minecraft/versions", methods=["GET", "POST", "OPTIONS"])
+@app.route("/api/capacity-reservations", methods=["GET", "OPTIONS"])
 @app.route("/api/capacity-reservations/probe", methods=["POST", "OPTIONS"])
 @app.route("/api/capacity-reservations/release", methods=["POST", "OPTIONS"])
 @app.route("/api/internal/capacity-reservations/cleanup", methods=["POST", "OPTIONS"])
@@ -1546,6 +1547,10 @@ def options_passthrough():
         if request.method == "POST":
             return jsonify(refresh_minecraft_versions_from_papermc())
         return jsonify(minecraft_version_payload())
+
+    if request.path == "/api/capacity-reservations":
+        require_user()
+        return jsonify(managed_capacity_reservation_summary())
 
     if request.path == "/api/capacity-reservations/probe":
         require_user()
@@ -1786,6 +1791,38 @@ def list_managed_capacity_reservations() -> list[dict[str, Any]]:
             if isinstance(reservation, dict) and is_managed_capacity_reservation(reservation):
                 managed.append(reservation)
     return managed
+
+
+def reservation_gpu_count(reservation: dict[str, Any]) -> int:
+    specific_reservation = reservation.get("specificReservation", {}) or {}
+    if not isinstance(specific_reservation, dict):
+        return 0
+    try:
+        instance_count = max(0, int(specific_reservation.get("count", 0) or 0))
+    except (TypeError, ValueError):
+        return 0
+    properties = specific_reservation.get("instanceProperties", {}) or {}
+    if not isinstance(properties, dict):
+        return 0
+    gpu_per_instance = 0
+    for accelerator in properties.get("guestAccelerators", []) or []:
+        if not isinstance(accelerator, dict):
+            continue
+        try:
+            gpu_per_instance += max(0, int(accelerator.get("acceleratorCount", 0) or 0))
+        except (TypeError, ValueError):
+            continue
+    if gpu_per_instance == 0 and str(properties.get("machineType", "") or "").startswith("g2-"):
+        gpu_per_instance = 1
+    return instance_count * gpu_per_instance
+
+
+def managed_capacity_reservation_summary() -> dict[str, int]:
+    reservations = list_managed_capacity_reservations()
+    return {
+        "managedReservationCount": len(reservations),
+        "reservedGpuCount": sum(reservation_gpu_count(reservation) for reservation in reservations),
+    }
 
 
 def reservation_has_expired(reservation: dict[str, Any]) -> bool:
