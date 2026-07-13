@@ -1314,6 +1314,7 @@ def build_instance_picker_entry(instance: dict[str, Any]) -> dict[str, Any]:
         "lastStartTimestamp": str(instance.get("lastStartTimestamp", "") or ""),
         "hardware": hardware,
         "sunshineStatus": build_sunshine_status(instance),
+        "minecraftStatus": build_minecraft_status(instance),
     }
 
 

@@ -1005,6 +1005,9 @@
       const sunshine = instance.sunshineStatus && instance.sunshineStatus.label
         ? String(instance.sunshineStatus.label)
         : "unknown";
+      const minecraft = instance.minecraftStatus && instance.minecraftStatus.label
+        ? String(instance.minecraftStatus.label)
+        : "unknown";
       const ip = instance.externalIp ? ` · ${instance.externalIp}` : "";
       return `
         <button
@@ -1015,6 +1018,7 @@
           <span class="instance-card-title">${escapeHtml(instance.name)} · ${escapeHtml(instance.zone)}</span>
           <span class="instance-card-meta">${escapeHtml(instanceHardwareLabel(instance))} · ${escapeHtml(hardware.machineType || "machine")} · ${escapeHtml(status)}${escapeHtml(ip)}</span>
           <span class="instance-card-meta">Sunshine: ${escapeHtml(sunshine)}</span>
+          <span class="instance-card-meta">Minecraft: ${escapeHtml(minecraft)}</span>
         </button>
       `;
     }).join("");
