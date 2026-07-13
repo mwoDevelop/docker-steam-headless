@@ -2033,11 +2033,17 @@ def probe_gpu_capacity_zone(profile: dict[str, Any], zone: str, token: str) -> d
 
 
 def scan_gpu_capacity_zone(payload: dict[str, Any]) -> dict[str, Any]:
-    profile = gpu_hardware_profile(str(payload.get("hardwareId", "")))
-    zone = str(payload.get("zone", "")).strip()
-    zones = [str(value) for value in profile.get("zones", []) if str(value).strip()]
-    if zone not in zones:
-        raise ApiError("The selected zone is not compatible with the selected GPU profile.", 400)
+    apply_target_overrides(payload)
+    if selected_gpu_count() <= 0 or not selected_gpu_type():
+        raise ApiError("GPU capacity scans require a selected GPU hardware profile.", 400)
+    profile = {
+        "id": selected_hardware_id(),
+        "machineType": selected_machine_type(),
+        "gpuType": selected_gpu_type(),
+        "gpuCount": selected_gpu_count(),
+        "acceleratorMode": selected_accelerator_mode(),
+    }
+    zone = selected_zone()
     result = probe_gpu_capacity_zone(profile, zone, secrets.token_hex(4))
     result["hardwareId"] = str(profile["id"])
     return result

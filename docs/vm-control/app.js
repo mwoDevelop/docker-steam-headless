@@ -1113,6 +1113,7 @@
       : [];
     const run = {
       hardwareId: String(profile.id || ""),
+      target: selectedTargetParams(),
       zones,
       completed: 0,
       currentZone: "",
@@ -1135,7 +1136,7 @@
         try {
           const data = await fetchApi("/api/capacity-reservations/scan-zone", {
             method: "POST",
-            body: JSON.stringify({ hardwareId: run.hardwareId, zone }),
+            body: JSON.stringify({ ...run.target, zone }),
             signal: run.abortController.signal,
           });
           if (data && data.available) {
@@ -1161,6 +1162,7 @@
       updateGpuAvailabilityScanButton();
       await refreshGpuCapacityReservationCount();
       if (run.cancelRequested) {
+        renderZoneOptions();
         setBanner(`GPU capacity scan cancelled after ${run.completed}/${zones.length} zones. No partial result was applied.`, "warning");
         window.setTimeout(() => refreshGpuCapacityReservationCount(), 3000);
         return;
