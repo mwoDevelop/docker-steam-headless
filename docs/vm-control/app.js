@@ -548,12 +548,13 @@
     elements.commandStatus.dataset.tone = tone || "neutral";
   }
 
-  function clearScheduledCommandStatusRefresh() {
-    if (!state.commandStatusRefreshTimer) {
-      return;
-    }
-    window.clearTimeout(state.commandStatusRefreshTimer);
-    state.commandStatusRefreshTimer = null;
+    function clearScheduledCommandStatusRefresh() {
+      state.commandStatusRefreshGeneration = Number(state.commandStatusRefreshGeneration || 0) + 1;
+      if (!state.commandStatusRefreshTimer) {
+        return;
+      }
+      window.clearTimeout(state.commandStatusRefreshTimer);
+      state.commandStatusRefreshTimer = null;
   }
 
   function extractErrorToken(rawMessage, key) {
@@ -611,31 +612,41 @@
     return isTransitionalStatus(data) ? "warning" : "success";
   }
 
-  function schedulePostCommandStatusRefresh(command) {
-    if (command === "status" || !state.user) {
-      return;
-    }
-
-    if (state.commandStatusRefreshTimer) {
-      window.clearTimeout(state.commandStatusRefreshTimer);
-    }
-
-    state.commandStatusRefreshTimer = window.setTimeout(async () => {
-      state.commandStatusRefreshTimer = null;
-      if (!state.user) {
+    function schedulePostCommandStatusRefresh(command, refreshGeneration) {
+      if (command === "status" || !state.user) {
         return;
       }
 
-      try {
-        const data = await refreshStatus({ silent: true, forceRender: true });
-        setCommandStatus(statusBannerMessage("VM status refreshed", data), statusMessageTone(data));
-        if (state.isPageLoading && state.user) {
-          schedulePostCommandStatusRefresh(command);
-        }
-      } catch (error) {
-        handleError(error);
+      const generation = Number.isInteger(refreshGeneration)
+        ? refreshGeneration
+        : Number(state.commandStatusRefreshGeneration || 0) + 1;
+      state.commandStatusRefreshGeneration = generation;
+      if (state.commandStatusRefreshTimer) {
+        window.clearTimeout(state.commandStatusRefreshTimer);
       }
-    }, POST_COMMAND_STATUS_REFRESH_DELAY_MS);
+
+      state.commandStatusRefreshTimer = window.setTimeout(async () => {
+        state.commandStatusRefreshTimer = null;
+        if (!state.user || generation !== state.commandStatusRefreshGeneration) {
+          return;
+        }
+
+        try {
+          const data = await refreshStatus({ silent: true, forceRender: true });
+          if (generation !== state.commandStatusRefreshGeneration) {
+            return;
+          }
+          setCommandStatus(statusBannerMessage("VM status refreshed", data), statusMessageTone(data));
+          if (state.isPageLoading && state.user && generation === state.commandStatusRefreshGeneration) {
+            schedulePostCommandStatusRefresh(command, generation);
+          }
+        } catch (error) {
+          if (generation !== state.commandStatusRefreshGeneration) {
+            return;
+          }
+          handleError(error);
+        }
+      }, POST_COMMAND_STATUS_REFRESH_DELAY_MS);
   }
 
   function setAuthStatus(message, tone) {
@@ -2237,9 +2248,9 @@
           recoveredStatus = await waitForStatusSettled(command, null);
           renderStatusPayload(recoveredStatus);
           await refreshInstances({ silent: true, autoSelect: command === "delete" });
-            const recoveredMessage = `${message} ${statusBannerMessage(`Current VM status recovered after "${command}"`, recoveredStatus)}`;
-            setCommandStatus(recoveredMessage, "error");
-            setBanner(recoveredMessage, "error");
+          const recoveredMessage = `${message} ${statusBannerMessage(`Current VM status recovered after "${command}"`, recoveredStatus)}`;
+          setCommandStatus(recoveredMessage, "error");
+          setBanner(recoveredMessage, "error");
         } catch (recoveryError) {
           recoveredStatus = null;
         }
@@ -2251,9 +2262,9 @@
       try {
         if (!recoveredStatus) {
           recoveredStatus = await refreshStatus({ silent: true, forceRender: true });
-            const recoveredMessage = `${message} ${statusBannerMessage(`Current VM status recovered after "${command}"`, recoveredStatus)}`;
-            setCommandStatus(recoveredMessage, "error");
-            setBanner(recoveredMessage, "error");
+          const recoveredMessage = `${message} ${statusBannerMessage(`Current VM status recovered after "${command}"`, recoveredStatus)}`;
+          setCommandStatus(recoveredMessage, "error");
+          setBanner(recoveredMessage, "error");
         }
       } catch (refreshError) {
         if (previousStatus) {
