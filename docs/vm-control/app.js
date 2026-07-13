@@ -2237,10 +2237,9 @@
           recoveredStatus = await waitForStatusSettled(command, null);
           renderStatusPayload(recoveredStatus);
           await refreshInstances({ silent: true, autoSelect: command === "delete" });
-          setCommandStatus(
-            `${statusBannerMessage(`Command "${command}" status recovered`, recoveredStatus)}`,
-            statusMessageTone(recoveredStatus),
-          );
+            const recoveredMessage = `${message} ${statusBannerMessage(`Current VM status recovered after "${command}"`, recoveredStatus)}`;
+            setCommandStatus(recoveredMessage, "error");
+            setBanner(recoveredMessage, "error");
         } catch (recoveryError) {
           recoveredStatus = null;
         }
@@ -2252,10 +2251,9 @@
       try {
         if (!recoveredStatus) {
           recoveredStatus = await refreshStatus({ silent: true, forceRender: true });
-          setCommandStatus(
-            `${statusBannerMessage(`Command "${command}" status recovered`, recoveredStatus)}`,
-            statusMessageTone(recoveredStatus),
-          );
+            const recoveredMessage = `${message} ${statusBannerMessage(`Current VM status recovered after "${command}"`, recoveredStatus)}`;
+            setCommandStatus(recoveredMessage, "error");
+            setBanner(recoveredMessage, "error");
         }
       } catch (refreshError) {
         if (previousStatus) {
