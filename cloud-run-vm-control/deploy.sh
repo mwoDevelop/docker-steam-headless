@@ -270,7 +270,7 @@ SERVICE_URL=$(gcloud run services describe "$SERVICE_NAME" \
   --region "$REGION" \
   --format='value(status.url)')
 
-CAPACITY_CLEANUP_TOKEN=$(gcloud secrets versions access latest "$CAPACITY_CLEANUP_TOKEN_SECRET_NAME" --project "$GCP_PROJECT")
+CAPACITY_CLEANUP_TOKEN=$(gcloud secrets versions access latest --secret="$CAPACITY_CLEANUP_TOKEN_SECRET_NAME" --project "$GCP_PROJECT")
 SCHEDULER_ARGS=(
   --project "$GCP_PROJECT"
   --location "$REGION"
@@ -278,16 +278,17 @@ SCHEDULER_ARGS=(
   --time-zone "Etc/UTC"
   --uri "${SERVICE_URL}/api/internal/capacity-reservations/cleanup"
   --http-method POST
-  --headers "X-Capacity-Cleanup-Token=${CAPACITY_CLEANUP_TOKEN}"
   --attempt-deadline "60s"
   --quiet
 )
 if gcloud scheduler jobs describe "$CAPACITY_CLEANUP_SCHEDULER_JOB" --project "$GCP_PROJECT" --location "$REGION" >/dev/null 2>&1; then
   log "Updating GPU capacity reservation cleanup scheduler"
-  gcloud scheduler jobs update http "$CAPACITY_CLEANUP_SCHEDULER_JOB" "${SCHEDULER_ARGS[@]}" >/dev/null
+  gcloud scheduler jobs update http "$CAPACITY_CLEANUP_SCHEDULER_JOB" "${SCHEDULER_ARGS[@]}" \
+    --update-headers="X-Capacity-Cleanup-Token=${CAPACITY_CLEANUP_TOKEN}" >/dev/null
 else
   log "Creating GPU capacity reservation cleanup scheduler"
-  gcloud scheduler jobs create http "$CAPACITY_CLEANUP_SCHEDULER_JOB" "${SCHEDULER_ARGS[@]}" >/dev/null
+  gcloud scheduler jobs create http "$CAPACITY_CLEANUP_SCHEDULER_JOB" "${SCHEDULER_ARGS[@]}" \
+    --headers="X-Capacity-Cleanup-Token=${CAPACITY_CLEANUP_TOKEN}" >/dev/null
 fi
 
 log "Cloud Run VM control API deployed"
