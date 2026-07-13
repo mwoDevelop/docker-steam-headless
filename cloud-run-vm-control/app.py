@@ -1105,9 +1105,18 @@ def persistent_disks_for_price(instance: dict[str, Any] | None) -> tuple[list[di
     for disk in (instance or {}).get("disks", []) or []:
         if not isinstance(disk, dict):
             continue
-        disk_type = str(disk.get("type", "") or "").rsplit("/", 1)[-1].strip()
+        source_disk: dict[str, Any] = {}
+        source_url = str(disk.get("source", "") or "").strip()
+        if source_url:
+            try:
+                fetched_disk = compute_request("GET", source_url, allow_404=True)
+                if isinstance(fetched_disk, dict):
+                    source_disk = fetched_disk
+            except ApiError as error:
+                logging.warning("Unable to read disk details for price estimate: %s", error)
+        disk_type = str(source_disk.get("type", "") or disk.get("type", "") or "").rsplit("/", 1)[-1].strip()
         try:
-            size_gb = float(disk.get("diskSizeGb", 0) or 0)
+            size_gb = float(source_disk.get("sizeGb", 0) or disk.get("diskSizeGb", 0) or 0)
         except (TypeError, ValueError):
             size_gb = 0
         if not disk_type or size_gb <= 0:
