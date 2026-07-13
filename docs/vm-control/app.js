@@ -1161,10 +1161,10 @@
       state.gpuAvailabilityScanRun = null;
       updateGpuAvailabilityScanButton();
       await refreshGpuCapacityReservationCount();
+      scheduleGpuCapacityReservationCountRefreshes();
       if (run.cancelRequested) {
         renderZoneOptions();
         setBanner(`GPU capacity scan cancelled after ${run.completed}/${zones.length} zones. No partial result was applied.`, "warning");
-        window.setTimeout(() => refreshGpuCapacityReservationCount(), 3000);
         return;
       }
     }
@@ -2804,6 +2804,16 @@
     } catch (error) {
       console.warn("Failed to refresh GPU capacity reservation count.", error);
     }
+  }
+
+  function scheduleGpuCapacityReservationCountRefreshes() {
+    [3000, 10000, 30000, 60000, 120000].forEach((delay) => {
+      window.setTimeout(() => {
+        if (state.user) {
+          refreshGpuCapacityReservationCount();
+        }
+      }, delay);
+    });
   }
 
   function resetGpuCapacityProbeButton() {
