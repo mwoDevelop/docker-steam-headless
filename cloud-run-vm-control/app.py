@@ -156,6 +156,7 @@ CPU_HARDWARE_ID = "cpu"
 COMPUTE_BILLING_SERVICE_ID = "6F81-5844-456A"
 PRICE_CURRENCY_CODE = "PLN"
 PRICE_CACHE_TTL_SECONDS = 6 * 60 * 60
+BILLING_HOURS_PER_MONTH = 730
 CAPACITY_RESERVATION_TTL_SECONDS = max(60, min(int(os.environ.get("CAPACITY_RESERVATION_TTL_SECONDS", "300") or "300"), 900))
 CAPACITY_RESERVATION_DESCRIPTION_PREFIX: Final = "steam-vm-control-capacity-probe"
 MACHINE_TYPE_SPECS: Final = {
@@ -191,6 +192,10 @@ GPU_VRAM_GB: Final = {
     "nvidia-b200": 180,
     "nvidia-gb200": 186,
     "nvidia-rtx-pro-6000": 96,
+}
+PERSISTENT_DISK_PRICE_TYPES: Final = {
+    "pd-ssd": "SSD backed PD Capacity",
+    "pd-balanced": "Balanced PD Capacity",
 }
 PRICE_INDEX_CACHE: dict[str, Any] = {
     "loaded_at": 0.0,
@@ -931,6 +936,20 @@ def sku_hourly_price(sku: dict[str, Any]) -> float | None:
     return money_to_float(unit_price)
 
 
+def sku_disk_hourly_price(sku: dict[str, Any]) -> float | None:
+    pricing_info = sku.get("pricingInfo", []) or []
+    if not pricing_info:
+        return None
+    expression = pricing_info[0].get("pricingExpression", {}) or {}
+    if str(expression.get("usageUnit", "")) != "GiBy.mo":
+        return None
+    rates = expression.get("tieredRates", []) or []
+    if not rates:
+        return None
+    unit_price = rates[0].get("unitPrice", {}) or {}
+    return money_to_float(unit_price) / BILLING_HOURS_PER_MONTH
+
+
 def gpu_billing_label(gpu_type: str) -> str:
     parts = [part for part in gpu_type.split("-") if part and part != "nvidia"]
     return "Nvidia " + " ".join(part.upper() if any(ch.isdigit() for ch in part) else part.title() for part in parts)
@@ -981,6 +1000,10 @@ def price_key_for_sku(sku: dict[str, Any]) -> tuple[str, str] | None:
     if description.startswith("G2 Instance Ram "):
         return ("g2", "ram")
 
+    for disk_type, prefix in PERSISTENT_DISK_PRICE_TYPES.items():
+        if description.startswith(f"{prefix} in ") or description == prefix:
+            return ("disk", disk_type)
+
     known_gpu_types = tuple(GPU_PRICE_DESCRIPTION_ALIASES)
     for gpu_type in known_gpu_types:
         if is_standard_gpu_price_description(description, gpu_type):
@@ -1023,7 +1046,7 @@ def refresh_price_index(currency: str = PRICE_CURRENCY_CODE, *, allow_fetch: boo
             if not isinstance(sku, dict):
                 continue
             key = price_key_for_sku(sku)
-            price = sku_hourly_price(sku)
+            price = sku_disk_hourly_price(sku) if key and key[0] == "disk" else sku_hourly_price(sku)
             if not key or price is None:
                 continue
             pricing_info = sku.get("pricingInfo", []) or []
@@ -1062,6 +1085,46 @@ def machine_spec(machine_type: str) -> dict[str, float | str] | None:
     return None
 
 
+def configured_persistent_disks() -> list[dict[str, Any]]:
+    return [
+        {
+            "label": "Boot disk",
+            "diskType": str(CONFIG["boot_disk_type"]),
+            "sizeGb": float(parse_disk_size_gb(str(CONFIG["boot_disk_size"]))),
+        },
+        {
+            "label": "State disk",
+            "diskType": str(CONFIG["data_disk_type"]),
+            "sizeGb": float(parse_disk_size_gb(str(CONFIG["data_disk_size"]))),
+        },
+    ]
+
+
+def persistent_disks_for_price(instance: dict[str, Any] | None) -> tuple[list[dict[str, Any]], str]:
+    actual_disks: list[dict[str, Any]] = []
+    for disk in (instance or {}).get("disks", []) or []:
+        if not isinstance(disk, dict):
+            continue
+        disk_type = str(disk.get("type", "") or "").rsplit("/", 1)[-1].strip()
+        try:
+            size_gb = float(disk.get("diskSizeGb", 0) or 0)
+        except (TypeError, ValueError):
+            size_gb = 0
+        if not disk_type or size_gb <= 0:
+            continue
+        actual_disks.append(
+            {
+                "label": "Boot disk" if disk.get("boot") is True else "State disk",
+                "diskType": disk_type,
+                "sizeGb": size_gb,
+            }
+        )
+
+    if actual_disks:
+        return actual_disks, "actual"
+    return configured_persistent_disks(), "configured"
+
+
 def build_price_estimate(
     *,
     machine_type: str,
@@ -1069,6 +1132,8 @@ def build_price_estimate(
     gpu_count: int,
     zone: str,
     allow_fetch: bool = True,
+    persistent_disks: list[dict[str, Any]] | None = None,
+    disk_source: str = "",
 ) -> dict[str, Any]:
     currency = PRICE_CURRENCY_CODE
     region = zone_region(zone)
@@ -1126,7 +1191,34 @@ def build_price_estimate(
             "currencyConversionRate": price_index.get("conversion_rate"),
         }
 
+    disk_components = []
+    disk_missing = []
+    disk_total = 0.0
+    for disk in persistent_disks or []:
+        disk_type = str(disk.get("diskType", "") or "")
+        try:
+            size_gb = float(disk.get("sizeGb", 0) or 0)
+        except (TypeError, ValueError):
+            size_gb = 0
+        if size_gb <= 0:
+            continue
+        rate = region_prices.get(("disk", disk_type))
+        if rate is None:
+            disk_missing.append(disk_type or "unknown disk")
+            continue
+        amount = size_gb * rate
+        disk_total += amount
+        disk_components.append(
+            {
+                "label": f"{disk.get('label', 'Persistent disk')} ({disk_type}, {size_gb:g} GB)",
+                "amountPln": round(amount, 4),
+            }
+        )
+
     rounded = round(total, 2)
+    disk_rounded = round(disk_total, 2)
+    running_rounded = round(total + disk_total, 2)
+    disk_available = not disk_missing
     return {
         "available": True,
         "currency": currency,
@@ -1141,7 +1233,28 @@ def build_price_estimate(
         "source": "Google Cloud Billing Catalog API",
         "effectiveTime": price_index.get("effective_time", ""),
         "currencyConversionRate": price_index.get("conversion_rate"),
-        "excludes": ["persistent disks", "snapshots", "network egress", "committed-use discounts", "taxes"],
+        "storage": {
+            "available": disk_available,
+            "amountPln": disk_rounded,
+            "components": disk_components,
+            "missing": disk_missing,
+            "source": disk_source or "not requested",
+        },
+        "running": {
+            "available": disk_available,
+            "amountPln": running_rounded,
+            "display": f"~{running_rounded:.2f} PLN/h" if disk_available else "Price unavailable",
+            "components": [*components, *disk_components],
+            "missing": disk_missing,
+        },
+        "terminated": {
+            "available": disk_available,
+            "amountPln": disk_rounded,
+            "display": f"~{disk_rounded:.2f} PLN/h" if disk_available else "Price unavailable",
+            "components": disk_components,
+            "missing": disk_missing,
+        },
+        "excludes": ["snapshots", "network egress", "committed-use discounts", "taxes"],
     }
 
 
@@ -1152,6 +1265,8 @@ def safe_price_estimate(
     gpu_count: int,
     zone: str,
     allow_fetch: bool = True,
+    persistent_disks: list[dict[str, Any]] | None = None,
+    disk_source: str = "",
 ) -> dict[str, Any]:
     try:
         return build_price_estimate(
@@ -1160,6 +1275,8 @@ def safe_price_estimate(
             gpu_count=gpu_count,
             zone=zone,
             allow_fetch=allow_fetch,
+            persistent_disks=persistent_disks,
+            disk_source=disk_source,
         )
     except ApiError as error:
         if not allow_fetch:
@@ -1607,6 +1724,8 @@ def options_passthrough():
     if request.path == "/api/price":
         require_user()
         apply_target_overrides(request.args)
+        instance = get_instance_or_none()
+        persistent_disks, disk_source = persistent_disks_for_price(instance)
         return jsonify(
             {
                 "hardware": {
@@ -1623,6 +1742,8 @@ def options_passthrough():
                     gpu_count=selected_gpu_count(),
                     zone=selected_zone(),
                     allow_fetch=True,
+                    persistent_disks=persistent_disks,
+                    disk_source=disk_source,
                 ),
             }
         )

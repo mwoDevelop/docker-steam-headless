@@ -1083,14 +1083,33 @@
       `;
       return;
     }
-    const parts = Array.isArray(estimate.components)
-      ? estimate.components.map((component) => `${component.label}: ${Number(component.amountPln || 0).toFixed(2)} PLN`).join(", ")
+    const formatComponents = (components) => Array.isArray(components)
+      ? components.map((component) => `${component.label}: ${Number(component.amountPln || 0).toFixed(2)} PLN/h`).join(", ")
+      : "";
+    const running = estimate.running || {
+      available: true,
+      display: estimate.display || `~${Number(estimate.amountPln || 0).toFixed(2)} PLN/h`,
+      components: estimate.components || [],
+    };
+    const terminated = estimate.terminated || null;
+    const runningParts = formatComponents(running.components);
+    const terminatedParts = terminated ? formatComponents(terminated.components) : "";
+    const storageSource = estimate.storage && estimate.storage.source === "actual"
+      ? " Uses actual attached disks."
+      : estimate.storage && estimate.storage.source === "configured"
+        ? " Uses configured disks before the VM exists."
+        : "";
+    const unavailableDetail = (value) => Array.isArray(value && value.missing) && value.missing.length
+      ? ` Missing pricing SKU: ${value.missing.join(", ")}.`
       : "";
     const effectiveTime = estimate.effectiveTime ? ` Catalog: ${escapeHtml(estimate.effectiveTime)}.` : "";
     elements.hardwarePriceEstimate.dataset.tone = "success";
     elements.hardwarePriceEstimate.innerHTML = `
-      <strong>${escapeHtml(estimate.display || `~${Number(estimate.amountPln || 0).toFixed(2)} PLN/h`)}</strong>
-      <span>On-demand Compute Engine estimate for ${escapeHtml(estimate.region || "selected region")}. ${escapeHtml(parts)}.${effectiveTime} Excludes disks, snapshots, traffic, discounts and taxes.</span>
+      <strong>Running: ${escapeHtml(running.display || "Price unavailable")}</strong>
+      <span>${escapeHtml(runningParts)}.${escapeHtml(unavailableDetail(running))}</span>
+      <strong>Terminated: ${escapeHtml(terminated && terminated.display || "Price unavailable")}</strong>
+      <span>${escapeHtml(terminatedParts)}.${escapeHtml(unavailableDetail(terminated))}</span>
+      <span>On-demand Compute Engine estimate for ${escapeHtml(estimate.region || "selected region")}.${storageSource}${effectiveTime} Excludes snapshots, network egress, committed-use discounts and taxes.</span>
     `;
   }
 
