@@ -19,6 +19,7 @@ GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
 ADMIN_GOOGLE_EMAILS=${ADMIN_GOOGLE_EMAILS:-mwodevelop@gmail.com}
 ACCESS_USERS_SECRET_NAME=${ACCESS_USERS_SECRET_NAME:-steam-vm-control-allowed-users}
 MINECRAFT_VERSIONS_SECRET_NAME=${MINECRAFT_VERSIONS_SECRET_NAME:-steam-vm-control-minecraft-versions}
+SESSION_TOKEN_SECRET_NAME=${SESSION_TOKEN_SECRET_NAME:-steam-vm-control-session-token}
 CAPACITY_CLEANUP_TOKEN_SECRET_NAME=${CAPACITY_CLEANUP_TOKEN_SECRET_NAME:-steam-vm-control-capacity-cleanup-token}
 CAPACITY_CLEANUP_SCHEDULER_JOB=${CAPACITY_CLEANUP_SCHEDULER_JOB:-steam-vm-control-capacity-cleanup}
 CAPACITY_RESERVATION_TTL_SECONDS=${CAPACITY_RESERVATION_TTL_SECONDS:-300}
@@ -209,6 +210,22 @@ gcloud secrets add-iam-policy-binding "$MINECRAFT_VERSIONS_SECRET_NAME" \
   --member="serviceAccount:${RUNTIME_SA_EMAIL}" \
   --role="roles/secretmanager.secretVersionAdder" >/dev/null
 
+if ! gcloud secrets describe "$SESSION_TOKEN_SECRET_NAME" --project "$GCP_PROJECT" >/dev/null 2>&1; then
+  log "Creating VM Control session token secret ${SESSION_TOKEN_SECRET_NAME}"
+  gcloud secrets create "$SESSION_TOKEN_SECRET_NAME" \
+    --project "$GCP_PROJECT" \
+    --replication-policy="automatic" >/dev/null
+  openssl rand -hex 32 | gcloud secrets versions add "$SESSION_TOKEN_SECRET_NAME" \
+    --project "$GCP_PROJECT" \
+    --data-file=- >/dev/null
+fi
+
+log "Granting VM Control session token secret access to runtime service account"
+gcloud secrets add-iam-policy-binding "$SESSION_TOKEN_SECRET_NAME" \
+  --project "$GCP_PROJECT" \
+  --member="serviceAccount:${RUNTIME_SA_EMAIL}" \
+  --role="roles/secretmanager.secretAccessor" >/dev/null
+
 if ! gcloud secrets describe "$CAPACITY_CLEANUP_TOKEN_SECRET_NAME" --project "$GCP_PROJECT" >/dev/null 2>&1; then
   log "Creating GPU capacity cleanup token secret ${CAPACITY_CLEANUP_TOKEN_SECRET_NAME}"
   gcloud secrets create "$CAPACITY_CLEANUP_TOKEN_SECRET_NAME" \
@@ -248,6 +265,7 @@ if gcloud iam service-accounts describe "$DEFAULT_COMPUTE_SA" --project "$GCP_PR
 fi
 
 SECRET_ARGS=()
+SECRET_ARGS+=(--update-secrets="VM_CONTROL_SESSION_SECRET=${SESSION_TOKEN_SECRET_NAME}:latest")
 SECRET_ARGS+=(--update-secrets="CAPACITY_RESERVATION_CLEANUP_TOKEN=${CAPACITY_CLEANUP_TOKEN_SECRET_NAME}:latest")
 if [[ -n "${DUCKDNS_TOKEN:-}" ]]; then
   if ! gcloud secrets describe "$DUCKDNS_SECRET_NAME" --project "$GCP_PROJECT" >/dev/null 2>&1; then

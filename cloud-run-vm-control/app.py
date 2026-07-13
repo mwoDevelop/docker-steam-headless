@@ -104,6 +104,7 @@ CONFIG = {
     "admin_google_emails": {value.lower() for value in (csv_env("ADMIN_GOOGLE_EMAILS") or ["mwodevelop@gmail.com"])},
     "access_users_secret_name": os.environ.get("ACCESS_USERS_SECRET_NAME", "steam-vm-control-allowed-users"),
     "minecraft_versions_secret_name": os.environ.get("MINECRAFT_VERSIONS_SECRET_NAME", ""),
+    "session_token_secret": os.environ.get("VM_CONTROL_SESSION_SECRET", ""),
     "capacity_cleanup_token": os.environ.get("CAPACITY_RESERVATION_CLEANUP_TOKEN", ""),
     "duckdns_domains": normalize_duckdns_domains(csv_env("DUCKDNS_DOMAINS")),
     "duckdns_token": os.environ.get("DUCKDNS_TOKEN", ""),
@@ -114,6 +115,8 @@ CONFIG = {
 }
 
 SUNSHINE_HEALTHCHECK_TIMEOUT_SECONDS: Final = 8
+SESSION_TOKEN_PREFIX: Final = "vmcs1"
+SESSION_TOKEN_TTL_SECONDS: Final = 12 * 60 * 60
 
 AUTO_STOP_METADATA_KEY = "vm-auto-shutdown-hours"
 AUTO_STOP_AT_METADATA_KEY = "vm-auto-shutdown-at"
@@ -1595,7 +1598,8 @@ def options_passthrough():
         return jsonify(result)
 
     if request.path == "/api/me":
-        return jsonify({"user": require_user()})
+        user = require_user()
+        return jsonify({"user": user, "session": create_session_token(user)})
 
     if request.path == "/api/status":
         user = require_user()
@@ -1635,14 +1639,91 @@ def options_passthrough():
     raise ApiError("Not found.", 404)
 
 
-def authenticated_google_user() -> dict[str, Any]:
+def bearer_token() -> str:
     auth_header = request.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):
-        raise ApiError("Missing Google token.", 401)
+        raise ApiError("Missing authentication token.", 401)
 
     token = auth_header.removeprefix("Bearer ").strip()
     if not token:
-        raise ApiError("Missing Google token.", 401)
+        raise ApiError("Missing authentication token.", 401)
+    return token
+
+
+def session_signing_secret() -> bytes:
+    secret = str(CONFIG["session_token_secret"] or "").strip()
+    if len(secret) < 32:
+        raise ApiError("Service is missing VM_CONTROL_SESSION_SECRET configuration.", 500)
+    return secret.encode("utf-8")
+
+
+def base64url_encode(value: bytes) -> str:
+    return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
+
+
+def base64url_decode(value: str) -> bytes:
+    return base64.urlsafe_b64decode(f"{value}{'=' * (-len(value) % 4)}")
+
+
+def create_session_token(user: dict[str, Any]) -> dict[str, Any]:
+    now = int(time.time())
+    expires_at = now + SESSION_TOKEN_TTL_SECONDS
+    payload = {
+        "email": normalize_email(str(user.get("email", ""))),
+        "name": str(user.get("name", "")),
+        "picture": str(user.get("picture", "")),
+        "sub": str(user.get("sub", "")),
+        "hd": normalize_email(str(user.get("hd", ""))),
+        "iat": now,
+        "exp": expires_at,
+    }
+    if not payload["email"]:
+        raise ApiError("Cannot create a session without an email address.", 401)
+    encoded_payload = base64url_encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8"))
+    signed_data = f"{SESSION_TOKEN_PREFIX}.{encoded_payload}".encode("ascii")
+    signature = base64url_encode(hmac.new(session_signing_secret(), signed_data, hashlib.sha256).digest())
+    return {
+        "token": f"{SESSION_TOKEN_PREFIX}.{encoded_payload}.{signature}",
+        "expiresAt": expires_at,
+        "expiresInSeconds": SESSION_TOKEN_TTL_SECONDS,
+    }
+
+
+def authenticated_session_user(token: str) -> dict[str, Any]:
+    parts = token.split(".")
+    if len(parts) != 3 or parts[0] != SESSION_TOKEN_PREFIX:
+        raise ApiError("Invalid VM Control session.", 401)
+    _, encoded_payload, encoded_signature = parts
+    signed_data = f"{SESSION_TOKEN_PREFIX}.{encoded_payload}".encode("ascii")
+    expected_signature = hmac.new(session_signing_secret(), signed_data, hashlib.sha256).digest()
+    try:
+        supplied_signature = base64url_decode(encoded_signature)
+        payload = json.loads(base64url_decode(encoded_payload).decode("utf-8"))
+    except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
+        raise ApiError("Invalid VM Control session.", 401) from None
+    if not hmac.compare_digest(supplied_signature, expected_signature) or not isinstance(payload, dict):
+        raise ApiError("Invalid VM Control session.", 401)
+    try:
+        expires_at = int(payload.get("exp", 0))
+    except (TypeError, ValueError):
+        expires_at = 0
+    if expires_at <= int(time.time()):
+        raise ApiError("VM Control session has expired. Sign in with Google again.", 401)
+    email = normalize_email(str(payload.get("email", "")))
+    if not email:
+        raise ApiError("Invalid VM Control session.", 401)
+    return {
+        "email": email,
+        "name": str(payload.get("name", "")),
+        "picture": str(payload.get("picture", "")),
+        "sub": str(payload.get("sub", "")),
+        "hd": normalize_email(str(payload.get("hd", ""))),
+        "email_domain": email.split("@", 1)[1] if "@" in email else "",
+    }
+
+
+def authenticated_google_user(token: str | None = None) -> dict[str, Any]:
+    token = token or bearer_token()
 
     client_ids = CONFIG["google_client_ids"]
     if not client_ids:
@@ -1676,6 +1757,13 @@ def authenticated_google_user() -> dict[str, Any]:
     }
 
 
+def authenticated_user() -> dict[str, Any]:
+    token = bearer_token()
+    if token.startswith(f"{SESSION_TOKEN_PREFIX}."):
+        return authenticated_session_user(token)
+    return authenticated_google_user(token)
+
+
 def user_response(user: dict[str, Any]) -> dict[str, Any]:
     email = normalize_email(str(user.get("email", "")))
     return {
@@ -1689,7 +1777,7 @@ def user_response(user: dict[str, Any]) -> dict[str, Any]:
 
 
 def require_user() -> dict[str, Any]:
-    user = authenticated_google_user()
+    user = authenticated_user()
     email = normalize_email(str(user.get("email", "")))
     hd = normalize_email(str(user.get("hd", "")))
     email_domain = normalize_email(str(user.get("email_domain", "")))
@@ -1708,7 +1796,7 @@ def require_user() -> dict[str, Any]:
 
 
 def require_admin_user() -> dict[str, Any]:
-    user = authenticated_google_user()
+    user = authenticated_user()
     email = normalize_email(str(user.get("email", "")))
     if email not in admin_google_emails():
         raise ApiError(f"Google account {email} is not an administrator.", 403)

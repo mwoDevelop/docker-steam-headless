@@ -8,7 +8,6 @@
     sessionTokenExpiresAt: "vm-control-google-session-token-expires-at",
     history: "vm-control-session-history",
   };
-  const GOOGLE_TOKEN_REFRESH_SKEW_MS = 120000;
   const SUNSHINE_POLL_INTERVAL_MS = 3000;
   const SUNSHINE_POLL_TIMEOUT_MS = 1200000;
   const POST_COMMAND_STATUS_REFRESH_DELAY_MS = 2000;
@@ -1864,14 +1863,6 @@
     }
   }
 
-  function tokenNeedsRefresh() {
-    return Boolean(
-      state.token
-      && state.tokenExpiresAt
-      && Date.now() >= (state.tokenExpiresAt - GOOGLE_TOKEN_REFRESH_SKEW_MS),
-    );
-  }
-
   async function refreshGoogleToken() {
     if (state.googleTokenRefreshPromise) {
       return state.googleTokenRefreshPromise;
@@ -1970,6 +1961,9 @@
 
   async function restoreSession() {
     const data = await fetchApi("/api/me", { method: "GET" });
+    if (data && data.session && data.session.token) {
+      storeSessionToken(data.session.token, data.session.expiresInSeconds);
+    }
     state.user = data.user;
     updateAuthUi();
     setBanner(`Signed in as ${state.user.email}.`, "success");
@@ -1992,10 +1986,6 @@
   async function fetchApi(path, options, allowTokenRefresh = true) {
     if (!state.backendUrl) {
       throw new Error("Cloud Run backend is not connected.");
-    }
-
-    if (allowTokenRefresh && tokenNeedsRefresh()) {
-      await refreshGoogleToken();
     }
 
     const headers = {
