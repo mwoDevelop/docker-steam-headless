@@ -172,6 +172,15 @@ set_sunshine_status() {
   set_instance_metadata_value vm-sunshine-status-detail "$detail"
 }
 
+record_sunshine_version() {
+  local container_id raw_version version
+  container_id="$(docker compose "${COMPOSE_FILES[@]}" ps -q | head -n 1 || true)"
+  [[ -n "$container_id" ]] || return 0
+  raw_version="$(docker exec "$container_id" sunshine --version 2>/dev/null | head -n 1 || true)"
+  version="$(printf '%s\n' "$raw_version" | grep -Eo '[0-9]+(\.[0-9]+){1,3}([+-][0-9A-Za-z.-]+)?' | head -n 1 || true)"
+  [[ -n "$version" ]] && set_instance_metadata_value vm-sunshine-version "$version"
+}
+
 clear_backup_ready_marker() {
   install -d -m 0755 "$STATE_DIR"
   rm -f "$BACKUP_READY_MARKER"
@@ -677,6 +686,7 @@ sunshine_http_code=""
 for _ in $(seq 1 60); do
   sunshine_http_code="$(curl -k --silent --output /dev/null --write-out '%{http_code}' --max-time 5 https://127.0.0.1:47990/ || true)"
   if [[ "$sunshine_http_code" == "200" || "$sunshine_http_code" == "401" || "$sunshine_http_code" == "403" ]]; then
+    record_sunshine_version
     set_sunshine_status "ready" "Sunshine Web UI responded with HTTP ${sunshine_http_code}."
     break
   fi

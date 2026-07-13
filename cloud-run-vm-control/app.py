@@ -251,6 +251,19 @@ def default_minecraft_version() -> str:
     return minecraft_version_options()[0]
 
 
+def latest_concrete_minecraft_version() -> str:
+    for version in minecraft_version_options():
+        candidate = str(version or "").strip()
+        if candidate and candidate.upper() != "LATEST":
+            return candidate
+    raise ApiError("No concrete Minecraft server version is available.", 503)
+
+
+def concrete_minecraft_version(version: str) -> str:
+    normalized = normalize_minecraft_version(version)
+    return latest_concrete_minecraft_version() if normalized.upper() == "LATEST" else normalized
+
+
 def minecraft_version_payload(*, refreshed: bool = False, error: str = "") -> dict[str, Any]:
     return {
         "versions": minecraft_version_options(),
@@ -2816,11 +2829,13 @@ def build_urls(external_ip: str) -> dict[str, Any]:
 
 
 def build_sunshine_status(instance: dict[str, Any] | None) -> dict[str, str]:
+    version = metadata_value(instance, "vm-sunshine-version").strip() if instance else ""
     if instance is None:
         return {
             "state": "not_created",
             "label": "VM not created",
             "detail": "",
+            "version": version,
         }
 
     vm_status = str(instance.get("status", "UNKNOWN")).upper()
@@ -2829,6 +2844,7 @@ def build_sunshine_status(instance: dict[str, Any] | None) -> dict[str, str]:
             "state": "stopped",
             "label": "VM not running",
             "detail": "",
+            "version": version,
         }
 
     state = metadata_value(instance, SUNSHINE_STATUS_METADATA_KEY).strip().lower() or "starting"
@@ -2841,36 +2857,42 @@ def build_sunshine_status(instance: dict[str, Any] | None) -> dict[str, str]:
             "state": "backup",
             "label": "Backup in progress",
             "detail": detail or "Steam Headless and Sunshine are temporarily stopped while the manual backup is running.",
+            "version": version,
         }
     if power_action == "restore-backup" and phase in {"requested", "running"}:
         return {
             "state": "restore",
             "label": "Restore in progress",
             "detail": detail or "Steam Headless and Sunshine are temporarily stopped while the selected backup is restored.",
+            "version": version,
         }
     if power_action == "restart" and phase in {"requested", "running", "rebooting"}:
         return {
             "state": "starting",
             "label": "Restarting",
             "detail": detail or "VM is restarting. Waiting for Sunshine Web UI.",
+            "version": version,
         }
     if power_action == "apply-sunshine-password" and phase in {"requested", "running"}:
         return {
             "state": "starting",
             "label": "Applying password",
             "detail": detail or "Applying Sunshine password change.",
+            "version": version,
         }
     if power_action in {"install-app", "uninstall-app"} and phase in {"requested", "running"}:
         return {
             "state": "starting",
             "label": "Updating application",
             "detail": detail or "Updating Sunshine application list.",
+            "version": version,
         }
     if power_action in {"delete", "stop"} and phase in {"requested", "running", "backed-up", "stopping"}:
         return {
             "state": "stopping",
             "label": "Stopping",
             "detail": detail or "Steam Headless and Sunshine are stopping for the requested VM action.",
+            "version": version,
         }
     if is_gpu_disabled_for_instance(instance):
         if state != "disabled":
@@ -2883,11 +2905,13 @@ def build_sunshine_status(instance: dict[str, Any] | None) -> dict[str, str]:
                 "state": state or "starting",
                 "label": gpu_disabled_pending_labels.get(state, state.title() if state else "Starting"),
                 "detail": detail or "VM startup in progress.",
+                "version": version,
             }
         return {
             "state": "disabled",
             "label": "Disabled",
             "detail": "GPU disabled for this VM; Sunshine stack was not started.",
+            "version": version,
         }
     if is_sunshine_started(instance, state, detail):
         state = "ready"
@@ -2905,17 +2929,20 @@ def build_sunshine_status(instance: dict[str, Any] | None) -> dict[str, str]:
         "state": state,
         "label": labels.get(state, state.title()),
         "detail": detail,
+        "version": version,
     }
 
 
 def minecraft_version_from_instance(instance: dict[str, Any] | None) -> str:
     if instance is None:
-        return default_minecraft_version()
+        return ""
     raw_version = metadata_value(instance, MINECRAFT_VERSION_METADATA_KEY).strip()
+    if not raw_version:
+        return ""
     try:
-        return normalize_minecraft_version(raw_version or default_minecraft_version())
+        return concrete_minecraft_version(raw_version)
     except ApiError:
-        return default_minecraft_version()
+        return ""
 
 
 def build_minecraft_status(instance: dict[str, Any] | None) -> dict[str, str]:
@@ -4016,7 +4043,11 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
         require_minecraft_command_allowed(current_instance, command)
         require_live_backup_ready(current_instance, command)
         ensure_firewall_rule(CONFIG["firewall_rule_minecraft"], FIREWALL_MINECRAFT_ALLOWED)
-        minecraft_version = parse_minecraft_version(payload) if command == "install-minecraft" else minecraft_version_from_instance(current_instance)
+        minecraft_version = (
+            concrete_minecraft_version(parse_minecraft_version(payload))
+            if command == "install-minecraft"
+            else minecraft_version_from_instance(current_instance)
+        )
         target_phase = {
             "install-minecraft": "installed",
             "start-minecraft": "started",

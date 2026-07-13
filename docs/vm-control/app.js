@@ -1039,6 +1039,26 @@
     return "CPU";
   }
 
+  function concreteMinecraftVersion(version, payload) {
+    const candidate = String(version || "").trim();
+    if (candidate && candidate.toUpperCase() !== "LATEST") {
+      return candidate;
+    }
+    return getMinecraftVersionCatalog(payload)
+      .find((item) => String(item || "").trim().toUpperCase() !== "LATEST") || "";
+  }
+
+  function serviceStatusWithVersion(status, payload, service) {
+    const label = status && status.label ? String(status.label) : "unknown";
+    const version = service === "minecraft"
+      ? concreteMinecraftVersion(status && status.version, payload)
+      : String(status && status.version || "").trim();
+    if (version) {
+      return `${label} · v${version}`;
+    }
+    return service === "sunshine" ? `${label} · version not detected` : label;
+  }
+
   function renderInstanceOptions(payload) {
     if (!elements.instancesList) {
       return;
@@ -1079,12 +1099,8 @@
         && hardwareId === selectedHardware
         && String(instance.zone) === selectedZoneValue;
       const status = String(instance.status || "UNKNOWN");
-      const sunshine = instance.sunshineStatus && instance.sunshineStatus.label
-        ? String(instance.sunshineStatus.label)
-        : "unknown";
-      const minecraft = instance.minecraftStatus && instance.minecraftStatus.label
-        ? String(instance.minecraftStatus.label)
-        : "unknown";
+      const sunshine = serviceStatusWithVersion(instance.sunshineStatus, payload, "sunshine");
+      const minecraft = serviceStatusWithVersion(instance.minecraftStatus, payload, "minecraft");
       const ip = instance.externalIp ? ` · ${instance.externalIp}` : "";
       return `
         <button
@@ -2103,6 +2119,10 @@
     const sunshineStatus = payload.sunshineStatus || {};
     const state = escapeToken(sunshineStatus.state || "starting");
     const label = escapeHtml(sunshineStatus.label || "Starting");
+    const version = String(sunshineStatus.version || "").trim();
+    const versionMeta = version
+      ? `<p class="access-meta">Version: <code>${escapeHtml(version)}</code></p>`
+      : "";
     const detail = sunshineStatus.detail
       ? `<p class="access-meta">Status detail: <span>${escapeHtml(sunshineStatus.detail)}</span></p>`
       : "";
@@ -2111,6 +2131,7 @@
         <span class="service-status-dot" aria-hidden="true"></span>
         <span>Status: ${label}</span>
       </div>
+      ${versionMeta}
       ${detail}
     `;
   }
@@ -2129,8 +2150,9 @@
     const minecraftStatus = payload.minecraftStatus || {};
     const state = escapeToken(minecraftStatus.state || "not_installed");
     const label = escapeHtml(minecraftStatus.label || "Not installed");
-    const version = minecraftStatus.version
-      ? `<p class="access-meta">Version: <code>${escapeHtml(minecraftStatus.version)}</code></p>`
+    const concreteVersion = concreteMinecraftVersion(minecraftStatus.version, payload);
+    const version = concreteVersion
+      ? `<p class="access-meta">Version: <code>${escapeHtml(concreteVersion)}</code></p>`
       : "";
     const detail = minecraftStatus.detail
       ? `<p class="access-meta">Status detail: <span>${escapeHtml(minecraftStatus.detail)}</span></p>`
@@ -2164,6 +2186,14 @@
       ? String(state.backendConfig.minecraftServer.defaultVersion)
       : "";
     return fromPayload || fromConfig || "LATEST";
+  }
+
+  function minecraftVersionOptionLabel(version, payload) {
+    if (String(version || "").trim().toUpperCase() !== "LATEST") {
+      return String(version || "");
+    }
+    const concreteVersion = concreteMinecraftVersion(version, payload);
+    return concreteVersion ? `Latest stable (${concreteVersion})` : "Latest stable";
   }
 
   function selectedMinecraftVersion() {
@@ -2244,7 +2274,7 @@
         elements.minecraftVersionSelect.innerHTML = '<option value="">No versions loaded</option>';
       } else {
         elements.minecraftVersionSelect.innerHTML = versions
-          .map((version) => `<option value="${escapeHtml(version)}">${escapeHtml(version)}</option>`)
+          .map((version) => `<option value="${escapeHtml(version)}">${escapeHtml(minecraftVersionOptionLabel(version, payload))}</option>`)
           .join("");
         if (versions.includes(previousValue)) {
           elements.minecraftVersionSelect.value = previousValue;
@@ -2268,7 +2298,12 @@
       const versionPayload = payload && payload.minecraft ? payload.minecraft : state.backendConfig && state.backendConfig.minecraftServer || {};
       const versionSource = versionPayload.source ? ` Source: ${versionPayload.source}.` : "";
       const versionUpdatedAt = versionPayload.updatedAt ? ` Versions updated: ${versionPayload.updatedAt}.` : "";
-      elements.minecraftOptionsStatus.textContent = `Minecraft status: ${label}. Server address: ${address}. Version: ${selectedMinecraftVersion()}.${versionSource}${versionUpdatedAt}`;
+      const installedVersion = concreteMinecraftVersion(payload && payload.minecraftStatus && payload.minecraftStatus.version, payload);
+      const selectedVersion = minecraftVersionOptionLabel(selectedMinecraftVersion(), payload);
+      const versionText = installedVersion
+        ? `Installed version: ${installedVersion}.`
+        : `Selected version: ${selectedVersion}.`;
+      elements.minecraftOptionsStatus.textContent = `Minecraft status: ${label}. Server address: ${address}. ${versionText}${versionSource}${versionUpdatedAt}`;
     }
     updateActionAvailability();
   }

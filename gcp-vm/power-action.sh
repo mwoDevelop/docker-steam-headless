@@ -208,6 +208,16 @@ set_sunshine_status() {
   set_instance_metadata_values "$updates"
 }
 
+record_sunshine_version() {
+  local container_id raw_version version
+  container_id="$(docker ps --filter 'name=steam-headless' --format '{{.ID}}' | head -n 1 || true)"
+  [[ -n "$container_id" ]] || return 0
+  raw_version="$(docker exec "$container_id" sunshine --version 2>/dev/null | head -n 1 || true)"
+  version="$(printf '%s\n' "$raw_version" | grep -Eo '[0-9]+(\.[0-9]+){1,3}([+-][0-9A-Za-z.-]+)?' | head -n 1 || true)"
+  [[ -n "$version" ]] || return 0
+  set_instance_metadata_value vm-sunshine-version "$version"
+}
+
 set_minecraft_status() {
   local state="$1"
   local detail="${2-}"
@@ -418,6 +428,7 @@ wait_for_local_sunshine_ready() {
   for _ in $(seq 1 90); do
     http_code="$(curl -k --silent --output /dev/null --write-out '%{http_code}' --max-time 5 https://127.0.0.1:47990/ || true)"
     if [[ "$http_code" == "200" || "$http_code" == "401" || "$http_code" == "403" ]]; then
+      record_sunshine_version
       set_sunshine_status "ready" "Sunshine Web UI responded locally with HTTP ${http_code}."
       return 0
     fi
