@@ -626,6 +626,9 @@ if ! gpu_enabled; then
   log "Backup readiness marker created for CPU-only VM"
   schedule_auto_shutdown
   set_sunshine_status "disabled" "GPU disabled for this VM; Sunshine stack was not started."
+  if ! /usr/local/bin/vm-power-action reconcile-minecraft; then
+    log "Minecraft startup reconciliation failed."
+  fi
   exit 0
 fi
 
@@ -695,6 +698,10 @@ done
 
 if [[ "$sunshine_http_code" != "200" && "$sunshine_http_code" != "401" && "$sunshine_http_code" != "403" ]]; then
   set_sunshine_status "starting" "VM is running, but Sunshine Web UI is still warming up."
+fi
+
+if ! /usr/local/bin/vm-power-action reconcile-minecraft; then
+  log "Minecraft startup reconciliation failed."
 fi
 
 ss -lntup | egrep '(8083|47989|47990|48010)' || true

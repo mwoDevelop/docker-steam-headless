@@ -300,6 +300,37 @@ minecraft_installed() {
   [[ -f "$MINECRAFT_COMPOSE_FILE" ]]
 }
 
+reconcile_minecraft_after_boot() {
+  local state version
+  state="$(minecraft_state)"
+
+  case "$state" in
+    running|starting)
+      version="$(validated_minecraft_version)"
+      log "Restoring Minecraft server ${version} after VM startup"
+      set_minecraft_status "starting" "Restoring Minecraft server after VM startup."
+      ensure_minecraft_compose "$version"
+      if ! minecraft_compose up -d; then
+        set_minecraft_status "error" "Minecraft container could not be started after VM startup."
+        return 1
+      fi
+      if ! wait_for_local_minecraft_ready; then
+        set_minecraft_status "error" "Minecraft server did not become reachable on port 25565 after VM startup."
+        return 1
+      fi
+      ;;
+    stopped)
+      version="$(validated_minecraft_version)"
+      log "Restoring stopped Minecraft server configuration after VM startup"
+      ensure_minecraft_compose "$version"
+      set_minecraft_status "stopped" "Minecraft server is stopped."
+      ;;
+    *)
+      log "Minecraft startup reconciliation skipped for state ${state}."
+      ;;
+  esac
+}
+
 minecraft_state() {
   local state
   state="$(metadata_get "$MINECRAFT_STATUS_METADATA_KEY" | tr '[:upper:]' '[:lower:]' | tr -d '\r' | head -n 1 || true)"
@@ -903,11 +934,14 @@ case "${1:-}" in
   daemon)
     run_daemon
     ;;
+  reconcile-minecraft)
+    reconcile_minecraft_after_boot
+    ;;
   auto-stop)
     auto_stop
     ;;
   *)
-    echo "Usage: $0 {daemon|auto-stop}" >&2
+    echo "Usage: $0 {daemon|reconcile-minecraft|auto-stop}" >&2
     exit 1
     ;;
 esac
