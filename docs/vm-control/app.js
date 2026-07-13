@@ -749,6 +749,58 @@
     return zones.find((zone) => String(zone || "").startsWith("europe-")) || "";
   }
 
+  const ZONE_CITY_BY_REGION = Object.freeze({
+    "africa-south1": "Johannesburg",
+    "asia-east1": "Changhua County",
+    "asia-east2": "Hong Kong",
+    "asia-northeast1": "Tokyo",
+    "asia-northeast2": "Osaka",
+    "asia-northeast3": "Seoul",
+    "asia-south1": "Mumbai",
+    "asia-south2": "Delhi",
+    "asia-southeast1": "Singapore",
+    "asia-southeast2": "Jakarta",
+    "australia-southeast1": "Sydney",
+    "australia-southeast2": "Melbourne",
+    "europe-central2": "Warsaw",
+    "europe-north1": "Hamina",
+    "europe-north2": "Stockholm",
+    "europe-southwest1": "Madrid",
+    "europe-west1": "Ghislain",
+    "europe-west2": "London",
+    "europe-west3": "Frankfurt",
+    "europe-west4": "Eemshaven",
+    "europe-west6": "Zurich",
+    "europe-west8": "Milan",
+    "europe-west9": "Paris",
+    "europe-west10": "Berlin",
+    "europe-west12": "Turin",
+    "me-central1": "Doha",
+    "me-central2": "Dammam",
+    "me-west1": "Tel Aviv",
+    "northamerica-northeast1": "Montreal",
+    "northamerica-northeast2": "Toronto",
+    "northamerica-south1": "Queretaro",
+    "southamerica-east1": "Sao Paulo",
+    "southamerica-west1": "Santiago",
+    "us-central1": "Council Bluffs",
+    "us-east1": "Moncks Corner",
+    "us-east4": "Ashburn",
+    "us-east5": "Columbus",
+    "us-south1": "Dallas",
+    "us-west1": "The Dalles",
+    "us-west2": "Los Angeles",
+    "us-west3": "Salt Lake City",
+    "us-west4": "Las Vegas",
+  });
+
+  function zoneDisplayLabel(zone) {
+    const value = String(zone || "").trim();
+    const region = value.replace(/-[a-z]$/, "");
+    const city = ZONE_CITY_BY_REGION[region];
+    return city ? `${city} · ${value}` : value;
+  }
+
   function selectedHardwareLabel() {
     const profile = selectedHardwareProfile();
     return profile ? String(profile.label || profile.id) : "";
@@ -847,7 +899,7 @@
       || elements.zoneSelect.value
       || String((state.hardwarePayload && state.hardwarePayload.defaultSelection || {}).zone || "");
     elements.zoneSelect.innerHTML = zones.map((zone) => (
-      `<option value="${escapeHtml(zone)}">${escapeHtml(zone)}</option>`
+      `<option value="${escapeHtml(zone)}">${escapeHtml(zoneDisplayLabel(zone))}</option>`
     )).join("");
     if (zones.includes(previousZone)) {
       elements.zoneSelect.value = previousZone;
@@ -1707,6 +1759,14 @@
       throw new Error("Sign in with Google first.");
     }
 
+    // Capture the target before any asynchronous preflight can refresh the
+    // hardware payload or alter the form state. This prevents an action from
+    // silently falling back to the backend's default hardware selection.
+    const commandTargetParams = selectedTargetParams();
+    if (!commandTargetParams.hardwareId || !commandTargetParams.zone) {
+      throw new Error("Selected hardware or zone is no longer available. Refresh hardware availability and select the target again.");
+    }
+
     if (command === "delete") {
       const confirmed = window.confirm("Delete will stop and remove the VM without creating a backup. Continue?");
       if (!confirmed) {
@@ -1790,7 +1850,7 @@
     schedulePostCommandStatusRefresh(command);
 
     try {
-      const body = { command, ...selectedTargetParams() };
+      const body = { command, ...commandTargetParams };
       if (stopRunningInstances) {
         body.stopRunningInstances = true;
       }
