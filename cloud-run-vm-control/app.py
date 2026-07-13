@@ -1219,6 +1219,55 @@ def hardware_profile(
     }
 
 
+def lowest_profile_price_estimate(profile: dict[str, Any]) -> dict[str, Any] | None:
+    """Return the lowest on-demand hourly estimate across a GPU profile's regions.
+
+    The Billing Catalog API prices Compute Engine resources per region, not per
+    zone.  One representative zone per region is therefore sufficient and keeps
+    building the hardware combobox local after the shared catalog cache is warm.
+    """
+    if int(profile.get("gpuCount", 0) or 0) <= 0:
+        return None
+
+    representative_zones: dict[str, str] = {}
+    for zone in profile.get("zones", []) or []:
+        zone_name = str(zone).strip()
+        if zone_name:
+            representative_zones.setdefault(zone_region(zone_name), zone_name)
+
+    estimates = []
+    for zone in representative_zones.values():
+        estimate = safe_price_estimate(
+            machine_type=str(profile.get("machineType", "")),
+            gpu_type=str(profile.get("gpuType", "")),
+            gpu_count=int(profile.get("gpuCount", 0) or 0),
+            zone=zone,
+            allow_fetch=False,
+        )
+        if estimate.get("available") and isinstance(estimate.get("amountPln"), (int, float)):
+            estimates.append(estimate)
+
+    if not estimates:
+        return None
+    return min(estimates, key=lambda estimate: float(estimate["amountPln"]))
+
+
+def sort_hardware_profiles_by_price(profiles: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    cpu_profiles = [profile for profile in profiles if int(profile.get("gpuCount", 0) or 0) <= 0]
+    gpu_profiles = [profile for profile in profiles if int(profile.get("gpuCount", 0) or 0) > 0]
+
+    for profile in gpu_profiles:
+        profile["priceEstimate"] = lowest_profile_price_estimate(profile)
+
+    def gpu_price_sort_key(profile: dict[str, Any]) -> tuple[float, str]:
+        estimate = profile.get("priceEstimate") or {}
+        amount = estimate.get("amountPln")
+        price = float(amount) if isinstance(amount, (int, float)) else float("inf")
+        return price, str(profile.get("label") or profile.get("id") or "")
+
+    return [*cpu_profiles, *sorted(gpu_profiles, key=gpu_price_sort_key)]
+
+
 def build_hardware_payload() -> dict[str, Any]:
     zones = list_available_zones()
     by_accelerator = accelerator_zones(zones)
@@ -1270,6 +1319,8 @@ def build_hardware_payload() -> dict[str, Any]:
                 zones=priced_zones,
             )
         )
+
+    profiles = sort_hardware_profiles_by_price(profiles)
 
     return {
         "refreshedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),

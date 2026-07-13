@@ -962,7 +962,11 @@
       const suffix = gpuCount > 0
         ? `${profile.gpuType || profile.id}, ${profile.machineType || "machine"}`
         : `${profile.machineType || "machine"}`;
-      return `<option value="${escapeHtml(id)}">${escapeHtml(profile.label || id)} (${escapeHtml(suffix)}, ${zoneCount} zones)</option>`;
+      const estimate = profile.priceEstimate || null;
+      const price = gpuCount > 0
+        ? ` - ${estimate && estimate.display ? estimate.display : "Price unavailable"}`
+        : "";
+      return `<option value="${escapeHtml(id)}">${escapeHtml(profile.label || id)}${escapeHtml(price)} (${escapeHtml(suffix)}, ${zoneCount} zones)</option>`;
     }).join("");
     if (profiles.some((profile) => String(profile.id) === previousHardware)) {
       elements.hardwareSelect.value = previousHardware;
