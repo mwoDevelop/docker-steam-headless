@@ -1175,8 +1175,18 @@
       await refreshGpuCapacityReservationCount();
       scheduleGpuCapacityReservationCountRefreshes();
       if (run.cancelRequested) {
+        state.gpuAvailabilityScan = {
+          hardwareId: run.hardwareId,
+          availableZones: run.availableZones,
+        };
         renderZoneOptions();
-        setBanner(`GPU capacity scan cancelled after ${run.completed}/${zones.length} zones. No partial result was applied.`, "warning");
+        await refreshPriceEstimate({ silent: false });
+        await refreshStatus({ silent: true });
+        const cleanupFailures = run.cleanupFailures.length;
+        const message = cleanupFailures
+          ? `GPU capacity scan cancelled after ${run.completed}/${zones.length} zones. Applied partial result: ${run.availableZones.length} GPU zones with current capacity; ${cleanupFailures} temporary reservation cleanup${cleanupFailures === 1 ? "" : "s"} will expire automatically.`
+          : `GPU capacity scan cancelled after ${run.completed}/${zones.length} zones. Applied partial result: ${run.availableZones.length} GPU zones with current capacity. All temporary reservations were released.`;
+        setBanner(message, cleanupFailures ? "warning" : "success");
         return;
       }
     }
