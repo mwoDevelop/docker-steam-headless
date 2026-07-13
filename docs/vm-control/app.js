@@ -151,6 +151,8 @@
     minecraftVersionSelect: document.querySelector("#minecraft-version-select"),
     refreshMinecraftVersions: document.querySelector("#refresh-minecraft-versions"),
     minecraftOptionsStatus: document.querySelector("#minecraft-options-status"),
+    checkGpuCapacity: document.querySelector("#check-gpu-capacity"),
+    releaseGpuCapacity: document.querySelector("#release-gpu-capacity"),
     banner: document.querySelector("#banner"),
     commandStatus: document.querySelector("#command-status"),
     access: document.querySelector("#access"),
@@ -387,6 +389,20 @@
     }
     if (elements.refreshMinecraftVersions) {
       elements.refreshMinecraftVersions.disabled = state.isBusy || !state.user || !state.backendConfig;
+    }
+    const target = selectedTargetParams();
+    const canCheckGpuCapacity = Boolean(
+      target.hardwareId
+      && target.zone
+      && target.gpuType
+      && Number(target.gpuCount || 0) > 0
+      && target.acceleratorMode === "attached",
+    );
+    if (elements.checkGpuCapacity) {
+      elements.checkGpuCapacity.disabled = state.isBusy || !state.user || !canCheckGpuCapacity;
+    }
+    if (elements.releaseGpuCapacity) {
+      elements.releaseGpuCapacity.disabled = state.isBusy || !state.user;
     }
     elements.actionButtons.forEach((button) => {
       const command = button.dataset.command;
@@ -907,6 +923,7 @@
       elements.zoneSelect.value = firstEuropeZone(zones) || zones[0];
     }
     elements.zoneSelect.dataset.savedValue = "";
+    resetGpuCapacityProbeButton();
     if (elements.hardwareOptionsStatus) {
       const refreshedAt = state.hardwarePayload && state.hardwarePayload.refreshedAt
         ? ` Refreshed: ${state.hardwarePayload.refreshedAt}.`
@@ -2544,6 +2561,87 @@
     updateActionAvailability();
   }
 
+  function setCapacityButtonResult(button, label, tone) {
+    if (!button) {
+      return;
+    }
+    button.textContent = label;
+    button.dataset.tone = tone || "neutral";
+  }
+
+  function resetGpuCapacityProbeButton() {
+    setCapacityButtonResult(elements.checkGpuCapacity, "Check GPU Capacity", "neutral");
+  }
+
+  async function checkGpuCapacity() {
+    const target = selectedTargetParams();
+    if (!target.hardwareId || !target.zone || !target.gpuType || Number(target.gpuCount || 0) <= 0) {
+      const message = "Select an attached GPU hardware profile and zone before checking capacity.";
+      setCapacityButtonResult(elements.checkGpuCapacity, "GPU Capacity Unavailable", "error");
+      setCommandStatus(message, "error");
+      setBanner(message, "error");
+      return;
+    }
+
+    const loadingToken = setPageLoading("Checking GPU capacity...");
+    try {
+      setBusy(true);
+      setCapacityButtonResult(elements.checkGpuCapacity, "Checking GPU Capacity...", "neutral");
+      const data = await fetchApi("/api/capacity-reservations/probe", {
+        method: "POST",
+        body: JSON.stringify(target),
+      });
+      const expiresAt = data && data.reservation && data.reservation.expiresAt
+        ? ` until ${data.reservation.expiresAt}`
+        : "";
+      const message = data && data.message
+        ? `${data.message}${expiresAt}.`
+        : `GPU capacity is reserved${expiresAt}.`;
+      setCapacityButtonResult(elements.checkGpuCapacity, "GPU Capacity Available", "success");
+      setCommandStatus(message, "success");
+      setBanner(message, "success");
+    } catch (error) {
+      const message = commandFailureMessage("check-gpu-capacity", error);
+      setCapacityButtonResult(elements.checkGpuCapacity, "GPU Capacity Unavailable", "error");
+      setCommandStatus(message, "error");
+      setBanner(message, "error");
+    } finally {
+      setBusy(false);
+      markPageReady("Ready.", loadingToken);
+    }
+  }
+
+  async function releaseGpuCapacityReservations() {
+    const loadingToken = setPageLoading("Releasing GPU capacity reservations...");
+    try {
+      setBusy(true);
+      setCapacityButtonResult(elements.releaseGpuCapacity, "Releasing GPU Probes...", "neutral");
+      const data = await fetchApi("/api/capacity-reservations/release", { method: "POST", body: "{}" });
+      const released = Array.isArray(data && data.released) ? data.released.length : 0;
+      const failed = Array.isArray(data && data.failed) ? data.failed.length : 0;
+      const message = failed
+        ? `Released ${released} managed GPU reservation${released === 1 ? "" : "s"}; ${failed} could not be released.`
+        : released
+          ? `Released all ${released} managed GPU capacity reservation${released === 1 ? "" : "s"}.`
+          : "No managed GPU capacity reservations were active.";
+      setCapacityButtonResult(
+        elements.releaseGpuCapacity,
+        failed ? "Release GPU Probes Failed" : "GPU Probes Released",
+        failed ? "error" : "success",
+      );
+      setCommandStatus(message, failed ? "error" : "success");
+      setBanner(message, failed ? "error" : "success");
+    } catch (error) {
+      const message = commandFailureMessage("release-gpu-capacity-reservations", error);
+      setCapacityButtonResult(elements.releaseGpuCapacity, "Release GPU Probes Failed", "error");
+      setCommandStatus(message, "error");
+      setBanner(message, "error");
+    } finally {
+      setBusy(false);
+      markPageReady("Ready.", loadingToken);
+    }
+  }
+
   elements.form.addEventListener("input", saveConfig);
   elements.connect.addEventListener("click", async () => {
     if (state.isBusy) {
@@ -2676,6 +2774,7 @@
   if (elements.hardwareSelect) {
     elements.hardwareSelect.addEventListener("change", async () => {
       const loadingToken = setPageLoading("Loading selected hardware status...");
+      resetGpuCapacityProbeButton();
       try {
         setBusy(true);
         if (state.user) {
@@ -2697,6 +2796,7 @@
   if (elements.zoneSelect) {
     elements.zoneSelect.addEventListener("change", async () => {
       const loadingToken = setPageLoading("Loading selected zone status...");
+      resetGpuCapacityProbeButton();
       saveConfig();
       renderTargetSummary();
       renderHardwarePriceEstimate(selectedPriceEstimate());
@@ -2733,6 +2833,14 @@
         markPageReady("Ready.", loadingToken);
       }
     });
+  }
+
+  if (elements.checkGpuCapacity) {
+    elements.checkGpuCapacity.addEventListener("click", checkGpuCapacity);
+  }
+
+  if (elements.releaseGpuCapacity) {
+    elements.releaseGpuCapacity.addEventListener("click", releaseGpuCapacityReservations);
   }
 
   if (elements.refreshInstances) {

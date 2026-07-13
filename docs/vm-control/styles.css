@@ -582,6 +582,24 @@ button:disabled {
   background: linear-gradient(135deg, #ff7a98, #e8416f);
 }
 
+.action.capacity-check {
+  background: linear-gradient(135deg, #d8e8ff, #8db5ef);
+}
+
+.action.capacity-release {
+  background: linear-gradient(135deg, #ffd6b0, #f2a45f);
+}
+
+.action.capacity-check[data-tone="success"],
+.action.capacity-release[data-tone="success"] {
+  background: linear-gradient(135deg, #7cf0d1, #1cc7ae);
+}
+
+.action.capacity-check[data-tone="error"],
+.action.capacity-release[data-tone="error"] {
+  background: linear-gradient(135deg, #ff9b83, #f36556);
+}
+
 .ghost {
   color: var(--text);
   background: rgba(255, 255, 255, 0.04);

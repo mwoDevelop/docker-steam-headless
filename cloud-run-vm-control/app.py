@@ -1,6 +1,7 @@
 import base64
 import gzip
 import hashlib
+import hmac
 import json
 import logging
 import os
@@ -103,6 +104,7 @@ CONFIG = {
     "admin_google_emails": {value.lower() for value in (csv_env("ADMIN_GOOGLE_EMAILS") or ["mwodevelop@gmail.com"])},
     "access_users_secret_name": os.environ.get("ACCESS_USERS_SECRET_NAME", "steam-vm-control-allowed-users"),
     "minecraft_versions_secret_name": os.environ.get("MINECRAFT_VERSIONS_SECRET_NAME", ""),
+    "capacity_cleanup_token": os.environ.get("CAPACITY_RESERVATION_CLEANUP_TOKEN", ""),
     "duckdns_domains": normalize_duckdns_domains(csv_env("DUCKDNS_DOMAINS")),
     "duckdns_token": os.environ.get("DUCKDNS_TOKEN", ""),
     "novnc_port": os.environ.get("VM_NOVNC_PORT", "8083"),
@@ -151,6 +153,8 @@ CPU_HARDWARE_ID = "cpu"
 COMPUTE_BILLING_SERVICE_ID = "6F81-5844-456A"
 PRICE_CURRENCY_CODE = "PLN"
 PRICE_CACHE_TTL_SECONDS = 6 * 60 * 60
+CAPACITY_RESERVATION_TTL_SECONDS = max(60, min(int(os.environ.get("CAPACITY_RESERVATION_TTL_SECONDS", "300") or "300"), 900))
+CAPACITY_RESERVATION_DESCRIPTION_PREFIX: Final = "steam-vm-control-capacity-probe"
 MACHINE_TYPE_SPECS: Final = {
     "n1-standard-4": {"family": "n1-standard", "vcpus": 4.0, "memoryGb": 15.0},
     "g2-standard-4": {"family": "g2", "vcpus": 4.0, "memoryGb": 16.0},
@@ -657,6 +661,25 @@ def instances_collection_url() -> str:
     project = require_env("project")
     zone = selected_zone()
     return f"https://compute.googleapis.com/compute/v1/projects/{project}/zones/{zone}/instances"
+
+
+def capacity_reservations_collection_url(zone: str | None = None) -> str:
+    reservation_zone = zone or selected_zone()
+    return (
+        "https://compute.googleapis.com/compute/beta/"
+        f"projects/{require_env('project')}/zones/{reservation_zone}/reservations"
+    )
+
+
+def capacity_reservation_url(zone: str, name: str) -> str:
+    return f"{capacity_reservations_collection_url(zone)}/{name}"
+
+
+def capacity_reservations_aggregated_url() -> str:
+    return (
+        "https://compute.googleapis.com/compute/beta/"
+        f"projects/{require_env('project')}/aggregated/reservations"
+    )
 
 
 def firewalls_collection_url() -> str:
@@ -1431,6 +1454,9 @@ def handle_unexpected_error(error: Exception):
 @app.route("/api/instances", methods=["GET", "OPTIONS"])
 @app.route("/api/price", methods=["GET", "OPTIONS"])
 @app.route("/api/minecraft/versions", methods=["GET", "POST", "OPTIONS"])
+@app.route("/api/capacity-reservations/probe", methods=["POST", "OPTIONS"])
+@app.route("/api/capacity-reservations/release", methods=["POST", "OPTIONS"])
+@app.route("/api/internal/capacity-reservations/cleanup", methods=["POST", "OPTIONS"])
 @app.route("/api/me", methods=["GET", "OPTIONS"])
 @app.route("/api/status", methods=["GET", "OPTIONS"])
 @app.route("/api/command", methods=["POST", "OPTIONS"])
@@ -1520,6 +1546,23 @@ def options_passthrough():
         if request.method == "POST":
             return jsonify(refresh_minecraft_versions_from_papermc())
         return jsonify(minecraft_version_payload())
+
+    if request.path == "/api/capacity-reservations/probe":
+        require_user()
+        payload = request.get_json(silent=True) or {}
+        apply_target_overrides(payload)
+        return jsonify(create_capacity_reservation_probe())
+
+    if request.path == "/api/capacity-reservations/release":
+        require_user()
+        return jsonify(release_managed_capacity_reservations())
+
+    if request.path == "/api/internal/capacity-reservations/cleanup":
+        require_capacity_cleanup_token()
+        result = release_managed_capacity_reservations(expired_only=True)
+        if result["failed"]:
+            raise ApiError("Failed to release one or more expired GPU capacity reservations.", 502)
+        return jsonify(result)
 
     if request.path == "/api/me":
         return jsonify({"user": require_user()})
@@ -1685,6 +1728,13 @@ def compute_request(method: str, url: str, *, allow_404: bool = False, **kwargs)
     return response.json()
 
 
+def require_capacity_cleanup_token() -> None:
+    expected = str(CONFIG["capacity_cleanup_token"] or "")
+    provided = request.headers.get("X-Capacity-Cleanup-Token", "")
+    if not expected or not hmac.compare_digest(provided, expected):
+        raise ApiError("Invalid capacity reservation cleanup token.", 403)
+
+
 def wait_for_zone_operation(operation: dict[str, Any], timeout_seconds: int = 90, zone: str | None = None) -> None:
     operation_name = str(operation.get("name", "") or "")
     if not operation_name:
@@ -1706,6 +1756,132 @@ def wait_for_zone_operation(operation: dict[str, Any], timeout_seconds: int = 90
             return
         time.sleep(2)
     raise ApiError(f"Timed out waiting for operation {operation_name}.", 504)
+
+
+def capacity_reservation_name() -> str:
+    if selected_gpu_count() <= 0 or not selected_gpu_type():
+        raise ApiError("GPU capacity checks require a selected GPU hardware profile.", 400)
+    return bounded_gce_name(
+        f"{CONFIG['instance']}-capacity-"
+        f"{hardware_name_slug(selected_hardware_id(), selected_gpu_type(), selected_gpu_count())}-"
+        f"{selected_zone()}"
+    )
+
+
+def is_managed_capacity_reservation(reservation: dict[str, Any]) -> bool:
+    return str(reservation.get("description", "") or "").startswith(CAPACITY_RESERVATION_DESCRIPTION_PREFIX)
+
+
+def capacity_reservation_zone(reservation: dict[str, Any]) -> str:
+    return str(reservation.get("zone", "") or "").rsplit("/", 1)[-1]
+
+
+def list_managed_capacity_reservations() -> list[dict[str, Any]]:
+    data = compute_request("GET", capacity_reservations_aggregated_url()) or {}
+    managed: list[dict[str, Any]] = []
+    for scoped_list in (data.get("items", {}) or {}).values():
+        if not isinstance(scoped_list, dict):
+            continue
+        for reservation in scoped_list.get("reservations", []) or []:
+            if isinstance(reservation, dict) and is_managed_capacity_reservation(reservation):
+                managed.append(reservation)
+    return managed
+
+
+def reservation_has_expired(reservation: dict[str, Any]) -> bool:
+    expires_at = parse_datetime_utc(str(reservation.get("deleteAtTime", "") or ""))
+    return expires_at is not None and expires_at <= datetime.now(timezone.utc)
+
+
+def delete_capacity_reservation(reservation: dict[str, Any]) -> None:
+    name = str(reservation.get("name", "") or "")
+    zone = capacity_reservation_zone(reservation)
+    if not name or not zone:
+        raise ApiError("Managed GPU capacity reservation is missing its name or zone.", 502)
+    operation = compute_request("DELETE", capacity_reservation_url(zone, name), allow_404=True)
+    if operation:
+        wait_for_zone_operation(operation, timeout_seconds=90, zone=zone)
+
+
+def release_managed_capacity_reservations(*, expired_only: bool = False) -> dict[str, Any]:
+    released: list[str] = []
+    failed: list[dict[str, str]] = []
+    reservations = list_managed_capacity_reservations()
+    for reservation in reservations:
+        if expired_only and not reservation_has_expired(reservation):
+            continue
+        name = str(reservation.get("name", "") or "unknown")
+        try:
+            delete_capacity_reservation(reservation)
+            released.append(name)
+        except ApiError as error:
+            logging.warning("Failed to release capacity reservation %s: %s", name, error.message)
+            failed.append({"name": name, "error": error.message})
+    return {
+        "released": released,
+        "failed": failed,
+        "managedCount": len(reservations),
+        "expiredOnly": expired_only,
+    }
+
+
+def create_capacity_reservation_probe() -> dict[str, Any]:
+    if selected_gpu_count() <= 0 or selected_accelerator_mode() != "attached":
+        raise ApiError("GPU capacity checks require an attached GPU hardware profile.", 400)
+
+    name = capacity_reservation_name()
+    zone = selected_zone()
+    existing = compute_request("GET", capacity_reservation_url(zone, name), allow_404=True)
+    if isinstance(existing, dict):
+        if int(existing.get("specificReservation", {}).get("inUseCount", 0) or 0) > 0:
+            return {
+                "available": True,
+                "reservation": {
+                    "name": name,
+                    "zone": zone,
+                    "expiresAt": existing.get("deleteAtTime", ""),
+                    "state": "consumed",
+                },
+                "message": "The selected VM already consumes the matching GPU capacity reservation.",
+            }
+        delete_capacity_reservation(existing)
+
+    expires_at = datetime.now(timezone.utc) + timedelta(seconds=CAPACITY_RESERVATION_TTL_SECONDS)
+    operation = compute_request(
+        "POST",
+        capacity_reservations_collection_url(zone),
+        json={
+            "name": name,
+            "description": f"{CAPACITY_RESERVATION_DESCRIPTION_PREFIX}; expires at {format_datetime_utc(expires_at)}",
+            "specificReservationRequired": False,
+            "deleteAtTime": format_datetime_utc(expires_at),
+            "specificReservation": {
+                "count": "1",
+                "instanceProperties": {
+                    "machineType": selected_machine_type(),
+                    "guestAccelerators": [
+                        {
+                            "acceleratorType": accelerator_type_path(),
+                            "acceleratorCount": selected_gpu_count(),
+                        }
+                    ],
+                },
+            },
+        },
+    )
+    if not isinstance(operation, dict):
+        raise ApiError("Failed to create the GPU capacity reservation.", 502)
+    wait_for_zone_operation(operation, timeout_seconds=120, zone=zone)
+    return {
+        "available": True,
+        "reservation": {
+            "name": name,
+            "zone": zone,
+            "expiresAt": format_datetime_utc(expires_at),
+            "state": "reserved",
+        },
+        "message": f"GPU capacity is reserved for up to {CAPACITY_RESERVATION_TTL_SECONDS // 60} minutes.",
+    }
 
 
 def wait_for_global_operation(operation: dict[str, Any], timeout_seconds: int = 90) -> None:
@@ -2558,6 +2734,7 @@ def build_instance_create_request(
     if CONFIG["vm_tags"]:
         request_body["tags"] = {"items": CONFIG["vm_tags"]}
     if selected_gpu_count() > 0 and selected_accelerator_mode() == "attached":
+        request_body["reservationAffinity"] = {"consumeReservationType": "ANY_RESERVATION"}
         request_body["guestAccelerators"] = [
             {
                 "acceleratorType": accelerator_type_path(),
