@@ -1826,8 +1826,8 @@ def release_managed_capacity_reservations(*, expired_only: bool = False) -> dict
 
 
 def create_capacity_reservation_probe() -> dict[str, Any]:
-    if selected_gpu_count() <= 0 or selected_accelerator_mode() != "attached":
-        raise ApiError("GPU capacity checks require an attached GPU hardware profile.", 400)
+    if selected_gpu_count() <= 0:
+        raise ApiError("GPU capacity checks require a selected GPU hardware profile.", 400)
 
     name = capacity_reservation_name()
     zone = selected_zone()
@@ -1847,6 +1847,14 @@ def create_capacity_reservation_probe() -> dict[str, Any]:
         delete_capacity_reservation(existing)
 
     expires_at = datetime.now(timezone.utc) + timedelta(seconds=CAPACITY_RESERVATION_TTL_SECONDS)
+    instance_properties: dict[str, Any] = {"machineType": selected_machine_type()}
+    if selected_accelerator_mode() == "attached":
+        instance_properties["guestAccelerators"] = [
+            {
+                "acceleratorType": accelerator_type_path(),
+                "acceleratorCount": selected_gpu_count(),
+            }
+        ]
     operation = compute_request(
         "POST",
         capacity_reservations_collection_url(zone),
@@ -1857,15 +1865,7 @@ def create_capacity_reservation_probe() -> dict[str, Any]:
             "deleteAtTime": format_datetime_utc(expires_at),
             "specificReservation": {
                 "count": "1",
-                "instanceProperties": {
-                    "machineType": selected_machine_type(),
-                    "guestAccelerators": [
-                        {
-                            "acceleratorType": accelerator_type_path(),
-                            "acceleratorCount": selected_gpu_count(),
-                        }
-                    ],
-                },
+                "instanceProperties": instance_properties,
             },
         },
     )
@@ -2733,8 +2733,9 @@ def build_instance_create_request(
 
     if CONFIG["vm_tags"]:
         request_body["tags"] = {"items": CONFIG["vm_tags"]}
-    if selected_gpu_count() > 0 and selected_accelerator_mode() == "attached":
+    if selected_gpu_count() > 0:
         request_body["reservationAffinity"] = {"consumeReservationType": "ANY_RESERVATION"}
+    if selected_gpu_count() > 0 and selected_accelerator_mode() == "attached":
         request_body["guestAccelerators"] = [
             {
                 "acceleratorType": accelerator_type_path(),

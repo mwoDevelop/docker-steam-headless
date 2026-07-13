@@ -396,7 +396,6 @@
       && target.zone
       && target.gpuType
       && Number(target.gpuCount || 0) > 0
-      && target.acceleratorMode === "attached",
     );
     if (elements.checkGpuCapacity) {
       elements.checkGpuCapacity.disabled = state.isBusy || !state.user || !canCheckGpuCapacity;
@@ -2576,7 +2575,7 @@
   async function checkGpuCapacity() {
     const target = selectedTargetParams();
     if (!target.hardwareId || !target.zone || !target.gpuType || Number(target.gpuCount || 0) <= 0) {
-      const message = "Select an attached GPU hardware profile and zone before checking capacity.";
+      const message = "Select a GPU hardware profile and zone before checking capacity.";
       setCapacityButtonResult(elements.checkGpuCapacity, "GPU Capacity Unavailable", "error");
       setCommandStatus(message, "error");
       setBanner(message, "error");
