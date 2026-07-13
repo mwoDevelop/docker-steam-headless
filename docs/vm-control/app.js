@@ -5,8 +5,10 @@
   const storageKeys = {
     config: "vm-control-cloudrun-config",
     sessionToken: "vm-control-google-session-token",
+    sessionTokenExpiresAt: "vm-control-google-session-token-expires-at",
     history: "vm-control-session-history",
   };
+  const GOOGLE_TOKEN_REFRESH_SKEW_MS = 120000;
   const SUNSHINE_POLL_INTERVAL_MS = 3000;
   const SUNSHINE_POLL_TIMEOUT_MS = 1200000;
   const POST_COMMAND_STATUS_REFRESH_DELAY_MS = 2000;
@@ -170,7 +172,10 @@
     gpuAvailabilityScanRun: null,
     googleInitializedFor: "",
     googleTokenClient: null,
+    googleTokenRefreshHandlers: null,
+    googleTokenRefreshPromise: null,
     token: "",
+    tokenExpiresAt: 0,
     user: null,
     lastStatus: null,
     lastStatusTargetKey: "",
@@ -231,6 +236,10 @@
     const saved = JSON.parse(window.localStorage.getItem(storageKeys.config) || "{}");
     state.backendUrl = saved.backendUrl || defaultBackendUrl;
     state.token = window.sessionStorage.getItem(storageKeys.sessionToken) || "";
+    state.tokenExpiresAt = Math.max(
+      0,
+      Number.parseInt(window.sessionStorage.getItem(storageKeys.sessionTokenExpiresAt) || "0", 10) || 0,
+    );
     state.history = JSON.parse(window.localStorage.getItem(storageKeys.history) || "[]");
     elements.backendUrl.value = state.backendUrl;
     elements.autoStopHours.value = Object.prototype.hasOwnProperty.call(saved, "autoStopHours")
@@ -1835,13 +1844,55 @@
     state.googleInitializedFor = clientId;
   }
 
-  function storeSessionToken(token) {
+  function storeSessionToken(token, expiresInSeconds) {
     state.token = token;
     if (token) {
       window.sessionStorage.setItem(storageKeys.sessionToken, token);
+      const expiresIn = Number(expiresInSeconds);
+      state.tokenExpiresAt = Number.isFinite(expiresIn) && expiresIn > 0
+        ? Date.now() + (expiresIn * 1000)
+        : 0;
+      if (state.tokenExpiresAt) {
+        window.sessionStorage.setItem(storageKeys.sessionTokenExpiresAt, String(state.tokenExpiresAt));
+      } else {
+        window.sessionStorage.removeItem(storageKeys.sessionTokenExpiresAt);
+      }
     } else {
       window.sessionStorage.removeItem(storageKeys.sessionToken);
+      window.sessionStorage.removeItem(storageKeys.sessionTokenExpiresAt);
+      state.tokenExpiresAt = 0;
     }
+  }
+
+  function tokenNeedsRefresh() {
+    return Boolean(
+      state.token
+      && state.tokenExpiresAt
+      && Date.now() >= (state.tokenExpiresAt - GOOGLE_TOKEN_REFRESH_SKEW_MS),
+    );
+  }
+
+  async function refreshGoogleToken() {
+    if (state.googleTokenRefreshPromise) {
+      return state.googleTokenRefreshPromise;
+    }
+    if (!state.googleTokenClient) {
+      throw new Error("Google session refresh is unavailable. Sign in with Google again.");
+    }
+
+    state.googleTokenRefreshPromise = new Promise((resolve, reject) => {
+      state.googleTokenRefreshHandlers = { resolve, reject };
+      try {
+        state.googleTokenClient.requestAccessToken({ prompt: "" });
+      } catch (error) {
+        state.googleTokenRefreshHandlers = null;
+        reject(error);
+      }
+    }).finally(() => {
+      state.googleTokenRefreshHandlers = null;
+      state.googleTokenRefreshPromise = null;
+    });
+    return state.googleTokenRefreshPromise;
   }
 
   function clearSession(options) {
@@ -1860,6 +1911,17 @@
   }
 
   async function handleGoogleToken(response) {
+    const refreshHandlers = state.googleTokenRefreshHandlers;
+    if (refreshHandlers) {
+      if (response.error || !response.access_token) {
+        refreshHandlers.reject(new Error(response.error_description || response.error || "Google session refresh failed."));
+      } else {
+        storeSessionToken(response.access_token, response.expires_in);
+        refreshHandlers.resolve();
+      }
+      return;
+    }
+
     let loaded = false;
     try {
       if (response.error) {
@@ -1868,7 +1930,7 @@
       setPageLoading("Verifying Google session...");
       setBusy(true);
       setBanner("Verifying Google session...", "warning");
-      storeSessionToken(response.access_token || "");
+      storeSessionToken(response.access_token || "", response.expires_in);
       await loadAuthenticatedControls("Verifying Google session...");
       loaded = true;
     } catch (error) {
@@ -1881,6 +1943,12 @@
   }
 
   function handleGoogleOAuthError(error) {
+    const refreshHandlers = state.googleTokenRefreshHandlers;
+    if (refreshHandlers) {
+      refreshHandlers.reject(new Error((error && (error.description || error.type)) || "Google session refresh failed."));
+      return;
+    }
+
     clearSession();
     if (!error || !error.type) {
       handleError(new Error("Google sign-in failed."));
@@ -1921,9 +1989,13 @@
     updateActionAvailability();
   }
 
-  async function fetchApi(path, options) {
+  async function fetchApi(path, options, allowTokenRefresh = true) {
     if (!state.backendUrl) {
       throw new Error("Cloud Run backend is not connected.");
+    }
+
+    if (allowTokenRefresh && tokenNeedsRefresh()) {
+      await refreshGoogleToken();
     }
 
     const headers = {
@@ -1950,6 +2022,14 @@
 
     if (!response.ok) {
       if (response.status === 401 || response.status === 403) {
+        if (allowTokenRefresh && state.token) {
+          try {
+            await refreshGoogleToken();
+            return fetchApi(path, options, false);
+          } catch (error) {
+            console.warn("Google session refresh failed after an API authorization response.", error);
+          }
+        }
         clearSession();
       }
       throw new Error((payload && payload.error) || `API returned ${response.status}.`);
