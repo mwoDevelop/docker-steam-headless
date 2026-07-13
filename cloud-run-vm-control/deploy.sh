@@ -148,6 +148,24 @@ gcloud projects add-iam-policy-binding "$GCP_PROJECT" \
   --role="roles/compute.instanceAdmin.v1" \
   --quiet >/dev/null
 
+CAPACITY_RESERVATION_ROLE_ID="vmControlCapacityReservations"
+CAPACITY_RESERVATION_ROLE="projects/${GCP_PROJECT}/roles/${CAPACITY_RESERVATION_ROLE_ID}"
+if ! gcloud iam roles describe "$CAPACITY_RESERVATION_ROLE_ID" --project "$GCP_PROJECT" >/dev/null 2>&1; then
+  log "Creating minimal GPU capacity reservation role"
+  gcloud iam roles create "$CAPACITY_RESERVATION_ROLE_ID" \
+    --project "$GCP_PROJECT" \
+    --title="VM Control Capacity Reservations" \
+    --description="Manage short-lived GPU capacity probes created by VM Control." \
+    --permissions="compute.reservations.create,compute.reservations.delete,compute.reservations.get,compute.reservations.list" \
+    --stage="GA" >/dev/null
+fi
+
+log "Granting GPU capacity reservation role to runtime service account"
+gcloud projects add-iam-policy-binding "$GCP_PROJECT" \
+  --member="serviceAccount:${RUNTIME_SA_EMAIL}" \
+  --role="$CAPACITY_RESERVATION_ROLE" \
+  --quiet >/dev/null
+
 log "Granting Service Usage consumer role to runtime service account"
 gcloud projects add-iam-policy-binding "$GCP_PROJECT" \
   --member="serviceAccount:${RUNTIME_SA_EMAIL}" \

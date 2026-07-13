@@ -1851,7 +1851,7 @@ def create_capacity_reservation_probe() -> dict[str, Any]:
     if selected_accelerator_mode() == "attached":
         instance_properties["guestAccelerators"] = [
             {
-                "acceleratorType": accelerator_type_path(),
+                "acceleratorType": selected_gpu_type(),
                 "acceleratorCount": selected_gpu_count(),
             }
         ]

@@ -87,7 +87,7 @@ What the script does:
 
 - enables required APIs
 - creates a dedicated runtime service account if needed
-- grants `roles/compute.instanceAdmin.v1`
+- grants `roles/compute.instanceAdmin.v1` and a minimal project role for short-lived GPU capacity reservations
 - stores `DUCKDNS_TOKEN` in Secret Manager if present locally
 - deploys the Cloud Run service from source
 
