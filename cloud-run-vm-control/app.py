@@ -177,6 +177,21 @@ GPU_PRICE_DESCRIPTION_ALIASES: Final = {
     "nvidia-gb200": ("Nvidia GB200 GPU",),
     "nvidia-rtx-pro-6000": ("Nvidia RTX PRO 6000 GPU", "Nvidia RTX Pro 6000 GPU"),
 }
+GPU_VRAM_GB: Final = {
+    "nvidia-l4": 24,
+    "nvidia-tesla-t4": 16,
+    "nvidia-tesla-p4": 8,
+    "nvidia-tesla-p100": 16,
+    "nvidia-tesla-v100": 16,
+    "nvidia-tesla-a100": 40,
+    "nvidia-a100-80gb": 80,
+    "nvidia-h100-80gb": 80,
+    "nvidia-h100-mega-80gb": 80,
+    "nvidia-h200-141gb": 141,
+    "nvidia-b200": 180,
+    "nvidia-gb200": 186,
+    "nvidia-rtx-pro-6000": 96,
+}
 PRICE_INDEX_CACHE: dict[str, Any] = {
     "loaded_at": 0.0,
     "currency": "",
@@ -1214,6 +1229,7 @@ def hardware_profile(
         "machineType": machine_type,
         "gpuType": gpu_type,
         "gpuCount": gpu_count,
+        "vramGb": GPU_VRAM_GB.get(gpu_type),
         "acceleratorMode": accelerator_mode,
         "zones": zones,
     }

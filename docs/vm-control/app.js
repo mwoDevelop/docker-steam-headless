@@ -959,8 +959,10 @@
       const id = String(profile.id || "");
       const gpuCount = Number(profile.gpuCount || 0);
       const zoneCount = Array.isArray(profile.zones) ? profile.zones.length : 0;
+      const vramGb = Number(profile.vramGb || 0);
+      const vram = gpuCount > 0 && vramGb > 0 ? `, ${vramGb} GB VRAM` : "";
       const suffix = gpuCount > 0
-        ? `${profile.gpuType || profile.id}, ${profile.machineType || "machine"}`
+        ? `${profile.gpuType || profile.id}${vram}, ${profile.machineType || "machine"}`
         : `${profile.machineType || "machine"}`;
       const estimate = profile.priceEstimate || null;
       const price = gpuCount > 0
