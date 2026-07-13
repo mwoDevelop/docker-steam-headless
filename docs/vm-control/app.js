@@ -516,6 +516,14 @@
   }
 
   function setBanner(message, tone) {
+    const isDuplicateCommandStatus = Boolean(
+      elements.commandStatus
+      && String(elements.commandStatus.textContent || "").trim() === String(message || "").trim(),
+    );
+    elements.banner.hidden = isDuplicateCommandStatus;
+    if (isDuplicateCommandStatus) {
+      return;
+    }
     elements.banner.textContent = message;
     elements.banner.dataset.tone = tone || "neutral";
   }
