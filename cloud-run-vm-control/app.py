@@ -1469,6 +1469,7 @@ def handle_unexpected_error(error: Exception):
 @app.route("/api/minecraft/versions", methods=["GET", "POST", "OPTIONS"])
 @app.route("/api/capacity-reservations", methods=["GET", "OPTIONS"])
 @app.route("/api/capacity-reservations/probe", methods=["POST", "OPTIONS"])
+@app.route("/api/capacity-reservations/scan", methods=["POST", "OPTIONS"])
 @app.route("/api/capacity-reservations/release", methods=["POST", "OPTIONS"])
 @app.route("/api/internal/capacity-reservations/cleanup", methods=["POST", "OPTIONS"])
 @app.route("/api/me", methods=["GET", "OPTIONS"])
@@ -1570,6 +1571,11 @@ def options_passthrough():
         payload = request.get_json(silent=True) or {}
         apply_target_overrides(payload)
         return jsonify(create_capacity_reservation_probe())
+
+    if request.path == "/api/capacity-reservations/scan":
+        require_user()
+        payload = request.get_json(silent=True) or {}
+        return jsonify(scan_gpu_capacity_availability(payload))
 
     if request.path == "/api/capacity-reservations/release":
         require_user()
@@ -1931,6 +1937,99 @@ def create_capacity_reservation_probe() -> dict[str, Any]:
             "state": "reserved",
         },
         "message": f"GPU capacity is reserved for up to {CAPACITY_RESERVATION_TTL_SECONDS // 60} minutes.",
+    }
+
+
+def gpu_hardware_profile(hardware_id: str) -> dict[str, Any]:
+    normalized_id = str(hardware_id or "").strip()
+    for profile in build_hardware_payload().get("profiles", []):
+        if str(profile.get("id", "")) == normalized_id:
+            if int(profile.get("gpuCount", 0) or 0) <= 0 or not str(profile.get("gpuType", "")).strip():
+                raise ApiError("GPU capacity scans require a selected GPU hardware profile.", 400)
+            return profile
+    raise ApiError("The selected GPU hardware profile is no longer available.", 400)
+
+
+def scan_capacity_reservation_name(profile: dict[str, Any], zone: str, token: str) -> str:
+    return bounded_gce_name(
+        f"{CONFIG['instance']}-capacity-scan-"
+        f"{hardware_name_slug(str(profile['id']), str(profile['gpuType']), int(profile['gpuCount']))}-"
+        f"{zone}-{token}"
+    )
+
+
+def scan_gpu_capacity_availability(payload: dict[str, Any]) -> dict[str, Any]:
+    profile = gpu_hardware_profile(str(payload.get("hardwareId", "")))
+    zones = [str(zone) for zone in profile.get("zones", []) if str(zone).strip()]
+    if not zones:
+        raise ApiError("No compatible zones are available for the selected GPU profile.", 400)
+
+    token = secrets.token_hex(4)
+    expires_at = datetime.now(timezone.utc) + timedelta(seconds=CAPACITY_RESERVATION_TTL_SECONDS)
+    instance_properties: dict[str, Any] = {"machineType": str(profile["machineType"])}
+    if str(profile.get("acceleratorMode", "attached")) == "attached":
+        instance_properties["guestAccelerators"] = [
+            {
+                "acceleratorType": str(profile["gpuType"]),
+                "acceleratorCount": int(profile["gpuCount"]),
+            }
+        ]
+
+    available_zones: list[str] = []
+    unavailable_zones: list[dict[str, str]] = []
+    cleanup_failures: list[dict[str, str]] = []
+    released_reservations: list[str] = []
+    for zone in zones:
+        reservation = {
+            "name": scan_capacity_reservation_name(profile, zone, token),
+            "zone": zone,
+        }
+        created = False
+        try:
+            operation = compute_request(
+                "POST",
+                capacity_reservations_collection_url(zone),
+                json={
+                    "name": reservation["name"],
+                    "description": (
+                        f"{CAPACITY_RESERVATION_DESCRIPTION_PREFIX}; availability scan; "
+                        f"expires at {format_datetime_utc(expires_at)}"
+                    ),
+                    "specificReservationRequired": False,
+                    "deleteAtTime": format_datetime_utc(expires_at),
+                    "specificReservation": {
+                        "count": "1",
+                        "instanceProperties": instance_properties,
+                    },
+                },
+            )
+            if not isinstance(operation, dict):
+                raise ApiError("Failed to create the GPU capacity scan reservation.", 502)
+            wait_for_zone_operation(operation, timeout_seconds=120, zone=zone)
+            created = True
+            available_zones.append(zone)
+        except ApiError as error:
+            unavailable_zones.append({"zone": zone, "error": error.message})
+        finally:
+            if created:
+                try:
+                    delete_capacity_reservation(reservation)
+                    released_reservations.append(reservation["name"])
+                except ApiError as error:
+                    logging.warning(
+                        "Failed to release GPU capacity scan reservation %s: %s",
+                        reservation["name"],
+                        error.message,
+                    )
+                    cleanup_failures.append({"zone": zone, "error": error.message})
+
+    return {
+        "hardwareId": str(profile["id"]),
+        "checkedZoneCount": len(zones),
+        "availableZones": available_zones,
+        "unavailableZones": unavailable_zones,
+        "releasedReservationCount": len(released_reservations),
+        "cleanupFailures": cleanup_failures,
     }
 
 
