@@ -162,9 +162,6 @@ process_request() {
 
 main() {
   while true; do
-    if [[ "$(metadata_get "$AGENT_KEY")" != "ready" ]]; then
-      set_metadata_value "$AGENT_KEY" "ready" || true
-    fi
     process_request || true
     sleep 2
   done

@@ -294,6 +294,13 @@ EOF
   systemctl restart vm-minecraft-management.service >/dev/null 2>&1 || true
 }
 
+mark_minecraft_management_agent_ready() {
+  [[ -x /usr/local/bin/vm-minecraft-management ]] || return 0
+  if systemctl is-active --quiet vm-minecraft-management.service; then
+    set_instance_metadata_value vm-minecraft-management-agent "ready"
+  fi
+}
+
 sync_env_metadata() {
   local token project zone name instance_json fingerprint items payload
   token="$(metadata_token || true)"
@@ -670,6 +677,7 @@ if ! gpu_enabled; then
   if ! /usr/local/bin/vm-power-action reconcile-minecraft; then
     log "Minecraft startup reconciliation failed."
   fi
+  mark_minecraft_management_agent_ready
   exit 0
 fi
 
@@ -744,6 +752,7 @@ fi
 if ! /usr/local/bin/vm-power-action reconcile-minecraft; then
   log "Minecraft startup reconciliation failed."
 fi
+mark_minecraft_management_agent_ready
 
 ss -lntup | egrep '(8083|47989|47990|48010)' || true
 log "noVNC: http://${EXT_IP:-$(hostname -I | awk '{print $1}')}:8083/"
