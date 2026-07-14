@@ -1643,7 +1643,7 @@ def apply_target_overrides(source: Any, respect_existing_endpoint_hardware: bool
         gpu_count = int(endpoint_hardware.get("gpuCount", 0) or 0)
         accelerator_mode = str(endpoint_hardware.get("acceleratorMode") or ("none" if gpu_count == 0 else accelerator_mode))
     endpoint_region = str(endpoint.get("region", "") or "")
-    if endpoint_region and zone_region(zone) != endpoint_region:
+    if respect_existing_endpoint_hardware and endpoint_region and zone_region(zone) != endpoint_region:
         raise ApiError(f"Endpoint {endpoint_id} is pinned to {endpoint_region}.", 400)
 
     g.target_zone = zone
