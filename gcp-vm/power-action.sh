@@ -34,6 +34,7 @@ RUNTIME_IMAGE_TARGET_REF_METADATA_KEY="vm-runtime-image-target-ref"
 RUNTIME_IMAGE_TARGET_TAG_METADATA_KEY="vm-runtime-image-target-tag"
 RUNTIME_IMAGE_STATUS_METADATA_KEY="vm-runtime-image-status"
 RUNTIME_IMAGE_DETAIL_METADATA_KEY="vm-runtime-image-detail"
+RUNTIME_IMAGE_AGENT_METADATA_KEY="vm-runtime-image-agent"
 MINECRAFT_IMAGE_METADATA_KEY="vm-minecraft-image"
 DEFAULT_STEAM_HEADLESS_IMAGE="josh5/steam-headless:debian-dev-frontend-revamp"
 DEFAULT_MINECRAFT_IMAGE="itzg/minecraft-server:latest"
@@ -1155,6 +1156,7 @@ PAYLOAD
 
 run_daemon() {
   log "Starting power action daemon"
+  set_instance_metadata_values "$(jq -n --arg key "$RUNTIME_IMAGE_AGENT_METADATA_KEY" '{($key): "ready"}')" || true
   while true; do
     local request action token
     request="$(metadata_get "$POWER_ACTION_METADATA_KEY")"

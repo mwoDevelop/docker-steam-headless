@@ -211,9 +211,11 @@
     const previousRef = String(details.previousRef || "");
     const currentTag = String(details.currentTag || "");
     const isRunning = String(endpoint.instanceState || "").toUpperCase() === "RUNNING";
+    const agentReady = Boolean(endpoint.runtimeImageAgentReady);
     const minecraftReady = componentId !== "minecraft" || String(endpoint.minecraft && endpoint.minecraft.state || "") === "running";
-    const canApply = isRunning && minecraftReady && candidates.some((candidate) => candidate.imageRef);
-    const canRollback = isRunning && minecraftReady && Boolean(previousRef);
+    const canPull = isRunning && agentReady && candidates.some((candidate) => candidate.imageRef);
+    const canApply = canPull && minecraftReady;
+    const canRollback = isRunning && agentReady && minecraftReady && Boolean(previousRef);
     const options = candidates.map((candidate) => {
       const ref = String(candidate.imageRef || "");
       const label = `${candidate.tag || "untagged"}${candidate.updatedAt ? ` · ${candidate.updatedAt.slice(0, 10)}` : ""}`;
@@ -231,7 +233,7 @@
         <label class="access-meta">Target
           <select data-runtime-image-select="${escapeHtml(componentId)}">${options || '<option value="">Refresh trusted versions first</option>'}</select>
         </label>
-        <button class="action start" type="button" data-runtime-action="pull" data-runtime-component="${escapeHtml(componentId)}" data-runtime-disabled="${isRunning ? "false" : "true"}">Pull Only</button>
+        <button class="action start" type="button" data-runtime-action="pull" data-runtime-component="${escapeHtml(componentId)}" data-runtime-disabled="${canPull ? "false" : "true"}">Pull Only</button>
         <button class="action create" type="button" data-runtime-action="apply" data-runtime-component="${escapeHtml(componentId)}" data-runtime-disabled="${canApply ? "false" : "true"}">Apply Update</button>
         <button class="action delete" type="button" data-runtime-action="rollback" data-runtime-component="${escapeHtml(componentId)}" data-runtime-disabled="${canRollback ? "false" : "true"}">Rollback</button>
       </div>
@@ -267,8 +269,12 @@
     const status = endpoint.runtimeImages && endpoint.runtimeImages.status
       ? `<div class="admin-user-row fixed"><span>${escapeHtml(`Last runtime operation: ${endpoint.runtimeImages.status}${endpoint.runtimeImages.detail ? ` · ${endpoint.runtimeImages.detail}` : ""}`)}</span></div>`
       : "";
+    const agent = endpoint.instanceState === "RUNNING" && !endpoint.runtimeImageAgentReady
+      ? '<div class="admin-user-row fixed"><span>Runtime image agent: restart the VM once before image operations.</span></div>'
+      : "";
     elements.runtimeImagesList.innerHTML = `
       <div class="admin-user-row fixed"><span>${escapeHtml(catalogInfo)}</span><span>VM: ${escapeHtml(endpoint.instanceState || "NOT_FOUND")}</span></div>
+      ${agent}
       ${runtimeComponentRow(endpoint, "steam-headless", components["steam-headless"] || { label: "Steam Headless + Sunshine", candidates: [] })}
       ${runtimeComponentRow(endpoint, "minecraft", components.minecraft || { label: "Minecraft container", candidates: [] })}
       ${status}

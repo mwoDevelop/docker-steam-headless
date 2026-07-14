@@ -144,6 +144,7 @@ RUNTIME_IMAGE_PREVIOUS_REF_METADATA_KEY = "vm-runtime-image-previous-ref"
 RUNTIME_IMAGE_PREVIOUS_TAG_METADATA_KEY = "vm-runtime-image-previous-tag"
 RUNTIME_IMAGE_STATUS_METADATA_KEY = "vm-runtime-image-status"
 RUNTIME_IMAGE_DETAIL_METADATA_KEY = "vm-runtime-image-detail"
+RUNTIME_IMAGE_AGENT_METADATA_KEY = "vm-runtime-image-agent"
 MINECRAFT_IMAGE_METADATA_KEY = "vm-minecraft-image"
 POWER_ACTION_METADATA_KEY = "vm-pending-power-action"
 POWER_ACTION_STATUS_METADATA_KEY = "vm-power-action-status"
@@ -892,6 +893,10 @@ def runtime_image_instance_payload(instance: dict[str, Any] | None) -> dict[str,
     }
 
 
+def runtime_image_agent_ready(instance: dict[str, Any] | None) -> bool:
+    return bool(instance and metadata_value(instance, RUNTIME_IMAGE_AGENT_METADATA_KEY).strip().lower() == "ready")
+
+
 def build_admin_runtime_images_payload(admin_user: dict[str, Any]) -> dict[str, Any]:
     endpoints: list[dict[str, Any]] = []
     for endpoint in read_endpoint_records():
@@ -903,6 +908,7 @@ def build_admin_runtime_images_payload(admin_user: dict[str, Any]) -> dict[str, 
                 "sunshine": build_sunshine_status(instance),
                 "minecraft": build_minecraft_status(instance),
                 "runtimeImages": runtime_image_instance_payload(instance),
+                "runtimeImageAgentReady": runtime_image_agent_ready(instance),
             }
         )
     return {"user": admin_user, "catalog": runtime_image_catalog(), "endpoints": endpoints}
@@ -922,6 +928,11 @@ def execute_admin_runtime_image_action(admin_user: dict[str, Any], payload: dict
         raise ApiError("Selected endpoint does not have a VM.", 400)
     if str(instance.get("status", "")).upper() != "RUNNING":
         raise ApiError("Runtime image operations require a running VM.", 400)
+    if not runtime_image_agent_ready(instance):
+        raise ApiError(
+            "Runtime image update agent is not active on this VM. Restart the VM once to activate it, then retry.",
+            409,
+        )
     require_no_active_power_action(instance, "runtime image update")
 
     component = runtime_image_component(payload.get("component"))
