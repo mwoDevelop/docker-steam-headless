@@ -1933,8 +1933,9 @@
     const target = state.lastStatus && state.lastStatus.target
       ? state.lastStatus.target
       : (config.target || {});
-    const domains = (config.duckdnsDomains || []).length
-      ? `<p><strong>DuckDNS:</strong> <code>${escapeHtml(config.duckdnsDomains.join(", "))}</code></p>`
+    const selectedEndpointDomain = String(target && target.endpoint && target.endpoint.domain || selectedEndpoint() && selectedEndpoint().domain || "").trim();
+    const domains = selectedEndpointDomain
+      ? `<p><strong>DuckDNS:</strong> <code>${escapeHtml(selectedEndpointDomain)}</code></p>`
       : "<p><strong>DuckDNS:</strong> not configured</p>";
     const persistence = state.lastStatus && state.lastStatus.persistence ? state.lastStatus.persistence : null;
     const autoStopMeta = state.lastStatus

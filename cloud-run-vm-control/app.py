@@ -3776,7 +3776,7 @@ def build_urls(external_ip: str) -> dict[str, Any]:
         urls["minecraft"] = f"{external_ip}:{CONFIG['minecraft_port']}"
 
     duckdns_entries = []
-    for domain in CONFIG["duckdns_domains"]:
+    for domain in endpoint_domains:
         duckdns_entries.append(
             {
                 "domain": domain,
