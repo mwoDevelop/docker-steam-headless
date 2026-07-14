@@ -1669,6 +1669,7 @@
   function renderStatusPayload(payload, targetKey) {
     state.lastStatus = payload;
     state.lastStatusTargetKey = targetKey || selectedTargetKey();
+    syncEndpointFromStatus(payload);
     migrateHistoryDuckDnsDomains(payload.duckdnsDomains);
     renderTargetSummary();
     renderBackupOptions(payload);
@@ -1679,6 +1680,24 @@
     renderAccess(payload);
     scrollToCurrentHashOnce();
     updateActionAvailability();
+  }
+
+  function syncEndpointFromStatus(payload) {
+    const endpoint = payload && payload.target && payload.target.endpoint;
+    if (!endpoint || !endpoint.id || !state.backendConfig) {
+      return;
+    }
+    const endpoints = Array.isArray(state.backendConfig.endpoints)
+      ? [...state.backendConfig.endpoints]
+      : [];
+    const index = endpoints.findIndex((item) => String(item && item.id || "") === String(endpoint.id));
+    if (index >= 0) {
+      endpoints[index] = { ...endpoints[index], ...endpoint };
+    } else {
+      endpoints.push(endpoint);
+    }
+    state.backendConfig = { ...state.backendConfig, endpoints };
+    renderEndpointOptions(state.backendConfig);
   }
 
   function scrollToHashTarget(hash, options) {
