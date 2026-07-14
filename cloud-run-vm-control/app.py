@@ -876,19 +876,19 @@ def runtime_image_instance_payload(instance: dict[str, Any] | None) -> dict[str,
     return {
         "steam-headless": {
             "currentRef": runtime_image_reference_from_instance(instance, "steam-headless"),
-            "previousRef": metadata_value(instance, runtime_image_state_metadata_key("steam-headless", "previous-ref")).strip(),
-            "currentTag": metadata_value(instance, runtime_image_state_metadata_key("steam-headless", "current-tag")).strip(),
-            "previousTag": metadata_value(instance, runtime_image_state_metadata_key("steam-headless", "previous-tag")).strip(),
+            "previousRef": metadata_value(instance, runtime_image_state_metadata_key("steam-headless", "previous-ref")).strip() if instance else "",
+            "currentTag": metadata_value(instance, runtime_image_state_metadata_key("steam-headless", "current-tag")).strip() if instance else "",
+            "previousTag": metadata_value(instance, runtime_image_state_metadata_key("steam-headless", "previous-tag")).strip() if instance else "",
         },
         "minecraft": {
             "currentRef": runtime_image_reference_from_instance(instance, "minecraft"),
-            "previousRef": metadata_value(instance, runtime_image_state_metadata_key("minecraft", "previous-ref")).strip(),
-            "currentTag": metadata_value(instance, runtime_image_state_metadata_key("minecraft", "current-tag")).strip(),
-            "previousTag": metadata_value(instance, runtime_image_state_metadata_key("minecraft", "previous-tag")).strip(),
+            "previousRef": metadata_value(instance, runtime_image_state_metadata_key("minecraft", "previous-ref")).strip() if instance else "",
+            "currentTag": metadata_value(instance, runtime_image_state_metadata_key("minecraft", "current-tag")).strip() if instance else "",
+            "previousTag": metadata_value(instance, runtime_image_state_metadata_key("minecraft", "previous-tag")).strip() if instance else "",
         },
-        "operation": metadata_value(instance, RUNTIME_IMAGE_OPERATION_METADATA_KEY).strip(),
-        "status": metadata_value(instance, RUNTIME_IMAGE_STATUS_METADATA_KEY).strip(),
-        "detail": metadata_value(instance, RUNTIME_IMAGE_DETAIL_METADATA_KEY).strip(),
+        "operation": metadata_value(instance, RUNTIME_IMAGE_OPERATION_METADATA_KEY).strip() if instance else "",
+        "status": metadata_value(instance, RUNTIME_IMAGE_STATUS_METADATA_KEY).strip() if instance else "",
+        "detail": metadata_value(instance, RUNTIME_IMAGE_DETAIL_METADATA_KEY).strip() if instance else "",
     }
 
 
