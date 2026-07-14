@@ -10,13 +10,21 @@
   };
   const minecraftManagementSessionRequest = "vm-control-minecraft-session-request";
   const minecraftManagementSessionResponse = "vm-control-minecraft-session-response";
+  const adminSessionRequest = "vm-control-admin-session-request";
+  const adminSessionResponse = "vm-control-admin-session-response";
 
   window.addEventListener("message", (event) => {
-    if (event.origin !== window.location.origin || event.data?.type !== minecraftManagementSessionRequest) return;
+    if (event.origin !== window.location.origin) return;
+    const responseType = event.data?.type === minecraftManagementSessionRequest
+      ? minecraftManagementSessionResponse
+      : event.data?.type === adminSessionRequest
+        ? adminSessionResponse
+        : "";
+    if (!responseType) return;
     const token = window.sessionStorage.getItem(storageKeys.sessionToken) || "";
     if (!token || !event.source) return;
     event.source.postMessage({
-      type: minecraftManagementSessionResponse,
+      type: responseType,
       token,
     }, event.origin);
   });

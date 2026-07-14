@@ -4,6 +4,8 @@
     config: "vm-control-cloudrun-config",
     sessionToken: "vm-control-google-session-token",
   };
+  const adminSessionRequest = "vm-control-admin-session-request";
+  const adminSessionResponse = "vm-control-admin-session-response";
 
   const elements = {
     backendUrl: document.querySelector("#backend-url"),
@@ -199,6 +201,22 @@
     }
   }
 
+  window.addEventListener("message", async (event) => {
+    if (event.origin !== window.location.origin || event.data?.type !== adminSessionResponse) return;
+    const token = String(event.data.token || "");
+    if (!token) return;
+    storeSessionToken(token);
+    if (!state.backendConfig) return;
+    try {
+      setBusy(true);
+      await loadUsers();
+    } catch (error) {
+      handleError(error);
+    } finally {
+      setBusy(false);
+    }
+  });
+
   function clearSession(options) {
     const revokeGoogleSession = Boolean(options && options.revokeGoogleSession);
     const token = state.token;
@@ -375,5 +393,8 @@
     connectBackend({ silent: true })
       .catch(handleError)
       .finally(() => setBusy(false));
+  }
+  if (!state.token && window.opener) {
+    window.opener.postMessage({ type: adminSessionRequest }, window.location.origin);
   }
 })();
