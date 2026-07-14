@@ -1259,6 +1259,7 @@
 
   async function refreshHardwareOptions(options) {
     const silent = Boolean(options && options.silent);
+    const applyEndpoint = Boolean(options && options.applyEndpoint);
     if (!state.user) {
       throw new Error("Sign in with Google first.");
     }
@@ -1267,7 +1268,11 @@
     }
     const data = await fetchApi("/api/hardware", { method: "GET" });
     renderHardwareOptions(data);
-    applySelectedEndpoint();
+    if (applyEndpoint) {
+      applySelectedEndpoint();
+    } else {
+      renderEndpointStatus();
+    }
     return data;
   }
 
@@ -2175,7 +2180,7 @@
     setPageLoading(firstMessage || "Loading authenticated controls...");
     await restoreSession();
     setPageLoading("Loading hardware and zone availability...");
-    await refreshHardwareOptions({ silent: true });
+    await refreshHardwareOptions({ silent: true, applyEndpoint: true });
     setPageLoading("Loading created VM instances...");
     await refreshInstances({ silent: true, autoSelect: true });
     setPageLoading("Loading price estimate...");
