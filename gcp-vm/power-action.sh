@@ -363,6 +363,19 @@ runtime_image_set_status() {
   set_instance_metadata_values "$updates" || true
 }
 
+mark_runtime_image_agent_ready() {
+  local updates
+  updates="$(jq -n --arg key "$RUNTIME_IMAGE_AGENT_METADATA_KEY" '{($key): "ready"}')"
+  for _ in $(seq 1 30); do
+    if set_instance_metadata_values "$updates"; then
+      return 0
+    fi
+    sleep 2
+  done
+  log "Runtime image agent readiness marker could not be written."
+  return 1
+}
+
 set_steam_image_ref() {
   local image_ref="$1"
   mkdir -p "$(dirname "$ENVF")"
@@ -1156,7 +1169,7 @@ PAYLOAD
 
 run_daemon() {
   log "Starting power action daemon"
-  set_instance_metadata_values "$(jq -n --arg key "$RUNTIME_IMAGE_AGENT_METADATA_KEY" '{($key): "ready"}')" || true
+  mark_runtime_image_agent_ready || true
   while true; do
     local request action token
     request="$(metadata_get "$POWER_ACTION_METADATA_KEY")"
