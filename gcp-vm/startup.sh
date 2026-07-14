@@ -285,7 +285,7 @@ RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
-  EOF
+EOF
   systemctl daemon-reload
   # The unit can be auto-started from a previous boot before this startup
   # script replaces the agent binary. Restart it explicitly so it always runs
