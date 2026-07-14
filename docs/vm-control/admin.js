@@ -6,6 +6,7 @@
   };
   const adminSessionRequest = "vm-control-admin-session-request";
   const adminSessionResponse = "vm-control-admin-session-response";
+  const ADMIN_REFRESH_INTERVAL_MS = 15_000;
 
   const elements = {
     backendUrl: document.querySelector("#backend-url"),
@@ -40,7 +41,10 @@
     usersPayload: null,
     endpointsPayload: null,
     runtimeImagesPayload: null,
+    refreshRevision: 0,
+    automaticRefreshInFlight: false,
   };
+  let automaticRefreshTimer = 0;
 
   function loadConfig() {
     const saved = JSON.parse(window.localStorage.getItem(storageKeys.config) || "{}");
@@ -58,6 +62,9 @@
   }
 
   function setBusy(nextBusy) {
+    if (nextBusy && !state.isBusy) {
+      state.refreshRevision += 1;
+    }
     state.isBusy = nextBusy;
     elements.connect.disabled = nextBusy;
     elements.googleSignIn.disabled = nextBusy || !state.backendConfig;
@@ -73,7 +80,7 @@
       input.disabled = nextBusy || input.dataset.administratorLocked === "true";
     });
     document.querySelectorAll("[data-endpoint-action], [data-endpoint-zone]").forEach((input) => {
-      input.disabled = nextBusy || !state.user;
+      input.disabled = nextBusy || !state.user || input.dataset.endpointDisabled === "true";
     });
     elements.refreshRuntimeImages.disabled = nextBusy || !state.user;
     elements.runtimeEndpoint.disabled = nextBusy || !state.user;
@@ -190,15 +197,16 @@
       const ip = String(endpoint.staticIp || "").trim();
       const zone = String(endpoint.zone || "").trim();
       const region = String(endpoint.region || "").trim();
+      const canReserve = !ip && !vm;
       const canRelease = Boolean(ip) && !vm;
       const canRemove = !ip && !vm && id !== "mwo-vm1";
       return `
         <div class="admin-user-row fixed" data-endpoint-row="${escapeHtml(id)}">
           <div><code>${escapeHtml(id)}</code><br><span>${escapeHtml(endpoint.domain || "")}</span><br><span>${escapeHtml(ip ? `IP ${ip}` : "IP not reserved")}${region ? ` · ${escapeHtml(region)}` : ""}${vm ? ` · VM ${escapeHtml(vm)}` : ""}</span></div>
-          <label class="access-meta">Zone <input data-endpoint-zone="${escapeHtml(id)}" type="text" value="${escapeHtml(zone || "europe-central2-c")}"></label>
-          <button class="action start" type="button" data-endpoint-action="reserve-ip" data-endpoint-id="${escapeHtml(id)}">Reserve IP</button>
-          <button class="action delete" type="button" data-endpoint-action="release-ip" data-endpoint-id="${escapeHtml(id)}" ${canRelease ? "" : "disabled"}>Release IP</button>
-          <button class="action delete" type="button" data-endpoint-action="remove" data-endpoint-id="${escapeHtml(id)}" ${canRemove ? "" : "disabled"}>Remove</button>
+          <label class="access-meta" title="Used only when reserving a new regional IP; it is not a DNS-to-VM assignment.">IP reservation zone <input data-endpoint-zone="${escapeHtml(id)}" data-endpoint-disabled="${canReserve ? "false" : "true"}" type="text" value="${escapeHtml(zone)}" placeholder="Choose zone" ${canReserve ? "" : "disabled"}></label>
+          <button class="action start" type="button" data-endpoint-action="reserve-ip" data-endpoint-id="${escapeHtml(id)}" data-endpoint-disabled="${canReserve ? "false" : "true"}" ${canReserve ? "" : "disabled"}>Reserve IP</button>
+          <button class="action delete" type="button" data-endpoint-action="release-ip" data-endpoint-id="${escapeHtml(id)}" data-endpoint-disabled="${canRelease ? "false" : "true"}" ${canRelease ? "" : "disabled"}>Release IP</button>
+          <button class="action delete" type="button" data-endpoint-action="remove" data-endpoint-id="${escapeHtml(id)}" data-endpoint-disabled="${canRemove ? "false" : "true"}" ${canRemove ? "" : "disabled"}>Remove</button>
         </div>
       `;
     }).join("");
@@ -364,6 +372,12 @@
   function clearSession(options) {
     const revokeGoogleSession = Boolean(options && options.revokeGoogleSession);
     const token = state.token;
+    state.refreshRevision += 1;
+    if (automaticRefreshTimer) {
+      window.clearInterval(automaticRefreshTimer);
+      automaticRefreshTimer = 0;
+    }
+    state.automaticRefreshInFlight = false;
     storeSessionToken("");
     state.user = null;
     state.usersPayload = null;
@@ -422,18 +436,62 @@
     return payload;
   }
 
-  async function loadUsers() {
+  async function loadUsers(options) {
+    const silent = Boolean(options && options.silent);
+    const refreshRevision = state.refreshRevision;
     const [payload, endpoints, runtimeImages] = await Promise.all([
       fetchApi("/api/admin/users", { method: "GET" }),
       fetchApi("/api/admin/endpoints", { method: "GET" }),
       fetchApi("/api/admin/runtime-images", { method: "GET" }),
     ]);
+    if (refreshRevision !== state.refreshRevision) {
+      return false;
+    }
     state.user = payload.user;
     state.usersPayload = payload;
     state.endpointsPayload = endpoints;
     state.runtimeImagesPayload = runtimeImages;
-    setMessage("Managed GUI users loaded.", "success");
+    if (!silent) {
+      setMessage("Managed GUI users loaded.", "success");
+    }
     updateUi();
+    startAutomaticRefresh();
+    return true;
+  }
+
+  async function refreshAdminDataInBackground() {
+    if (
+      state.automaticRefreshInFlight
+      || state.isBusy
+      || !state.user
+      || !state.token
+      || document.visibilityState !== "visible"
+    ) {
+      return;
+    }
+    state.automaticRefreshInFlight = true;
+    try {
+      await loadUsers({ silent: true });
+    } catch (error) {
+      if (!state.user) {
+        clearSession();
+      }
+      console.warn("Automatic admin refresh failed.", error);
+    } finally {
+      state.automaticRefreshInFlight = false;
+    }
+  }
+
+  function startAutomaticRefresh() {
+    if (automaticRefreshTimer) {
+      return;
+    }
+    automaticRefreshTimer = window.setInterval(refreshAdminDataInBackground, ADMIN_REFRESH_INTERVAL_MS);
+    window.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") {
+        refreshAdminDataInBackground();
+      }
+    });
   }
 
   async function updateUser(action, email, extra) {
