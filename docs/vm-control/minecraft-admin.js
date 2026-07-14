@@ -21,6 +21,7 @@
   const state = {
     backend: String(params.get("backend") || saved.backendUrl || "").replace(/\/+$/, ""),
     token: window.sessionStorage.getItem(storageKeys.sessionToken) || "",
+    endpointId: String(params.get("endpointId") || "mwo-vm1"),
     hardwareId: String(params.get("hardwareId") || ""),
     zone: String(params.get("zone") || ""),
     data: null,
@@ -38,6 +39,7 @@
 
   function targetQuery() {
     const target = new URLSearchParams();
+    if (state.endpointId) target.set("endpointId", state.endpointId);
     if (state.hardwareId) target.set("hardwareId", state.hardwareId);
     if (state.zone) target.set("zone", state.zone);
     return target.toString();
@@ -77,7 +79,9 @@
   function render(data) {
     state.data = data;
     elements.identity.textContent = `Management account: ${data.user && data.user.email || "unknown"}`;
-    elements.heading.textContent = `${data.target.instance} · ${data.target.zone}`;
+    const endpoint = data.target && data.target.endpoint ? data.target.endpoint : {};
+    const endpointLabel = endpoint.domain || state.endpointId;
+    elements.heading.textContent = `${endpointLabel} · ${data.target.instance} · ${data.target.zone}`;
     const minecraft = data.minecraftStatus || {};
     setStatus(`Minecraft: ${minecraft.label || "Unknown"}. VM: ${data.instanceState || "unknown"}.`, data.agentReady ? "success" : "warning");
     const result = data.lastResult || {};
@@ -110,7 +114,7 @@
   }
 
   async function runAction(action, playerInputId) {
-    const body = { action, hardwareId: state.hardwareId, zone: state.zone };
+    const body = { action, endpointId: state.endpointId, hardwareId: state.hardwareId, zone: state.zone };
     if (action === "console") body.command = String(elements.console.value || "").trim();
     if (playerInputId) body.player = String(document.querySelector(`#${playerInputId}`).value || "").trim();
     setBusy(true);
