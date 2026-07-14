@@ -150,6 +150,24 @@ gcloud projects add-iam-policy-binding "$GCP_PROJECT" \
   --role="roles/compute.instanceAdmin.v1" \
   --quiet >/dev/null
 
+ENDPOINT_ADDRESS_ROLE_ID="vmControlEndpointAddresses"
+ENDPOINT_ADDRESS_ROLE="projects/${GCP_PROJECT}/roles/${ENDPOINT_ADDRESS_ROLE_ID}"
+if ! gcloud iam roles describe "$ENDPOINT_ADDRESS_ROLE_ID" --project "$GCP_PROJECT" >/dev/null 2>&1; then
+  log "Creating minimal endpoint static IP role"
+  gcloud iam roles create "$ENDPOINT_ADDRESS_ROLE_ID" \
+    --project "$GCP_PROJECT" \
+    --title="VM Control Endpoint Addresses" \
+    --description="Manage static external addresses used by VM Control endpoints." \
+    --permissions="compute.addresses.create,compute.addresses.delete,compute.addresses.get,compute.addresses.list,compute.addresses.use" \
+    --stage="GA" >/dev/null
+fi
+
+log "Granting endpoint static IP role to runtime service account"
+gcloud projects add-iam-policy-binding "$GCP_PROJECT" \
+  --member="serviceAccount:${RUNTIME_SA_EMAIL}" \
+  --role="$ENDPOINT_ADDRESS_ROLE" \
+  --quiet >/dev/null
+
 CAPACITY_RESERVATION_ROLE_ID="vmControlCapacityReservations"
 CAPACITY_RESERVATION_ROLE="projects/${GCP_PROJECT}/roles/${CAPACITY_RESERVATION_ROLE_ID}"
 if ! gcloud iam roles describe "$CAPACITY_RESERVATION_ROLE_ID" --project "$GCP_PROJECT" >/dev/null 2>&1; then

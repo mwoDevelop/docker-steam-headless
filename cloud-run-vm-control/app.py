@@ -866,6 +866,11 @@ def explicit_instance_url(zone: str, instance: str) -> str:
 def legacy_instance_for_current_selection() -> dict[str, Any] | None:
     if not has_request_context():
         return None
+    # Legacy discovery exists only to migrate the original mwo-vm1 naming
+    # scheme. New endpoints must never adopt another endpoint's VM merely
+    # because hardware and zone happen to match.
+    if selected_endpoint_id() != "mwo-vm1":
+        return None
     if hasattr(g, "legacy_instance_checked"):
         return getattr(g, "legacy_instance_for_selection", None)
     g.legacy_instance_checked = True
