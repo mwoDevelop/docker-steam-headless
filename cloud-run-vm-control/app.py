@@ -975,7 +975,7 @@ def execute_admin_runtime_image_action(admin_user: dict[str, Any], payload: dict
         RUNTIME_IMAGE_STATUS_METADATA_KEY: "requested",
         RUNTIME_IMAGE_DETAIL_METADATA_KEY: status_detail,
     }
-    if component == "minecraft":
+    if component == "minecraft" and action in {"apply", "rollback"}:
         extra_metadata[MINECRAFT_STATUS_METADATA_KEY] = "starting"
         extra_metadata[MINECRAFT_STATUS_DETAIL_METADATA_KEY] = status_detail
 
@@ -984,7 +984,7 @@ def execute_admin_runtime_image_action(admin_user: dict[str, Any], payload: dict
         action=action_name,
         status_detail=status_detail,
         extra_metadata=extra_metadata,
-        sunshine_state="starting" if component == "steam-headless" else None,
+        sunshine_state="starting" if component == "steam-headless" and action in {"apply", "rollback"} else None,
     )
     target_phase = {"pull": "pulled", "apply": "updated", "rollback": "rolled-back"}[action]
     wait_for_power_action_phase(
