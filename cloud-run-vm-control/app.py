@@ -1738,32 +1738,32 @@ def options_passthrough():
             }
         )
 
-      if request.path == "/api/admin/users":
+    if request.path == "/api/admin/users":
         admin_user = require_admin_user()
         if request.method == "GET":
             return jsonify(build_admin_users_payload(admin_user))
         payload = request.get_json(silent=True) or {}
         action = str(payload.get("action", "")).strip().lower()
         email = validate_email(str(payload.get("email", "")))
-          profiles = read_access_user_profiles()
-          if action == "add":
-              profiles[email] = {
-                  "minecraftManagement": bool(payload.get("minecraftManagement", False)),
-              }
-          elif action == "remove":
-              if email in admin_google_emails():
-                  raise ApiError("Administrator accounts cannot be removed from this page.", 400)
-              profiles.pop(email, None)
-          elif action == "set-minecraft-management":
-              if email in admin_google_emails():
-                  raise ApiError("Administrator accounts always retain Minecraft management access.", 400)
-              profiles[email] = {
-                  "minecraftManagement": bool(payload.get("minecraftManagement", False)),
-              }
-          else:
-              raise ApiError("Unsupported admin action.", 400)
-          write_access_user_profiles(profiles)
-          return jsonify(build_admin_users_payload(admin_user))
+        profiles = read_access_user_profiles()
+        if action == "add":
+            profiles[email] = {
+                "minecraftManagement": bool(payload.get("minecraftManagement", False)),
+            }
+        elif action == "remove":
+            if email in admin_google_emails():
+                raise ApiError("Administrator accounts cannot be removed from this page.", 400)
+            profiles.pop(email, None)
+        elif action == "set-minecraft-management":
+            if email in admin_google_emails():
+                raise ApiError("Administrator accounts always retain Minecraft management access.", 400)
+            profiles[email] = {
+                "minecraftManagement": bool(payload.get("minecraftManagement", False)),
+            }
+        else:
+            raise ApiError("Unsupported admin action.", 400)
+        write_access_user_profiles(profiles)
+        return jsonify(build_admin_users_payload(admin_user))
 
     if request.path == "/api/hardware":
         require_user()
@@ -1800,20 +1800,20 @@ def options_passthrough():
             }
         )
 
-      if request.path == "/api/minecraft/versions":
+    if request.path == "/api/minecraft/versions":
         require_user()
         if request.method == "POST":
             return jsonify(refresh_minecraft_versions_from_papermc())
-          return jsonify(minecraft_version_payload())
+        return jsonify(minecraft_version_payload())
 
-      if request.path == "/api/minecraft/management":
-          user = require_minecraft_manager_user()
-          if request.method == "GET":
-              apply_target_overrides(request.args)
-              return jsonify(build_minecraft_management_payload(get_instance_or_none(), user))
-          payload = request.get_json(silent=True) or {}
-          apply_target_overrides(payload)
-          return jsonify(execute_minecraft_management_action(get_instance_or_none(), user, payload))
+    if request.path == "/api/minecraft/management":
+        user = require_minecraft_manager_user()
+        if request.method == "GET":
+            apply_target_overrides(request.args)
+            return jsonify(build_minecraft_management_payload(get_instance_or_none(), user))
+        payload = request.get_json(silent=True) or {}
+        apply_target_overrides(payload)
+        return jsonify(execute_minecraft_management_action(get_instance_or_none(), user, payload))
 
     if request.path == "/api/capacity-reservations":
         require_user()
