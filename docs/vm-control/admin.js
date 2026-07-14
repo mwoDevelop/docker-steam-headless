@@ -194,18 +194,26 @@
     elements.endpointsList.innerHTML = payload.endpoints.map((endpoint) => {
       const id = String(endpoint.id || "");
       const vm = String(endpoint.instanceName || "").trim();
-      const ip = String(endpoint.staticIp || "").trim();
+      const staticIp = String(endpoint.staticIp || "").trim();
+      const externalIp = String(endpoint.externalIp || "").trim();
+      const manualIpReservation = String(endpoint.ipReservationMode || "").trim() === "manual";
       const zone = String(endpoint.zone || "").trim();
       const region = String(endpoint.region || "").trim();
-      const canReserve = !ip && !vm;
-      const canRelease = Boolean(ip) && !vm;
-      const canRemove = !ip && !vm && id !== "mwo-vm1";
+      const ipDescription = staticIp
+        ? `${manualIpReservation ? "Manual reserved IP" : "Automatic IP pending release on stop"} ${staticIp}`
+        : externalIp
+          ? `Ephemeral IP ${externalIp} (releases on stop)`
+          : "Ephemeral IP assigned while VM runs";
+      const canReserve = !staticIp;
+      const canChooseReservationZone = canReserve && !vm;
+      const canRelease = Boolean(staticIp) && !vm;
+      const canRemove = !staticIp && !vm && id !== "mwo-vm1";
       return `
         <div class="admin-user-row fixed" data-endpoint-row="${escapeHtml(id)}">
-          <div><code>${escapeHtml(id)}</code><br><span>${escapeHtml(endpoint.domain || "")}</span><br><span>${escapeHtml(ip ? `IP ${ip}` : "IP not reserved")}${region ? ` · ${escapeHtml(region)}` : ""}${vm ? ` · VM ${escapeHtml(vm)}` : ""}</span></div>
-          <label class="access-meta" title="Used only when reserving a new regional IP; it is not a DNS-to-VM assignment.">IP reservation zone <input data-endpoint-zone="${escapeHtml(id)}" data-endpoint-disabled="${canReserve ? "false" : "true"}" type="text" value="${escapeHtml(zone)}" placeholder="Choose zone" ${canReserve ? "" : "disabled"}></label>
-          <button class="action start" type="button" data-endpoint-action="reserve-ip" data-endpoint-id="${escapeHtml(id)}" data-endpoint-disabled="${canReserve ? "false" : "true"}" ${canReserve ? "" : "disabled"}>Reserve IP</button>
-          <button class="action delete" type="button" data-endpoint-action="release-ip" data-endpoint-id="${escapeHtml(id)}" data-endpoint-disabled="${canRelease ? "false" : "true"}" ${canRelease ? "" : "disabled"}>Release IP</button>
+          <div><code>${escapeHtml(id)}</code><br><span>${escapeHtml(endpoint.domain || "")}</span><br><span>${escapeHtml(ipDescription)}${region ? ` · ${escapeHtml(region)}` : ""}${vm ? ` · VM ${escapeHtml(vm)}` : ""}</span></div>
+          <label class="access-meta" title="A manual reservation survives stop and delete. Otherwise an ephemeral IP is used only while the VM runs.">Persistent IP zone <input data-endpoint-zone="${escapeHtml(id)}" data-endpoint-disabled="${canChooseReservationZone ? "false" : "true"}" type="text" value="${escapeHtml(zone)}" placeholder="Choose zone" ${canChooseReservationZone ? "" : "disabled"}></label>
+          <button class="action start" type="button" data-endpoint-action="reserve-ip" data-endpoint-id="${escapeHtml(id)}" data-endpoint-disabled="${canReserve ? "false" : "true"}" ${canReserve ? "" : "disabled"}>Reserve Persistent IP</button>
+          <button class="action delete" type="button" data-endpoint-action="release-ip" data-endpoint-id="${escapeHtml(id)}" data-endpoint-disabled="${canRelease ? "false" : "true"}" ${canRelease ? "" : "disabled"}>Release Reserved IP</button>
           <button class="action delete" type="button" data-endpoint-action="remove" data-endpoint-id="${escapeHtml(id)}" data-endpoint-disabled="${canRemove ? "false" : "true"}" ${canRemove ? "" : "disabled"}>Remove</button>
         </div>
       `;

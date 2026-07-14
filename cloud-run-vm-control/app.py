@@ -1047,6 +1047,8 @@ def default_endpoint_records() -> list[dict[str, Any]]:
             "region": legacy_region,
             "addressName": "steam-mwo-vm1-ip",
             "staticIp": "",
+            "externalIp": "",
+            "ipReservationMode": "ephemeral",
             "hardware": {
                 "id": "cpu",
                 "machineType": DEFAULT_CPU_MACHINE_TYPE,
@@ -1055,8 +1057,8 @@ def default_endpoint_records() -> list[dict[str, Any]]:
                 "acceleratorMode": "none",
             },
         },
-        {"id": "mwo-vm2", "domain": "mwo-vm2.duckdns.org", "instanceName": "", "zone": "", "region": "", "addressName": "steam-mwo-vm2-ip", "staticIp": "", "hardware": {}},
-        {"id": "mwo-vm3", "domain": "mwo-vm3.duckdns.org", "instanceName": "", "zone": "", "region": "", "addressName": "steam-mwo-vm3-ip", "staticIp": "", "hardware": {}},
+        {"id": "mwo-vm2", "domain": "mwo-vm2.duckdns.org", "instanceName": "", "zone": "", "region": "", "addressName": "steam-mwo-vm2-ip", "staticIp": "", "externalIp": "", "ipReservationMode": "ephemeral", "hardware": {}},
+        {"id": "mwo-vm3", "domain": "mwo-vm3.duckdns.org", "instanceName": "", "zone": "", "region": "", "addressName": "steam-mwo-vm3-ip", "staticIp": "", "externalIp": "", "ipReservationMode": "ephemeral", "hardware": {}},
     ]
 
 
@@ -1084,6 +1086,8 @@ def normalize_endpoint_record(raw_value: Any) -> dict[str, Any] | None:
         "region": str(raw_value.get("region", "") or ""),
         "addressName": bounded_gce_name(str(raw_value.get("addressName", f"steam-{endpoint_id}-ip") or f"steam-{endpoint_id}-ip")),
         "staticIp": str(raw_value.get("staticIp", "") or ""),
+        "externalIp": str(raw_value.get("externalIp", "") or ""),
+        "ipReservationMode": "manual" if str(raw_value.get("ipReservationMode", "") or "").strip().lower() == "manual" else "ephemeral",
         "hardware": normalized_hardware if normalized_hardware["id"] else {},
     }
 
@@ -1166,6 +1170,8 @@ def endpoint_public_payload(endpoint: dict[str, Any]) -> dict[str, Any]:
         "region": endpoint.get("region", ""),
         "addressName": endpoint.get("addressName", ""),
         "staticIp": endpoint.get("staticIp", ""),
+        "externalIp": endpoint.get("externalIp", ""),
+        "ipReservationMode": endpoint.get("ipReservationMode", "ephemeral"),
         "hardware": endpoint.get("hardware", {}),
     }
 
@@ -1428,6 +1434,8 @@ def ensure_selected_endpoint_static_address() -> dict[str, Any]:
     endpoint["region"] = region
     endpoint["addressName"] = name
     endpoint["staticIp"] = str(address.get("address", ""))
+    endpoint["externalIp"] = ""
+    endpoint["ipReservationMode"] = "manual"
     return persist_endpoint(endpoint)
 
 
@@ -1438,8 +1446,10 @@ def bind_selected_endpoint_to_instance(instance: dict[str, Any]) -> dict[str, An
     endpoint["region"] = zone_region(endpoint["zone"])
     endpoint["hardware"] = instance_hardware_selection(instance)
     external_ip = extract_external_ip(instance)
-    if external_ip:
-        endpoint["staticIp"] = external_ip
+    if endpoint_has_manual_static_ip(endpoint):
+        endpoint["externalIp"] = ""
+    else:
+        endpoint["externalIp"] = external_ip
     return persist_endpoint(endpoint)
 
 
@@ -1448,11 +1458,23 @@ def unbind_selected_endpoint_instance() -> dict[str, Any]:
     endpoint["instanceName"] = ""
     endpoint["zone"] = ""
     endpoint["hardware"] = {}
+    endpoint["externalIp"] = ""
     return persist_endpoint(endpoint)
 
 
-def release_endpoint_static_address(endpoint: dict[str, Any]) -> dict[str, Any]:
-    if endpoint_instance_or_none(endpoint) is not None:
+def endpoint_has_manual_static_ip(endpoint: dict[str, Any]) -> bool:
+    return (
+        str(endpoint.get("ipReservationMode", "") or "").strip().lower() == "manual"
+        and bool(str(endpoint.get("staticIp", "") or "").strip())
+    )
+
+
+def release_endpoint_static_address(
+    endpoint: dict[str, Any],
+    *,
+    preserve_instance_binding: bool = False,
+) -> dict[str, Any]:
+    if not preserve_instance_binding and endpoint_instance_or_none(endpoint) is not None:
         raise ApiError("Delete the endpoint VM before releasing its static IP address.", 400)
     region = str(endpoint.get("region", "") or "")
     name = str(endpoint.get("addressName", "") or "")
@@ -1467,10 +1489,16 @@ def release_endpoint_static_address(endpoint: dict[str, Any]) -> dict[str, Any]:
         else:
             raise ApiError("Endpoint static IP address is still being released.", 504)
     endpoint["staticIp"] = ""
-    endpoint["region"] = ""
-    endpoint["zone"] = ""
-    endpoint["instanceName"] = ""
-    endpoint["hardware"] = {}
+    endpoint["externalIp"] = ""
+    endpoint["ipReservationMode"] = "ephemeral"
+    if preserve_instance_binding:
+        zone = str(endpoint.get("zone", "") or "")
+        endpoint["region"] = zone_region(zone) if zone else ""
+    else:
+        endpoint["region"] = ""
+        endpoint["zone"] = ""
+        endpoint["instanceName"] = ""
+        endpoint["hardware"] = {}
     return persist_endpoint(endpoint)
 
 
@@ -3336,6 +3364,63 @@ def extract_external_ip(instance: dict[str, Any]) -> str:
     return str(access_configs[0].get("natIP", "") or "")
 
 
+def remove_instance_external_access_config(instance: dict[str, Any]) -> dict[str, Any]:
+    network_interfaces = instance.get("networkInterfaces", []) or []
+    if not network_interfaces:
+        return instance
+    network_interface = network_interfaces[0] if isinstance(network_interfaces[0], dict) else {}
+    access_configs = network_interface.get("accessConfigs", []) or []
+    if not access_configs:
+        return instance
+    access_config = access_configs[0] if isinstance(access_configs[0], dict) else {}
+    operation = compute_request(
+        "POST",
+        f"{instance_self_url(instance)}/deleteAccessConfig",
+        params={
+            "networkInterface": str(network_interface.get("name", "nic0") or "nic0"),
+            "accessConfig": str(access_config.get("name", "External NAT") or "External NAT"),
+        },
+    )
+    if not isinstance(operation, dict):
+        raise ApiError("Failed to detach the automatic external IP address.", 502)
+    wait_for_zone_operation(operation, timeout_seconds=180, zone=instance_zone_name(instance))
+    return get_instance()
+
+
+def ensure_instance_external_access_config(instance: dict[str, Any]) -> dict[str, Any]:
+    network_interfaces = instance.get("networkInterfaces", []) or []
+    if not network_interfaces:
+        raise ApiError("VM is missing a network interface.", 502)
+    network_interface = network_interfaces[0] if isinstance(network_interfaces[0], dict) else {}
+    if network_interface.get("accessConfigs", []) or []:
+        return instance
+    access_config: dict[str, str] = {"name": "External NAT", "type": "ONE_TO_ONE_NAT"}
+    endpoint = selected_endpoint()
+    if endpoint_has_manual_static_ip(endpoint):
+        access_config["natIP"] = str(endpoint.get("staticIp", ""))
+    operation = compute_request(
+        "POST",
+        f"{instance_self_url(instance)}/addAccessConfig",
+        params={"networkInterface": str(network_interface.get("name", "nic0") or "nic0")},
+        json=access_config,
+    )
+    if not isinstance(operation, dict):
+        raise ApiError("Failed to add an external IP access configuration.", 502)
+    wait_for_zone_operation(operation, timeout_seconds=180, zone=instance_zone_name(instance))
+    return get_instance()
+
+
+def release_selected_endpoint_ephemeral_ip(instance: dict[str, Any]) -> dict[str, Any]:
+    endpoint = selected_endpoint()
+    static_ip = str(endpoint.get("staticIp", "") or "")
+    if static_ip and not endpoint_has_manual_static_ip(endpoint):
+        instance = remove_instance_external_access_config(instance)
+        release_endpoint_static_address(endpoint, preserve_instance_binding=True)
+        endpoint = selected_endpoint()
+    endpoint["externalIp"] = ""
+    return persist_endpoint(endpoint) and instance
+
+
 def instance_machine_type(instance: dict[str, Any]) -> str:
     return str(instance.get("machineType", "") or "").rsplit("/", 1)[-1]
 
@@ -4110,7 +4195,8 @@ def build_instance_create_request(
     subnet = subnet_path()
     if subnet:
         network_interface["subnetwork"] = subnet
-    static_ip = str(selected_endpoint().get("staticIp", "") or "")
+    endpoint = selected_endpoint()
+    static_ip = str(endpoint.get("staticIp", "") or "") if endpoint_has_manual_static_ip(endpoint) else ""
     if static_ip:
         network_interface["accessConfigs"][0]["natIP"] = static_ip
 
@@ -5245,20 +5331,25 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
     current_status = str(current_instance.get("status", STATUS_NOT_FOUND)) if current_instance else STATUS_NOT_FOUND
 
     if command == "status":
+        if current_instance is not None and current_status == "TERMINATED":
+            try:
+                current_instance = release_selected_endpoint_ephemeral_ip(current_instance)
+            except ApiError as error:
+                logging.warning("Automatic endpoint IP cleanup after stop failed: %s", error)
         return build_status_payload(current_instance, user=user, command=command)
 
     require_no_active_power_action(current_instance, command)
 
     if command == "create":
         auto_stop_hours = parse_auto_stop_hours(payload)
-        ensure_selected_endpoint_static_address()
-        # Endpoint-scoped external IPs allow parallel VM operation.
         if current_instance is not None:
             if current_status != "TERMINATED" or instance_hardware_matches_selection(current_instance):
                 raise ApiError("Instance already exists.", 400)
 
             current_instance, sunshine_credentials = ensure_sunshine_credentials(current_instance)
             current_instance = reconcile_stopped_instance_hardware(current_instance)
+            current_instance = release_selected_endpoint_ephemeral_ip(current_instance)
+            current_instance = ensure_instance_external_access_config(current_instance)
             set_instance_metadata_values(
                 current_instance,
                 start_metadata_updates(
@@ -5315,8 +5406,6 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
         if current_instance is None:
             raise ApiError("Instance does not exist. Use Create first.", 400)
         auto_stop_hours = parse_auto_stop_hours(payload)
-        ensure_selected_endpoint_static_address()
-        # Endpoint-scoped external IPs allow parallel VM operation.
         if auto_stop_hours is not None and current_status == "RUNNING":
             raise ApiError("Auto-stop can only be scheduled while starting a stopped VM.", 400)
         if current_status == "RUNNING" and not instance_hardware_matches_selection(current_instance):
@@ -5326,6 +5415,8 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
         if current_status != "RUNNING":
             current_instance, sunshine_credentials = ensure_sunshine_credentials(current_instance)
             current_instance = reconcile_stopped_instance_hardware(current_instance)
+            current_instance = release_selected_endpoint_ephemeral_ip(current_instance)
+            current_instance = ensure_instance_external_access_config(current_instance)
             set_instance_metadata_values(
                 current_instance,
                 start_metadata_updates(
@@ -5391,6 +5482,7 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
             final_instance = poll_instance_status("TERMINATED", timeout_seconds=900)
         else:
             final_instance = current_instance
+        final_instance = release_selected_endpoint_ephemeral_ip(final_instance)
         set_instance_metadata_values(
             final_instance,
             {
@@ -5483,7 +5575,11 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
             raise ApiError("Failed to delete instance.", 502)
         wait_for_zone_operation(operation, timeout_seconds=180)
         poll_instance_deleted(timeout_seconds=120)
-        unbind_selected_endpoint_instance()
+        endpoint = selected_endpoint()
+        if str(endpoint.get("staticIp", "") or "") and not endpoint_has_manual_static_ip(endpoint):
+            release_endpoint_static_address(endpoint)
+        else:
+            unbind_selected_endpoint_instance()
         return build_status_payload(None, user=user, command=command)
 
     if command == "create-backup":
