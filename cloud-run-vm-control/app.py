@@ -419,8 +419,17 @@ def validate_email(raw_email: str) -> str:
     return email
 
 
-def admin_google_emails() -> set[str]:
+def configured_admin_google_emails() -> set[str]:
     return {normalize_email(email) for email in CONFIG["admin_google_emails"] if normalize_email(email)}
+
+
+def admin_google_emails() -> set[str]:
+    managed_admins = {
+        email
+        for email, profile in read_access_user_profiles().items()
+        if bool(profile.get("administrator", False))
+    }
+    return configured_admin_google_emails() | managed_admins
 
 
 def secret_path(secret_name: str) -> str:
@@ -460,13 +469,18 @@ def read_access_user_profiles() -> dict[str, dict[str, bool]]:
         if isinstance(raw_user, str):
             email = normalize_email(raw_user)
             minecraft_management = False
+            administrator = False
         elif isinstance(raw_user, dict):
             email = normalize_email(str(raw_user.get("email", "")))
             minecraft_management = bool(raw_user.get("minecraftManagement", False))
+            administrator = bool(raw_user.get("administrator", False))
         else:
             continue
         if email:
-            profiles[email] = {"minecraftManagement": minecraft_management}
+            profiles[email] = {
+                "minecraftManagement": minecraft_management,
+                "administrator": administrator,
+            }
     return profiles
 
 
@@ -482,6 +496,7 @@ def write_access_user_profiles(profiles: dict[str, dict[str, bool]]) -> None:
         {
             "email": email,
             "minecraftManagement": bool(profile.get("minecraftManagement", False)),
+            "administrator": bool(profile.get("administrator", False)),
         }
         for email, profile in sorted(profiles.items())
     ]
@@ -1747,9 +1762,10 @@ def options_passthrough():
         email = validate_email(str(payload.get("email", "")))
         profiles = read_access_user_profiles()
         if action == "add":
-            profiles[email] = {
-                "minecraftManagement": bool(payload.get("minecraftManagement", False)),
-            }
+            profile = dict(profiles.get(email, {}))
+            profile["minecraftManagement"] = bool(payload.get("minecraftManagement", False))
+            profile["administrator"] = bool(profile.get("administrator", False))
+            profiles[email] = profile
         elif action == "remove":
             if email in admin_google_emails():
                 raise ApiError("Administrator accounts cannot be removed from this page.", 400)
@@ -1757,9 +1773,20 @@ def options_passthrough():
         elif action == "set-minecraft-management":
             if email in admin_google_emails():
                 raise ApiError("Administrator accounts always retain Minecraft management access.", 400)
-            profiles[email] = {
-                "minecraftManagement": bool(payload.get("minecraftManagement", False)),
-            }
+            profile = dict(profiles.get(email, {}))
+            profile["minecraftManagement"] = bool(payload.get("minecraftManagement", False))
+            profile["administrator"] = bool(profile.get("administrator", False))
+            profiles[email] = profile
+        elif action == "set-administrator":
+            administrator = bool(payload.get("administrator", False))
+            if email == normalize_email(str(admin_user.get("email", ""))) and not administrator:
+                raise ApiError("You cannot remove your own administrator access.", 400)
+            if email in configured_admin_google_emails() and not administrator:
+                raise ApiError("Administrator access configured by the service cannot be removed here.", 400)
+            profile = dict(profiles.get(email, {}))
+            profile["minecraftManagement"] = bool(profile.get("minecraftManagement", False))
+            profile["administrator"] = administrator
+            profiles[email] = profile
         else:
             raise ApiError("Unsupported admin action.", 400)
         write_access_user_profiles(profiles)
@@ -2076,6 +2103,8 @@ def build_admin_users_payload(admin_user: dict[str, Any]) -> dict[str, Any]:
     managed_profiles = read_access_user_profiles()
     managed_users = set(managed_profiles)
     admin_emails = admin_google_emails()
+    configured_admin_emails = configured_admin_google_emails()
+    current_admin_email = normalize_email(str(admin_user.get("email", "")))
     configured_users = configured_allowed_emails() - admin_emails
     accounts: dict[str, dict[str, Any]] = {}
     for email in admin_emails:
@@ -2084,6 +2113,8 @@ def build_admin_users_payload(admin_user: dict[str, Any]) -> dict[str, Any]:
             "source": "administrator",
             "minecraftManagement": True,
             "minecraftManagementLocked": True,
+            "administrator": True,
+            "administratorLocked": email in configured_admin_emails or email == current_admin_email,
             "removable": False,
         }
     for email in configured_users:
@@ -2093,6 +2124,8 @@ def build_admin_users_payload(admin_user: dict[str, Any]) -> dict[str, Any]:
             "source": "configured env",
             "minecraftManagement": bool(profile.get("minecraftManagement", False)),
             "minecraftManagementLocked": False,
+            "administrator": False,
+            "administratorLocked": False,
             "removable": False,
         }
     for email, profile in managed_profiles.items():
@@ -2103,6 +2136,8 @@ def build_admin_users_payload(admin_user: dict[str, Any]) -> dict[str, Any]:
             "source": "managed",
             "minecraftManagement": bool(profile.get("minecraftManagement", False)),
             "minecraftManagementLocked": False,
+            "administrator": False,
+            "administratorLocked": False,
             "removable": True,
         }
     return {
@@ -2113,6 +2148,10 @@ def build_admin_users_payload(admin_user: dict[str, Any]) -> dict[str, Any]:
         "managedUsers": sorted(managed_users),
         "managedUserPermissions": {
             email: bool(profile.get("minecraftManagement", False))
+            for email, profile in sorted(managed_profiles.items())
+        },
+        "managedUserAdministratorPermissions": {
+            email: bool(profile.get("administrator", False))
             for email, profile in sorted(managed_profiles.items())
         },
         "accounts": [accounts[email] for email in sorted(accounts)],

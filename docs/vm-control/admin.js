@@ -56,6 +56,9 @@
     document.querySelectorAll("[data-minecraft-management]").forEach((input) => {
       input.disabled = nextBusy || input.dataset.minecraftManagementLocked === "true";
     });
+    document.querySelectorAll("[data-administrator]").forEach((input) => {
+      input.disabled = nextBusy || input.dataset.administratorLocked === "true";
+    });
   }
 
   function setAuthStatus(message, tone) {
@@ -105,9 +108,9 @@
       <p><strong>Configured domains:</strong> <code>${escapeHtml((payload.configuredDomains || []).join(", ") || "none")}</code></p>
     `;
     const rows = payload.accounts || [
-      ...(payload.adminEmails || []).map((email) => ({ email, source: "administrator", minecraftManagement: true, minecraftManagementLocked: true, removable: false })),
-      ...(payload.configuredEmails || []).map((email) => ({ email, source: "configured env", minecraftManagement: false, minecraftManagementLocked: false, removable: false })),
-      ...(payload.managedUsers || []).map((email) => ({ email, source: "managed", minecraftManagement: Boolean((payload.managedUserPermissions || {})[email]), minecraftManagementLocked: false, removable: true })),
+      ...(payload.adminEmails || []).map((email) => ({ email, source: "administrator", minecraftManagement: true, minecraftManagementLocked: true, administrator: true, administratorLocked: true, removable: false })),
+      ...(payload.configuredEmails || []).map((email) => ({ email, source: "configured env", minecraftManagement: false, minecraftManagementLocked: false, administrator: false, administratorLocked: false, removable: false })),
+      ...(payload.managedUsers || []).map((email) => ({ email, source: "managed", minecraftManagement: Boolean((payload.managedUserPermissions || {})[email]), minecraftManagementLocked: false, administrator: Boolean((payload.managedUserAdministratorPermissions || {})[email]), administratorLocked: false, removable: true })),
     ];
     if (!rows.length) {
       elements.usersList.innerHTML = '<div class="admin-user-row fixed">No direct users configured.</div>';
@@ -127,10 +130,21 @@
             ${row.minecraftManagementLocked ? "disabled" : ""}
           > Minecraft management
         </label>`;
+      const administratorToggle = `
+        <label class="access-meta">
+          <input
+            type="checkbox"
+            data-administrator="${escapeHtml(row.email)}"
+            data-administrator-locked="${row.administratorLocked ? "true" : "false"}"
+            ${row.administrator ? "checked" : ""}
+            ${row.administratorLocked ? "disabled" : ""}
+          > Administrator
+        </label>`;
       return `
         <div class="admin-user-row ${row.removable ? "" : "fixed"}">
           <div><code>${escapeHtml(row.email)}</code><br><span>${escapeHtml(row.source)}</span></div>
           ${managementToggle}
+          ${administratorToggle}
           ${button}
         </div>
       `;
@@ -294,6 +308,8 @@
       ? `Added ${email}.`
       : action === "remove"
         ? `Removed ${email}.`
+        : action === "set-administrator"
+          ? `Updated administrator access for ${email}.`
         : `Updated Minecraft management access for ${email}.`;
     setMessage(message, "success");
     renderUsers();
@@ -371,6 +387,22 @@
   });
 
   elements.usersList.addEventListener("change", async (event) => {
+    const administratorInput = event.target.closest("[data-administrator]");
+    if (administratorInput) {
+      if (administratorInput.dataset.administratorLocked === "true") {
+        return;
+      }
+      const email = String(administratorInput.dataset.administrator || "");
+      try {
+        setBusy(true);
+        await updateUser("set-administrator", email, { administrator: administratorInput.checked });
+      } catch (error) {
+        handleError(error);
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
     const input = event.target.closest("[data-minecraft-management]");
     if (!input || input.dataset.minecraftManagementLocked === "true") {
       return;
