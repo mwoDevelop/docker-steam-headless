@@ -99,6 +99,24 @@ run_rcon() {
   docker exec "$container" rcon-cli "$command" 2>&1
 }
 
+RCON_READY_ERROR=""
+
+wait_for_rcon() {
+  local container="$1" output
+  RCON_READY_ERROR=""
+  for _ in $(seq 1 30); do
+    if output="$(run_rcon "$container" "list")"; then
+      return 0
+    fi
+    RCON_READY_ERROR="$output"
+    case "$output" in
+      *"connection refused"*|*"Connection refused"*|*"i/o timeout"*|*"EOF"*) sleep 2 ;;
+      *) return 1 ;;
+    esac
+  done
+  return 1
+}
+
 process_request() {
   local raw request_id action command player container result_id result_state output state
   raw="$(metadata_get "$REQUEST_KEY")"
@@ -116,6 +134,11 @@ process_request() {
   container="$(minecraft_container || true)"
   if [[ -z "$container" ]]; then
     publish_result "$request_id" "$action" "failed" "Minecraft container is not running."
+    return 0
+  fi
+
+  if [[ "$action" != "restart" ]] && ! wait_for_rcon "$container"; then
+    publish_result "$request_id" "$action" "failed" "Minecraft RCON is not ready: ${RCON_READY_ERROR}"
     return 0
   fi
 
