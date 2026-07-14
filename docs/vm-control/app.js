@@ -712,6 +712,30 @@
     renderHistory();
   }
 
+  function migrateHistoryDuckDnsDomains(domains) {
+    const activeDomains = Array.isArray(domains)
+      ? domains.map((domain) => String(domain || "").trim()).filter(Boolean)
+      : [];
+    if (!activeDomains.length || !state.history.length) return;
+
+    const activeDomainsKey = JSON.stringify(activeDomains);
+    let changed = false;
+    state.history = state.history.map((entry) => {
+      if (!entry || !Array.isArray(entry.duckdnsDomains) || !entry.duckdnsDomains.length) {
+        return entry;
+      }
+      if (JSON.stringify(entry.duckdnsDomains) === activeDomainsKey) {
+        return entry;
+      }
+      changed = true;
+      return { ...entry, duckdnsDomains: [...activeDomains] };
+    });
+    if (changed) {
+      saveHistory();
+      renderHistory();
+    }
+  }
+
   function renderHistory() {
     if (!state.history.length) {
       elements.history.className = "runs empty";
@@ -1555,6 +1579,7 @@
   function renderStatusPayload(payload, targetKey) {
     state.lastStatus = payload;
     state.lastStatusTargetKey = targetKey || selectedTargetKey();
+    migrateHistoryDuckDnsDomains(payload.duckdnsDomains);
     renderTargetSummary();
     renderBackupOptions(payload);
     renderApplicationOptions(payload);
