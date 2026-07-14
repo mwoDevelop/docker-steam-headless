@@ -17,8 +17,13 @@
     addUserForm: document.querySelector("#add-user-form"),
     userEmail: document.querySelector("#user-email"),
     addUser: document.querySelector("#add-user"),
+    addEndpointForm: document.querySelector("#add-endpoint-form"),
+    endpointId: document.querySelector("#endpoint-id"),
+    endpointDomain: document.querySelector("#endpoint-domain"),
+    addEndpoint: document.querySelector("#add-endpoint"),
     adminMessage: document.querySelector("#admin-message"),
     usersList: document.querySelector("#users-list"),
+    endpointsList: document.querySelector("#endpoints-list"),
   };
 
   const state = {
@@ -30,6 +35,7 @@
     user: null,
     isBusy: false,
     usersPayload: null,
+    endpointsPayload: null,
   };
 
   function loadConfig() {
@@ -53,11 +59,17 @@
     elements.googleSignIn.disabled = nextBusy || !state.backendConfig;
     elements.addUser.disabled = nextBusy || !state.user;
     elements.userEmail.disabled = nextBusy || !state.user;
+    elements.addEndpoint.disabled = nextBusy || !state.user;
+    elements.endpointId.disabled = nextBusy || !state.user;
+    elements.endpointDomain.disabled = nextBusy || !state.user;
     document.querySelectorAll("[data-minecraft-management]").forEach((input) => {
       input.disabled = nextBusy || input.dataset.minecraftManagementLocked === "true";
     });
     document.querySelectorAll("[data-administrator]").forEach((input) => {
       input.disabled = nextBusy || input.dataset.administratorLocked === "true";
+    });
+    document.querySelectorAll("[data-endpoint-action], [data-endpoint-zone]").forEach((input) => {
+      input.disabled = nextBusy || !state.user;
     });
   }
 
@@ -83,6 +95,7 @@
       elements.signOut.classList.add("hidden");
     }
     renderUsers();
+    renderEndpoints();
     setBusy(state.isBusy);
   }
 
@@ -146,6 +159,36 @@
           ${managementToggle}
           ${administratorToggle}
           ${button}
+        </div>
+      `;
+    }).join("");
+  }
+
+  function renderEndpoints() {
+    const payload = state.endpointsPayload;
+    if (!payload || !Array.isArray(payload.endpoints)) {
+      elements.endpointsList.innerHTML = "";
+      return;
+    }
+    if (!payload.endpoints.length) {
+      elements.endpointsList.innerHTML = '<div class="admin-user-row fixed">No endpoints configured.</div>';
+      return;
+    }
+    elements.endpointsList.innerHTML = payload.endpoints.map((endpoint) => {
+      const id = String(endpoint.id || "");
+      const vm = String(endpoint.instanceName || "").trim();
+      const ip = String(endpoint.staticIp || "").trim();
+      const zone = String(endpoint.zone || "").trim();
+      const region = String(endpoint.region || "").trim();
+      const canRelease = Boolean(ip) && !vm;
+      const canRemove = !ip && !vm && id !== "mwo-vm1";
+      return `
+        <div class="admin-user-row fixed" data-endpoint-row="${escapeHtml(id)}">
+          <div><code>${escapeHtml(id)}</code><br><span>${escapeHtml(endpoint.domain || "")}</span><br><span>${escapeHtml(ip ? `IP ${ip}` : "IP not reserved")}${region ? ` · ${escapeHtml(region)}` : ""}${vm ? ` · VM ${escapeHtml(vm)}` : ""}</span></div>
+          <label class="access-meta">Zone <input data-endpoint-zone="${escapeHtml(id)}" type="text" value="${escapeHtml(zone || "europe-central2-c")}"></label>
+          <button class="action start" type="button" data-endpoint-action="reserve-ip" data-endpoint-id="${escapeHtml(id)}">Reserve IP</button>
+          <button class="action delete" type="button" data-endpoint-action="release-ip" data-endpoint-id="${escapeHtml(id)}" ${canRelease ? "" : "disabled"}>Release IP</button>
+          <button class="action delete" type="button" data-endpoint-action="remove" data-endpoint-id="${escapeHtml(id)}" ${canRemove ? "" : "disabled"}>Remove</button>
         </div>
       `;
     }).join("");
@@ -237,6 +280,7 @@
     storeSessionToken("");
     state.user = null;
     state.usersPayload = null;
+    state.endpointsPayload = null;
     if (revokeGoogleSession && token && window.google && window.google.accounts && window.google.accounts.oauth2) {
       window.google.accounts.oauth2.revoke(token, () => {});
     }
@@ -291,9 +335,13 @@
   }
 
   async function loadUsers() {
-    const payload = await fetchApi("/api/admin/users", { method: "GET" });
+    const [payload, endpoints] = await Promise.all([
+      fetchApi("/api/admin/users", { method: "GET" }),
+      fetchApi("/api/admin/endpoints", { method: "GET" }),
+    ]);
     state.user = payload.user;
     state.usersPayload = payload;
+    state.endpointsPayload = endpoints;
     setMessage("Managed GUI users loaded.", "success");
     updateUi();
   }
@@ -313,6 +361,17 @@
         : `Updated Minecraft management access for ${email}.`;
     setMessage(message, "success");
     renderUsers();
+  }
+
+  async function updateEndpoint(action, endpointId, extra) {
+    const payload = await fetchApi("/api/admin/endpoints", {
+      method: "POST",
+      body: JSON.stringify({ action, endpointId, ...(extra || {}) }),
+    });
+    state.endpointsPayload = payload;
+    const actionLabel = action === "add" ? "Added" : action === "remove" ? "Removed" : action === "reserve-ip" ? "Reserved IP for" : "Released IP for";
+    setMessage(`${actionLabel} ${endpointId}.`, "success");
+    renderEndpoints();
   }
 
   function handleError(error) {
@@ -367,6 +426,26 @@
     }
   });
 
+  elements.addEndpointForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const endpointId = String(elements.endpointId.value || "").trim().toLowerCase();
+    const domain = String(elements.endpointDomain.value || "").trim().toLowerCase();
+    if (!endpointId || !domain) {
+      setMessage("Provide an endpoint ID and DuckDNS domain.", "warning");
+      return;
+    }
+    try {
+      setBusy(true);
+      await updateEndpoint("add", endpointId, { domain });
+      elements.endpointId.value = "";
+      elements.endpointDomain.value = "";
+    } catch (error) {
+      handleError(error);
+    } finally {
+      setBusy(false);
+    }
+  });
+
   elements.usersList.addEventListener("click", async (event) => {
     const button = event.target.closest("[data-remove-user]");
     if (!button) {
@@ -411,6 +490,33 @@
     try {
       setBusy(true);
       await updateUser("set-minecraft-management", email, { minecraftManagement: input.checked });
+    } catch (error) {
+      handleError(error);
+    } finally {
+      setBusy(false);
+    }
+  });
+
+  elements.endpointsList.addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-endpoint-action]");
+    if (!button || button.disabled) {
+      return;
+    }
+    const endpointId = String(button.dataset.endpointId || "");
+    const action = String(button.dataset.endpointAction || "");
+    const zoneInput = elements.endpointsList.querySelector(`[data-endpoint-zone="${CSS.escape(endpointId)}"]`);
+    const zone = String(zoneInput && zoneInput.value || "").trim();
+    const confirmation = action === "remove"
+      ? `Remove endpoint ${endpointId}? Its DuckDNS domain must be removed separately in DuckDNS.`
+      : action === "release-ip"
+        ? `Release the static IP for ${endpointId}?`
+        : `Reserve a regional external IP for ${endpointId} in ${zone}?`;
+    if (!window.confirm(confirmation)) {
+      return;
+    }
+    try {
+      setBusy(true);
+      await updateEndpoint(action, endpointId, action === "reserve-ip" ? { zone } : {});
     } catch (error) {
       handleError(error);
     } finally {

@@ -90,8 +90,31 @@
 
         <div id="users-list" class="admin-list"></div>
       </section>
+
+      <section class="panel">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Public endpoints</p>
+            <h2>DNS and static IP allocation</h2>
+          </div>
+        </div>
+
+        <form id="add-endpoint-form" class="form-grid" autocomplete="off">
+          <label>
+            <span>Endpoint ID</span>
+            <input id="endpoint-id" type="text" pattern="mwo-vm[0-9]+" placeholder="mwo-vm4">
+          </label>
+          <label>
+            <span>DuckDNS domain</span>
+            <input id="endpoint-domain" type="text" placeholder="mwo-vm4.duckdns.org">
+          </label>
+          <button id="add-endpoint" class="action create" type="submit">Add Endpoint</button>
+        </form>
+        <p>Reserve IP fixes an endpoint to the selected region. Release IP is allowed only after its VM has been deleted.</p>
+        <div id="endpoints-list" class="admin-list"></div>
+      </section>
     </main>
 
-    <script src="./admin.js?v=admin-users-20260702"></script>
+    <script src="./admin.js?v=multi-endpoints-20260714"></script>
   </body>
 </html>

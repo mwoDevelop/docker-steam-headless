@@ -154,6 +154,8 @@
     signOut: document.querySelector("#sign-out"),
     targetSummary: document.querySelector("#target-summary"),
     refreshStatus: document.querySelector("#refresh-status"),
+    endpointSelect: document.querySelector("#endpoint-select"),
+    endpointStatus: document.querySelector("#endpoint-status"),
     hardwareSelect: document.querySelector("#hardware-select"),
     zoneSelect: document.querySelector("#zone-select"),
     refreshHardware: document.querySelector("#refresh-hardware"),
@@ -267,6 +269,9 @@
     if (elements.hardwareSelect && saved.hardwareId) {
       elements.hardwareSelect.dataset.savedValue = String(saved.hardwareId);
     }
+    if (elements.endpointSelect && saved.endpointId) {
+      elements.endpointSelect.dataset.savedValue = String(saved.endpointId);
+    }
     if (elements.minecraftVersionSelect && saved.minecraftVersion) {
       elements.minecraftVersionSelect.dataset.savedValue = String(saved.minecraftVersion);
     }
@@ -288,6 +293,7 @@
       JSON.stringify({
         backendUrl: state.backendUrl,
         autoStopHours: String(elements.autoStopHours.value || "").trim(),
+        endpointId: selectedEndpointId(),
         hardwareId: String(elements.hardwareSelect && elements.hardwareSelect.value || "").trim(),
         zone: String(elements.zoneSelect && elements.zoneSelect.value || "").trim(),
         minecraftVersion: String(elements.minecraftVersionSelect && elements.minecraftVersionSelect.value || "").trim(),
@@ -394,6 +400,9 @@
     }
     if (elements.hardwareSelect) {
       elements.hardwareSelect.disabled = state.isBusy || !state.user || !state.hardwarePayload;
+    }
+    if (elements.endpointSelect) {
+      elements.endpointSelect.disabled = state.isBusy || !state.user || !state.backendConfig;
     }
     if (elements.zoneSelect) {
       elements.zoneSelect.disabled = state.isBusy || !state.user || !selectedHardwareProfile();
@@ -836,6 +845,85 @@
     return String(elements.zoneSelect && elements.zoneSelect.value || "").trim();
   }
 
+  function getEndpoints() {
+    const endpoints = state.backendConfig && Array.isArray(state.backendConfig.endpoints)
+      ? state.backendConfig.endpoints
+      : [];
+    return endpoints.filter((endpoint) => endpoint && endpoint.id && endpoint.domain);
+  }
+
+  function selectedEndpointId() {
+    return String(elements.endpointSelect && elements.endpointSelect.value || "mwo-vm1").trim() || "mwo-vm1";
+  }
+
+  function selectedEndpoint() {
+    return getEndpoints().find((endpoint) => String(endpoint.id) === selectedEndpointId()) || null;
+  }
+
+  function endpointForInstance(instance) {
+    const name = String(instance && instance.name || "").trim();
+    return getEndpoints().find((endpoint) => String(endpoint.instanceName || "").trim() === name) || null;
+  }
+
+  function renderEndpointStatus() {
+    if (!elements.endpointStatus) {
+      return;
+    }
+    const endpoint = selectedEndpoint();
+    if (!endpoint) {
+      elements.endpointStatus.textContent = "Sign in to load public VM endpoints.";
+      return;
+    }
+    const ip = String(endpoint.staticIp || "").trim();
+    const region = String(endpoint.region || "").trim();
+    const vm = String(endpoint.instanceName || "").trim();
+    const details = [ip ? `static IP ${ip}` : "IP will be reserved on first Create", region, vm ? `VM ${vm}` : "no VM created"]
+      .filter(Boolean)
+      .join(" · ");
+    elements.endpointStatus.textContent = `${endpoint.domain} · ${details}.`;
+  }
+
+  function renderEndpointOptions(config) {
+    if (!elements.endpointSelect) {
+      return;
+    }
+    const endpoints = config && Array.isArray(config.endpoints) ? config.endpoints : [];
+    const previous = elements.endpointSelect.value
+      || elements.endpointSelect.dataset.savedValue
+      || "mwo-vm1";
+    elements.endpointSelect.innerHTML = endpoints.length
+      ? endpoints.map((endpoint) => {
+        const id = String(endpoint.id || "");
+        const domain = String(endpoint.domain || "");
+        const assigned = endpoint.instanceName ? ` · ${endpoint.instanceName}` : "";
+        return `<option value="${escapeHtml(id)}">${escapeHtml(id)} · ${escapeHtml(domain)}${escapeHtml(assigned)}</option>`;
+      }).join("")
+      : '<option value="">No endpoints configured</option>';
+    if (endpoints.some((endpoint) => String(endpoint.id) === previous)) {
+      elements.endpointSelect.value = previous;
+    }
+    elements.endpointSelect.dataset.savedValue = "";
+    renderEndpointStatus();
+  }
+
+  function applySelectedEndpoint() {
+    const endpoint = selectedEndpoint();
+    if (!endpoint) {
+      return;
+    }
+    const endpointHardware = endpoint && typeof endpoint.hardware === "object" ? endpoint.hardware : {};
+    const profile = getHardwareProfiles().find((item) => String(item.id) === String(endpoint.hardwareId || endpointHardware.id || ""));
+    if (profile && elements.hardwareSelect) {
+      elements.hardwareSelect.value = String(profile.id || "");
+      const zone = String(endpoint.zone || "").trim();
+      if (zone && elements.zoneSelect) {
+        elements.zoneSelect.dataset.savedValue = zone;
+      }
+      renderZoneOptions();
+    }
+    renderEndpointStatus();
+  }
+
   function firstEuropeZone(zones) {
     return zones.find((zone) => String(zone || "").startsWith("europe-")) || "";
   }
@@ -961,9 +1049,10 @@
     const profile = selectedHardwareProfile();
     const zone = selectedZone();
     if (!profile || !zone) {
-      return {};
+      return { endpointId: selectedEndpointId() };
     }
     return {
+      endpointId: selectedEndpointId(),
       hardwareId: String(profile.id || ""),
       zone,
       machineType: String(profile.machineType || ""),
@@ -1178,6 +1267,7 @@
     }
     const data = await fetchApi("/api/hardware", { method: "GET" });
     renderHardwareOptions(data);
+    applySelectedEndpoint();
     return data;
   }
 
@@ -1393,7 +1483,10 @@
     }
     return getCreatedInstances().some((instance) => {
       const profile = profileForInstance(instance);
+      const endpoint = endpointForInstance(instance);
       return profile
+        && endpoint
+        && String(endpoint.id) === selectedEndpointId()
         && String(profile.id || "") === currentHardwareId
         && String(instance.zone || "").trim() === currentZone;
     });
@@ -1403,8 +1496,11 @@
     const currentZone = selectedZone();
     const currentHardwareId = String(elements.hardwareSelect && elements.hardwareSelect.value || "").trim();
     const profile = profileForInstance(instance);
+    const endpoint = endpointForInstance(instance);
     return Boolean(
       profile
+      && endpoint
+      && String(endpoint.id) === selectedEndpointId()
       && currentZone
       && currentHardwareId
       && String(profile.id || "") === currentHardwareId
@@ -1486,6 +1582,11 @@
     }
 
     resetGpuAvailabilityScan();
+    const endpoint = endpointForInstance(instance);
+    if (endpoint && elements.endpointSelect) {
+      elements.endpointSelect.value = String(endpoint.id || "");
+      renderEndpointStatus();
+    }
     elements.hardwareSelect.value = String(profile.id || "");
     if (elements.zoneSelect) {
       elements.zoneSelect.dataset.savedValue = zone;
@@ -1899,6 +2000,7 @@
 
     const config = await response.json();
     state.backendConfig = config;
+    renderEndpointOptions(config);
     renderTargetSummary();
     renderApplicationOptions(state.lastStatus);
     renderHardwareOptions({ profiles: [], defaultSelection: config.defaultHardware || null });
@@ -3204,6 +3306,30 @@
         }
         await refreshPriceEstimate({ silent: false });
         await refreshStatus({ silent: true });
+      } catch (error) {
+        handleError(error);
+      } finally {
+        setBusy(false);
+        markPageReady("Ready.", loadingToken);
+      }
+    });
+  }
+
+  if (elements.endpointSelect) {
+    elements.endpointSelect.addEventListener("change", async () => {
+      const loadingToken = setPageLoading("Loading selected public endpoint...");
+      resetGpuAvailabilityScan();
+      resetGpuCapacityProbeButton();
+      try {
+        setBusy(true);
+        applySelectedEndpoint();
+        saveConfig();
+        renderTargetSummary();
+        if (state.user) {
+          await refreshPriceEstimate({ silent: false });
+          await refreshStatus({ silent: true });
+          await refreshInstances({ silent: true });
+        }
       } catch (error) {
         handleError(error);
       } finally {

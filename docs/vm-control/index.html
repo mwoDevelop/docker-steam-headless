@@ -117,6 +117,14 @@
           </div>
 
           <label>
+            <span>Public endpoint</span>
+            <select id="endpoint-select" name="endpoint-select">
+              <option value="">Connect and sign in to load endpoints</option>
+            </select>
+          </label>
+          <p id="endpoint-status">Each endpoint has a separate DuckDNS name and regional external IP address.</p>
+
+          <label>
             <span>Hardware</span>
             <select id="hardware-select" name="hardware-select">
               <option value="">Connect and sign in to load hardware</option>
@@ -263,6 +271,6 @@
       </section>
     </main>
 
-    <script src="./app.js?v=dns-mwo-vm1-20260714"></script>
+    <script src="./app.js?v=multi-endpoints-20260714"></script>
   </body>
 </html>

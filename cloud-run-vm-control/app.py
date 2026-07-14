@@ -103,6 +103,7 @@ CONFIG = {
     "allowed_google_domains": {value.lower() for value in csv_env("ALLOWED_GOOGLE_DOMAINS")},
     "admin_google_emails": {value.lower() for value in (csv_env("ADMIN_GOOGLE_EMAILS") or ["mwodevelop@gmail.com"])},
     "access_users_secret_name": os.environ.get("ACCESS_USERS_SECRET_NAME", "steam-vm-control-allowed-users"),
+    "endpoints_secret_name": os.environ.get("ENDPOINTS_SECRET_NAME", "steam-vm-control-endpoints"),
     "minecraft_versions_secret_name": os.environ.get("MINECRAFT_VERSIONS_SECRET_NAME", ""),
     "vm_minecraft_management_script_b64": os.environ.get("VM_MINECRAFT_MANAGEMENT_SCRIPT_B64", ""),
     "session_token_secret": os.environ.get("VM_CONTROL_SESSION_SECRET", ""),
@@ -603,6 +604,163 @@ def all_direct_allowed_emails() -> set[str]:
     return configured_allowed_emails() | admin_google_emails() | managed_allowed_emails()
 
 
+def normalize_endpoint_id(raw_value: Any) -> str:
+    value = clean_resource_name_part(str(raw_value or ""))
+    if not value or len(value) > 40 or not value.startswith("mwo-vm"):
+        raise ApiError("Endpoint ID must use the mwo-vmN format.", 400)
+    suffix = value.removeprefix("mwo-vm")
+    if not suffix.isdigit() or int(suffix) < 1:
+        raise ApiError("Endpoint ID must use the mwo-vmN format.", 400)
+    return value
+
+
+def normalize_endpoint_domain(raw_value: Any) -> str:
+    domains = normalize_duckdns_domains([str(raw_value or "")])
+    if len(domains) != 1 or not domains[0].endswith(".duckdns.org"):
+        raise ApiError("Endpoint DNS must be a DuckDNS hostname.", 400)
+    return domains[0]
+
+
+def default_endpoint_records() -> list[dict[str, Any]]:
+    primary_domain = CONFIG["duckdns_domains"][0] if CONFIG["duckdns_domains"] else "mwo-vm1.duckdns.org"
+    legacy_zone = str(CONFIG["zone"] or "europe-central2-c")
+    legacy_region = legacy_zone.rsplit("-", 1)[0] if "-" in legacy_zone else legacy_zone
+    return [
+        {
+            "id": "mwo-vm1",
+            "domain": primary_domain,
+            "instanceName": "steam-cpu-europe-central2-c",
+            "zone": legacy_zone,
+            "region": legacy_region,
+            "addressName": "steam-mwo-vm1-ip",
+            "staticIp": "",
+            "hardware": {
+                "id": "cpu",
+                "machineType": DEFAULT_CPU_MACHINE_TYPE,
+                "gpuType": "",
+                "gpuCount": 0,
+                "acceleratorMode": "none",
+            },
+        },
+        {"id": "mwo-vm2", "domain": "mwo-vm2.duckdns.org", "instanceName": "", "zone": "", "region": "", "addressName": "steam-mwo-vm2-ip", "staticIp": "", "hardware": {}},
+        {"id": "mwo-vm3", "domain": "mwo-vm3.duckdns.org", "instanceName": "", "zone": "", "region": "", "addressName": "steam-mwo-vm3-ip", "staticIp": "", "hardware": {}},
+    ]
+
+
+def normalize_endpoint_record(raw_value: Any) -> dict[str, Any] | None:
+    if not isinstance(raw_value, dict):
+        return None
+    try:
+        endpoint_id = normalize_endpoint_id(raw_value.get("id"))
+        domain = normalize_endpoint_domain(raw_value.get("domain"))
+    except ApiError:
+        return None
+    hardware = raw_value.get("hardware") if isinstance(raw_value.get("hardware"), dict) else {}
+    normalized_hardware = {
+        "id": str(hardware.get("id", "") or ""),
+        "machineType": str(hardware.get("machineType", "") or ""),
+        "gpuType": str(hardware.get("gpuType", "") or ""),
+        "gpuCount": int(hardware.get("gpuCount", 0) or 0),
+        "acceleratorMode": str(hardware.get("acceleratorMode", "") or ""),
+    }
+    return {
+        "id": endpoint_id,
+        "domain": domain,
+        "instanceName": bounded_gce_name(str(raw_value.get("instanceName", "") or "")) if raw_value.get("instanceName") else "",
+        "zone": str(raw_value.get("zone", "") or ""),
+        "region": str(raw_value.get("region", "") or ""),
+        "addressName": bounded_gce_name(str(raw_value.get("addressName", f"steam-{endpoint_id}-ip") or f"steam-{endpoint_id}-ip")),
+        "staticIp": str(raw_value.get("staticIp", "") or ""),
+        "hardware": normalized_hardware if normalized_hardware["id"] else {},
+    }
+
+
+def read_endpoint_records() -> list[dict[str, Any]]:
+    secret_name = str(CONFIG["endpoints_secret_name"] or "").strip()
+    if not secret_name:
+        return default_endpoint_records()
+    response = compute_session().get(
+        f"{SECRET_MANAGER_BASE_URL}/{secret_path(secret_name)}/versions/latest:access",
+        timeout=30,
+    )
+    if response.status_code == 404:
+        return default_endpoint_records()
+    if not response.ok:
+        raise ApiError("Unable to load VM endpoint registry.", 502)
+    try:
+        encoded = str(response.json().get("payload", {}).get("data", "") or "")
+        parsed = json.loads(base64.b64decode(encoded).decode("utf-8"))
+        raw_records = parsed.get("endpoints", []) if isinstance(parsed, dict) else []
+    except (ValueError, TypeError, json.JSONDecodeError):
+        raw_records = []
+    records = [record for record in (normalize_endpoint_record(item) for item in raw_records) if record]
+    return records or default_endpoint_records()
+
+
+def write_endpoint_records(records: list[dict[str, Any]]) -> None:
+    secret_name = str(CONFIG["endpoints_secret_name"] or "").strip()
+    if not secret_name:
+        raise ApiError("VM endpoint registry is not configured.", 500)
+    normalized = [record for record in (normalize_endpoint_record(item) for item in records) if record]
+    seen: set[str] = set()
+    for endpoint in normalized:
+        if endpoint["id"] in seen:
+            raise ApiError("Endpoint IDs must be unique.", 400)
+        if any(existing["domain"] == endpoint["domain"] for existing in normalized if existing is not endpoint):
+            raise ApiError("Endpoint DNS names must be unique.", 400)
+        seen.add(endpoint["id"])
+    encoded = base64.b64encode(json.dumps({"endpoints": normalized}, separators=(",", ":"), sort_keys=True).encode("utf-8")).decode("ascii")
+    response = compute_session().post(
+        f"{SECRET_MANAGER_BASE_URL}/{secret_path(secret_name)}:addVersion",
+        json={"payload": {"data": encoded}},
+        timeout=30,
+    )
+    if not response.ok:
+        raise ApiError("Unable to save VM endpoint registry.", 502)
+
+
+def endpoint_by_id(endpoint_id: str) -> dict[str, Any]:
+    for endpoint in read_endpoint_records():
+        if endpoint["id"] == endpoint_id:
+            return endpoint
+    raise ApiError(f"Unknown VM endpoint: {endpoint_id}.", 404)
+
+
+def selected_endpoint_id() -> str:
+    return str(request_override("target_endpoint_id", "mwo-vm1"))
+
+
+def selected_endpoint() -> dict[str, Any]:
+    if has_request_context() and hasattr(g, "target_endpoint"):
+        return dict(getattr(g, "target_endpoint"))
+    endpoint = endpoint_by_id(selected_endpoint_id())
+    if has_request_context():
+        g.target_endpoint = endpoint
+    return endpoint
+
+
+def selected_endpoint_domains() -> list[str]:
+    domain = str(selected_endpoint().get("domain", "") or "")
+    return [domain] if domain else []
+
+
+def endpoint_public_payload(endpoint: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": endpoint["id"],
+        "domain": endpoint["domain"],
+        "instanceName": endpoint.get("instanceName", ""),
+        "zone": endpoint.get("zone", ""),
+        "region": endpoint.get("region", ""),
+        "addressName": endpoint.get("addressName", ""),
+        "staticIp": endpoint.get("staticIp", ""),
+        "hardware": endpoint.get("hardware", {}),
+    }
+
+
+def build_admin_endpoints_payload(admin_user: dict[str, Any]) -> dict[str, Any]:
+    return {"user": admin_user, "endpoints": [endpoint_public_payload(endpoint) for endpoint in read_endpoint_records()]}
+
+
 def request_override(name: str, fallback: Any) -> Any:
     if not has_request_context():
         return fallback
@@ -665,6 +823,13 @@ def managed_instance_base_names() -> list[str]:
         normalized = bounded_gce_name(legacy_name)
         if normalized not in names:
             names.append(normalized)
+    for endpoint in read_endpoint_records():
+        instance_name = str(endpoint.get("instanceName", "") or "")
+        if instance_name and instance_name not in names:
+            names.append(instance_name)
+        endpoint_base = bounded_gce_name(f"steam-{endpoint['id']}")
+        if endpoint_base not in names:
+            names.append(endpoint_base)
     return names
 
 
@@ -782,6 +947,115 @@ def zone_region(zone: str) -> str:
     return zone
 
 
+def addresses_collection_url(region: str) -> str:
+    return f"https://compute.googleapis.com/compute/v1/projects/{require_env('project')}/regions/{region}/addresses"
+
+
+def address_url(region: str, name: str) -> str:
+    return f"{addresses_collection_url(region)}/{name}"
+
+
+def endpoint_instance_or_none(endpoint: dict[str, Any]) -> dict[str, Any] | None:
+    name = str(endpoint.get("instanceName", "") or "")
+    zone = str(endpoint.get("zone", "") or "")
+    if not name or not zone:
+        return None
+    return compute_request("GET", explicit_instance_url(zone, name), allow_404=True)
+
+
+def persist_endpoint(endpoint: dict[str, Any]) -> dict[str, Any]:
+    records = read_endpoint_records()
+    updated = False
+    for index, record in enumerate(records):
+        if record["id"] == endpoint["id"]:
+            records[index] = endpoint
+            updated = True
+            break
+    if not updated:
+        records.append(endpoint)
+    write_endpoint_records(records)
+    if has_request_context():
+        g.target_endpoint = endpoint
+    return endpoint
+
+
+def ensure_selected_endpoint_static_address() -> dict[str, Any]:
+    endpoint = selected_endpoint()
+    region = str(endpoint.get("region", "") or zone_region(selected_zone()))
+    if region != zone_region(selected_zone()):
+        raise ApiError(f"Endpoint {endpoint['id']} is pinned to {region}.", 400)
+    name = bounded_gce_name(str(endpoint.get("addressName", "") or f"steam-{endpoint['id']}-ip"))
+    address = compute_request("GET", address_url(region, name), allow_404=True)
+    if address is None:
+        body: dict[str, Any] = {
+            "name": name,
+            "addressType": "EXTERNAL",
+            "networkTier": "PREMIUM",
+            "description": f"VM Control endpoint {endpoint['id']} ({endpoint['domain']})",
+        }
+        existing_instance = endpoint_instance_or_none(endpoint)
+        existing_ip = extract_external_ip(existing_instance) if existing_instance else ""
+        if existing_ip:
+            body["address"] = existing_ip
+        operation = compute_request("POST", addresses_collection_url(region), json=body)
+        if not isinstance(operation, dict):
+            raise ApiError("Failed to reserve endpoint static IP address.", 502)
+        for _ in range(45):
+            address = compute_request("GET", address_url(region, name), allow_404=True)
+            if isinstance(address, dict) and str(address.get("address", "") or ""):
+                break
+            time.sleep(2)
+    if not isinstance(address, dict) or not str(address.get("address", "") or ""):
+        raise ApiError("Endpoint static IP address is not ready.", 504)
+    endpoint["region"] = region
+    endpoint["addressName"] = name
+    endpoint["staticIp"] = str(address.get("address", ""))
+    return persist_endpoint(endpoint)
+
+
+def bind_selected_endpoint_to_instance(instance: dict[str, Any]) -> dict[str, Any]:
+    endpoint = selected_endpoint()
+    endpoint["instanceName"] = str(instance.get("name", "") or selected_instance_name())
+    endpoint["zone"] = instance_zone_name(instance) or selected_zone()
+    endpoint["region"] = zone_region(endpoint["zone"])
+    endpoint["hardware"] = instance_hardware_selection(instance)
+    external_ip = extract_external_ip(instance)
+    if external_ip:
+        endpoint["staticIp"] = external_ip
+    return persist_endpoint(endpoint)
+
+
+def unbind_selected_endpoint_instance() -> dict[str, Any]:
+    endpoint = selected_endpoint()
+    endpoint["instanceName"] = ""
+    endpoint["zone"] = ""
+    endpoint["hardware"] = {}
+    return persist_endpoint(endpoint)
+
+
+def release_endpoint_static_address(endpoint: dict[str, Any]) -> dict[str, Any]:
+    if endpoint_instance_or_none(endpoint) is not None:
+        raise ApiError("Delete the endpoint VM before releasing its static IP address.", 400)
+    region = str(endpoint.get("region", "") or "")
+    name = str(endpoint.get("addressName", "") or "")
+    if region and name:
+        operation = compute_request("DELETE", address_url(region, name), allow_404=True)
+        if operation is not None and not isinstance(operation, dict):
+            raise ApiError("Failed to release endpoint static IP address.", 502)
+        for _ in range(45):
+            if compute_request("GET", address_url(region, name), allow_404=True) is None:
+                break
+            time.sleep(2)
+        else:
+            raise ApiError("Endpoint static IP address is still being released.", 504)
+    endpoint["staticIp"] = ""
+    endpoint["region"] = ""
+    endpoint["zone"] = ""
+    endpoint["instanceName"] = ""
+    endpoint["hardware"] = {}
+    return persist_endpoint(endpoint)
+
+
 def machine_type_path() -> str:
     return f"zones/{selected_zone()}/machineTypes/{selected_machine_type()}"
 
@@ -873,6 +1147,8 @@ def clean_target_text(raw: Any, default: str) -> str:
 
 def apply_target_overrides(source: Any) -> None:
     default = default_hardware_selection()
+    endpoint_id = normalize_endpoint_id(source.get("endpointId") if hasattr(source, "get") and source.get("endpointId") else "mwo-vm1")
+    endpoint = endpoint_by_id(endpoint_id)
     zone = clean_target_text(source.get("zone") if hasattr(source, "get") else None, default["zone"])
     machine_type = clean_target_text(
         source.get("machineType") if hasattr(source, "get") else None,
@@ -910,12 +1186,35 @@ def apply_target_overrides(source: Any) -> None:
         accelerator_mode = "none"
         hardware_id = CPU_HARDWARE_ID
 
+    endpoint_hardware = endpoint.get("hardware") if isinstance(endpoint.get("hardware"), dict) else {}
+    endpoint_has_instance = bool(endpoint.get("instanceName") and endpoint.get("zone"))
+    if endpoint_has_instance:
+        zone = str(endpoint["zone"])
+    if endpoint_has_instance and endpoint_hardware:
+        hardware_id = str(endpoint_hardware.get("id") or hardware_id)
+        machine_type = str(endpoint_hardware.get("machineType") or machine_type)
+        gpu_type = str(endpoint_hardware.get("gpuType") or "")
+        gpu_count = int(endpoint_hardware.get("gpuCount", 0) or 0)
+        accelerator_mode = str(endpoint_hardware.get("acceleratorMode") or ("none" if gpu_count == 0 else accelerator_mode))
+    endpoint_region = str(endpoint.get("region", "") or "")
+    if endpoint_region and zone_region(zone) != endpoint_region:
+        raise ApiError(f"Endpoint {endpoint_id} is pinned to {endpoint_region}.", 400)
+
     g.target_zone = zone
     g.target_machine_type = machine_type
     g.target_gpu_type = gpu_type
     g.target_gpu_count = gpu_count
     g.target_accelerator_mode = accelerator_mode
     g.target_hardware_id = hardware_id
+    g.target_endpoint_id = endpoint_id
+    g.target_endpoint = endpoint
+    g.target_instance_name = str(endpoint.get("instanceName", "") or "") or target_instance_name_for(
+        hardware_id=hardware_id,
+        gpu_type=gpu_type,
+        gpu_count=gpu_count,
+        zone=zone,
+        base_name=f"steam-{endpoint_id}",
+    )
 
 
 def compute_collection(url: str) -> list[dict[str, Any]]:
@@ -1708,6 +2007,7 @@ def handle_unexpected_error(error: Exception):
 @app.route("/healthz", methods=["GET", "OPTIONS"])
 @app.route("/api/config", methods=["GET", "OPTIONS"])
 @app.route("/api/admin/users", methods=["GET", "POST", "OPTIONS"])
+@app.route("/api/admin/endpoints", methods=["GET", "POST", "OPTIONS"])
 @app.route("/api/hardware", methods=["GET", "OPTIONS"])
 @app.route("/api/instances", methods=["GET", "OPTIONS"])
 @app.route("/api/price", methods=["GET", "OPTIONS"])
@@ -1743,7 +2043,8 @@ def options_passthrough():
                     "instance": selected_computed_instance_name(),
                     "baseInstance": bounded_gce_name(CONFIG["instance"]),
                 },
-                "duckdnsDomains": CONFIG["duckdns_domains"],
+                "duckdnsDomains": [endpoint["domain"] for endpoint in read_endpoint_records()],
+                "endpoints": [endpoint_public_payload(endpoint) for endpoint in read_endpoint_records()],
                 "ports": {
                     "novnc": CONFIG["novnc_port"],
                     "sunshine": CONFIG["sunshine_port"],
@@ -1791,6 +2092,51 @@ def options_passthrough():
             raise ApiError("Unsupported admin action.", 400)
         write_access_user_profiles(profiles)
         return jsonify(build_admin_users_payload(admin_user))
+
+    if request.path == "/api/admin/endpoints":
+        admin_user = require_admin_user()
+        if request.method == "GET":
+            return jsonify(build_admin_endpoints_payload(admin_user))
+        payload = request.get_json(silent=True) or {}
+        action = str(payload.get("action", "")).strip().lower()
+        endpoint_id = normalize_endpoint_id(payload.get("endpointId"))
+        records = read_endpoint_records()
+        endpoint = next((record for record in records if record["id"] == endpoint_id), None)
+        if action == "add":
+            if endpoint is not None:
+                raise ApiError("Endpoint already exists.", 400)
+            domain = normalize_endpoint_domain(payload.get("domain"))
+            if any(record["domain"] == domain for record in records):
+                raise ApiError("Endpoint DNS already exists.", 400)
+            endpoint = normalize_endpoint_record({
+                "id": endpoint_id,
+                "domain": domain,
+                "addressName": f"steam-{endpoint_id}-ip",
+            })
+            if endpoint is None:
+                raise ApiError("Endpoint is invalid.", 400)
+            records.append(endpoint)
+            write_endpoint_records(records)
+        elif endpoint is None:
+            raise ApiError("Endpoint does not exist.", 404)
+        elif action == "remove":
+            if endpoint_instance_or_none(endpoint) is not None:
+                raise ApiError("Delete the endpoint VM before removing the endpoint.", 400)
+            if endpoint.get("staticIp"):
+                raise ApiError("Release the endpoint static IP before removing the endpoint.", 400)
+            write_endpoint_records([record for record in records if record["id"] != endpoint_id])
+        elif action == "reserve-ip":
+            zone = clean_target_text(payload.get("zone"), str(endpoint.get("zone", "") or ""))
+            if not zone:
+                raise ApiError("Zone is required to reserve an endpoint IP address.", 400)
+            apply_target_overrides({"endpointId": endpoint_id, "zone": zone})
+            endpoint = ensure_selected_endpoint_static_address()
+            update_duckdns(str(endpoint.get("staticIp", "") or ""))
+        elif action == "release-ip":
+            release_endpoint_static_address(endpoint)
+        else:
+            raise ApiError("Unsupported endpoint action.", 400)
+        return jsonify(build_admin_endpoints_payload(admin_user))
 
     if request.path == "/api/hardware":
         require_user()
@@ -3236,6 +3582,7 @@ def build_instance_metadata_items(
         {"key": "vm-power-action-script", "value": decode_config_b64("vm_power_action_script_b64")},
         {"key": "vm-data-disk-device-name", "value": data_disk_device_name()},
         {"key": "vm-data-disk-mount-root", "value": CONFIG["data_disk_mount_root"]},
+        {"key": "vm-control-endpoint-id", "value": selected_endpoint_id()},
         {"key": "vm-gpu-count", "value": str(selected_gpu_count())},
         {"key": "vm-gpu-type", "value": selected_gpu_type()},
         {
@@ -3336,6 +3683,9 @@ def build_instance_create_request(
     subnet = subnet_path()
     if subnet:
         network_interface["subnetwork"] = subnet
+    static_ip = str(selected_endpoint().get("staticIp", "") or "")
+    if static_ip:
+        network_interface["accessConfigs"][0]["natIP"] = static_ip
 
     service_account_email = CONFIG["vm_service_account_email"].strip()
     if not service_account_email:
@@ -3408,7 +3758,8 @@ def build_urls(external_ip: str) -> dict[str, Any]:
         "moonlightHost": external_ip,
         "duckdns": [],
     }
-    primary_duckdns = CONFIG["duckdns_domains"][0] if CONFIG["duckdns_domains"] else ""
+    endpoint_domains = selected_endpoint_domains()
+    primary_duckdns = endpoint_domains[0] if endpoint_domains else ""
     if primary_duckdns:
         urls["novnc"] = f"http://{primary_duckdns}:{CONFIG['novnc_port']}/"
         urls["sunshine"] = f"https://{primary_duckdns}:{CONFIG['sunshine_port']}/"
@@ -4046,13 +4397,14 @@ def build_status_payload(
                 "zone": selected_zone(),
                 "instance": selected_instance_name(),
                 "baseInstance": bounded_gce_name(CONFIG["instance"]),
+                "endpoint": endpoint_public_payload(selected_endpoint()),
             },
             "hardware": hardware,
             "status": STATUS_NOT_FOUND,
             "instanceExists": False,
             "allowedCommands": allowed_commands(None),
             "externalIp": "",
-            "duckdnsDomains": CONFIG["duckdns_domains"],
+            "duckdnsDomains": selected_endpoint_domains(),
             "urls": build_urls(""),
             "user": user,
             "autoStopHours": "",
@@ -4095,6 +4447,7 @@ def build_status_payload(
             "zone": selected_zone(),
             "instance": selected_instance_name(),
             "baseInstance": bounded_gce_name(CONFIG["instance"]),
+            "endpoint": endpoint_public_payload(selected_endpoint()),
         },
         "hardware": hardware,
         "actualHardware": actual_hardware,
@@ -4103,7 +4456,7 @@ def build_status_payload(
         "instanceExists": True,
         "allowedCommands": allowed_commands(instance),
         "externalIp": external_ip,
-        "duckdnsDomains": CONFIG["duckdns_domains"],
+        "duckdnsDomains": selected_endpoint_domains(),
         "urls": build_urls(external_ip),
         "user": user,
         "autoStopHours": metadata_value(instance, AUTO_STOP_METADATA_KEY),
@@ -4293,11 +4646,12 @@ def poll_backup_ready(timeout_seconds: int = 900, previous_timestamp: str = "") 
 
 
 def update_duckdns(external_ip: str) -> bool:
-    if not external_ip or not CONFIG["duckdns_domains"] or not CONFIG["duckdns_token"]:
+    endpoint_domains = selected_endpoint_domains()
+    if not external_ip or not endpoint_domains or not CONFIG["duckdns_token"]:
         return False
 
     updated = True
-    for domain in CONFIG["duckdns_domains"]:
+    for domain in endpoint_domains:
         subdomain = domain.removesuffix(".duckdns.org")
         domain_updated = False
         last_error = ""
@@ -4448,7 +4802,8 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
 
     if command == "create":
         auto_stop_hours = parse_auto_stop_hours(payload)
-        ensure_no_other_running_instances_or_stop(payload, command)
+        ensure_selected_endpoint_static_address()
+        # Endpoint-scoped external IPs allow parallel VM operation.
         if current_instance is not None:
             if current_status != "TERMINATED" or instance_hardware_matches_selection(current_instance):
                 raise ApiError("Instance already exists.", 400)
@@ -4469,6 +4824,7 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
             wait_for_zone_operation(operation, timeout_seconds=180)
             poll_instance_status("RUNNING", timeout_seconds=240)
             final_instance = wait_for_external_ip(timeout_seconds=180)
+            bind_selected_endpoint_to_instance(final_instance)
             updated = update_duckdns(extract_external_ip(final_instance))
             return build_status_payload(
                 final_instance,
@@ -4496,6 +4852,7 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
         wait_for_zone_operation(operation, timeout_seconds=180)
         poll_instance_status("RUNNING", timeout_seconds=240)
         final_instance = wait_for_external_ip(timeout_seconds=180)
+        bind_selected_endpoint_to_instance(final_instance)
         updated = update_duckdns(extract_external_ip(final_instance))
         return build_status_payload(
             final_instance,
@@ -4509,7 +4866,8 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
         if current_instance is None:
             raise ApiError("Instance does not exist. Use Create first.", 400)
         auto_stop_hours = parse_auto_stop_hours(payload)
-        ensure_no_other_running_instances_or_stop(payload, command)
+        ensure_selected_endpoint_static_address()
+        # Endpoint-scoped external IPs allow parallel VM operation.
         if auto_stop_hours is not None and current_status == "RUNNING":
             raise ApiError("Auto-stop can only be scheduled while starting a stopped VM.", 400)
         if current_status == "RUNNING" and not instance_hardware_matches_selection(current_instance):
@@ -4537,6 +4895,7 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
             final_instance = wait_for_external_ip(timeout_seconds=120)
         else:
             final_instance = wait_for_external_ip()
+        bind_selected_endpoint_to_instance(final_instance)
         updated = update_duckdns(extract_external_ip(final_instance))
         return build_status_payload(
             final_instance,
@@ -4643,6 +5002,7 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
         wait_for_zone_operation(operation, timeout_seconds=180)
         poll_instance_status("RUNNING")
         final_instance = wait_for_external_ip(timeout_seconds=120)
+        bind_selected_endpoint_to_instance(final_instance)
         updated = update_duckdns(extract_external_ip(final_instance))
         return build_status_payload(
             final_instance,
@@ -4674,6 +5034,7 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
             raise ApiError("Failed to delete instance.", 502)
         wait_for_zone_operation(operation, timeout_seconds=180)
         poll_instance_deleted(timeout_seconds=120)
+        unbind_selected_endpoint_instance()
         return build_status_payload(None, user=user, command=command)
 
     if command == "create-backup":
@@ -4842,6 +5203,7 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
             timeout_seconds=1200,
         )
         final_instance = wait_for_external_ip(timeout_seconds=180)
+        bind_selected_endpoint_to_instance(final_instance)
         updated = update_duckdns(extract_external_ip(final_instance))
         return build_status_payload(
             final_instance,
