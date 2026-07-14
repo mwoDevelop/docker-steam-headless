@@ -1591,7 +1591,7 @@ def clean_target_text(raw: Any, default: str) -> str:
     return value or default
 
 
-def apply_target_overrides(source: Any) -> None:
+def apply_target_overrides(source: Any, respect_existing_endpoint_hardware: bool = True) -> None:
     default = default_hardware_selection()
     endpoint_id = normalize_endpoint_id(source.get("endpointId") if hasattr(source, "get") and source.get("endpointId") else "mwo-vm1")
     endpoint = endpoint_by_id(endpoint_id)
@@ -1634,9 +1634,9 @@ def apply_target_overrides(source: Any) -> None:
 
     endpoint_hardware = endpoint.get("hardware") if isinstance(endpoint.get("hardware"), dict) else {}
     endpoint_has_instance = bool(endpoint.get("instanceName") and endpoint.get("zone"))
-    if endpoint_has_instance:
+    if respect_existing_endpoint_hardware and endpoint_has_instance:
         zone = str(endpoint["zone"])
-    if endpoint_has_instance and endpoint_hardware:
+    if respect_existing_endpoint_hardware and endpoint_has_instance and endpoint_hardware:
         hardware_id = str(endpoint_hardware.get("id") or hardware_id)
         machine_type = str(endpoint_hardware.get("machineType") or machine_type)
         gpu_type = str(endpoint_hardware.get("gpuType") or "")
@@ -2649,7 +2649,7 @@ def options_passthrough():
     if request.path == "/api/capacity-reservations/probe":
         require_user()
         payload = request.get_json(silent=True) or {}
-        apply_target_overrides(payload)
+        apply_target_overrides(payload, respect_existing_endpoint_hardware=False)
         return jsonify(create_capacity_reservation_probe())
 
     if request.path == "/api/capacity-reservations/scan":
@@ -3263,7 +3263,7 @@ def probe_gpu_capacity_zone(profile: dict[str, Any], zone: str, token: str) -> d
 
 
 def scan_gpu_capacity_zone(payload: dict[str, Any]) -> dict[str, Any]:
-    apply_target_overrides(payload)
+    apply_target_overrides(payload, respect_existing_endpoint_hardware=False)
     if selected_gpu_count() <= 0 or not selected_gpu_type():
         raise ApiError("GPU capacity scans require a selected GPU hardware profile.", 400)
     profile = {
