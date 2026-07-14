@@ -1003,7 +1003,7 @@
     const isFiltered = Boolean(activeGpuAvailabilityScan(profile));
     if (elements.refreshHardware) {
       elements.refreshHardware.textContent = running
-        ? "Scanning GPU Availability..."
+        ? "Scanning All Compatible GPU Zones..."
         : isFiltered ? "Show All Compatible GPU Zones" : "Scan All Compatible GPU Zones";
       elements.refreshHardware.title = isFiltered
         ? "Restore all zones compatible with the selected GPU"
@@ -3113,14 +3113,14 @@
   }
 
   function resetGpuCapacityProbeButton() {
-    setCapacityButtonResult(elements.checkGpuCapacity, "Check GPU Capacity", "neutral");
+    setCapacityButtonResult(elements.checkGpuCapacity, "Reserve Selected GPU Capacity", "neutral");
   }
 
   async function checkGpuCapacity() {
     const target = selectedTargetParams();
     if (!target.hardwareId || !target.zone || !target.gpuType || Number(target.gpuCount || 0) <= 0) {
       const message = "Select a GPU hardware profile and zone before checking capacity.";
-      setCapacityButtonResult(elements.checkGpuCapacity, "GPU Capacity Unavailable", "error");
+      setCapacityButtonResult(elements.checkGpuCapacity, "GPU Reservation Unavailable", "error");
       setCommandStatus(message, "error");
       setBanner(message, "error");
       return;
@@ -3129,7 +3129,7 @@
     const loadingToken = setPageLoading("Checking GPU capacity...");
     try {
       setBusy(true);
-      setCapacityButtonResult(elements.checkGpuCapacity, "Checking GPU Capacity...", "neutral");
+      setCapacityButtonResult(elements.checkGpuCapacity, "Reserving Selected GPU...", "neutral");
       const data = await fetchApi("/api/capacity-reservations/probe", {
         method: "POST",
         body: JSON.stringify(target),
@@ -3140,12 +3140,12 @@
       const message = data && data.message
         ? `${data.message}${expiresAt}.`
         : `GPU capacity is reserved${expiresAt}.`;
-      setCapacityButtonResult(elements.checkGpuCapacity, "GPU Capacity Available", "success");
+      setCapacityButtonResult(elements.checkGpuCapacity, "Selected GPU Reserved", "success");
       setCommandStatus(message, "success");
       setBanner(message, "success");
     } catch (error) {
       const message = commandFailureMessage("check-gpu-capacity", error);
-      setCapacityButtonResult(elements.checkGpuCapacity, "GPU Capacity Unavailable", "error");
+      setCapacityButtonResult(elements.checkGpuCapacity, "GPU Reservation Unavailable", "error");
       setCommandStatus(message, "error");
       setBanner(message, "error");
     } finally {
@@ -3159,7 +3159,7 @@
     const loadingToken = setPageLoading("Releasing GPU capacity reservations...");
     try {
       setBusy(true);
-      setCapacityButtonResult(elements.releaseGpuCapacity, "Releasing GPU Probes...", "neutral");
+      setCapacityButtonResult(elements.releaseGpuCapacity, "Releasing GPU Reservations...", "neutral");
       const data = await fetchApi("/api/capacity-reservations/release", { method: "POST", body: "{}" });
       const released = Array.isArray(data && data.released) ? data.released.length : 0;
       const failed = Array.isArray(data && data.failed) ? data.failed.length : 0;
@@ -3170,14 +3170,14 @@
           : "No managed GPU capacity reservations were active.";
       setCapacityButtonResult(
         elements.releaseGpuCapacity,
-        failed ? "Release GPU Probes Failed" : "GPU Probes Released",
+        failed ? "Release GPU Reservations Failed" : "GPU Reservations Released",
         failed ? "error" : "success",
       );
       setCommandStatus(message, failed ? "error" : "success");
       setBanner(message, failed ? "error" : "success");
     } catch (error) {
       const message = commandFailureMessage("release-gpu-capacity-reservations", error);
-      setCapacityButtonResult(elements.releaseGpuCapacity, "Release GPU Probes Failed", "error");
+      setCapacityButtonResult(elements.releaseGpuCapacity, "Release GPU Reservations Failed", "error");
       setCommandStatus(message, "error");
       setBanner(message, "error");
     } finally {
