@@ -285,9 +285,13 @@ RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
-EOF
+  EOF
   systemctl daemon-reload
-  systemctl enable --now vm-minecraft-management.service >/dev/null 2>&1 || true
+  # The unit can be auto-started from a previous boot before this startup
+  # script replaces the agent binary. Restart it explicitly so it always runs
+  # the version just installed from instance metadata.
+  systemctl enable vm-minecraft-management.service >/dev/null 2>&1 || true
+  systemctl restart vm-minecraft-management.service >/dev/null 2>&1 || true
 }
 
 sync_env_metadata() {
