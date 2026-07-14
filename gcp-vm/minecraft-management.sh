@@ -8,7 +8,9 @@ AGENT_KEY="vm-minecraft-management-agent"
 
 metadata_get() {
   local key="$1"
-  curl "${METADATA_HDR[@]}" "http://metadata/computeMetadata/v1/instance/attributes/${key}" || true
+  # A missing optional attribute is normal while no command is queued. Do not
+  # flood the system journal with an expected metadata-server 404.
+  curl "${METADATA_HDR[@]}" "http://metadata/computeMetadata/v1/instance/attributes/${key}" 2>/dev/null || true
 }
 
 metadata_token() {
@@ -25,10 +27,31 @@ zone_name() {
   printf '%s\n' "${zone##*/}"
 }
 
+wait_for_zone_operation() {
+  local token="$1"
+  local project="$2"
+  local zone="$3"
+  local operation_name="$4"
+  local operation status
+
+  [[ -n "$operation_name" ]] || return 1
+  for _ in $(seq 1 30); do
+    operation="$(curl --fail --silent --show-error -H "Authorization: Bearer ${token}" \
+      "https://compute.googleapis.com/compute/v1/projects/${project}/zones/${zone}/operations/${operation_name}" || true)"
+    status="$(printf '%s' "$operation" | jq -r '.status // empty')"
+    if [[ "$status" == "DONE" ]]; then
+      printf '%s' "$operation" | jq -e '((.error.errors // []) | length) == 0' >/dev/null
+      return
+    fi
+    sleep 1
+  done
+  return 1
+}
+
 set_metadata_value() {
   local key="$1"
   local value="$2"
-  local token project zone name instance_json fingerprint items payload
+  local token project zone name instance_json fingerprint items payload operation operation_name
   token="$(metadata_token || true)"
   project="$(project_id || true)"
   zone="$(zone_name || true)"
@@ -43,10 +66,13 @@ set_metadata_value() {
     items="$(printf '%s' "$instance_json" | jq --arg key "$key" '[.metadata.items // [] | .[] | select(.key != $key)]')"
     payload="$(jq -n --arg fingerprint "$fingerprint" --arg key "$key" --arg value "$value" --argjson items "$items" \
       '{fingerprint: $fingerprint, items: ($items + [{key: $key, value: $value}])}')"
-    if curl --fail --silent --show-error -X POST \
+    if operation="$(curl --fail --silent --show-error -X POST \
       -H "Authorization: Bearer ${token}" -H "Content-Type: application/json" -d "$payload" \
-      "https://compute.googleapis.com/compute/v1/projects/${project}/zones/${zone}/instances/${name}/setMetadata" >/dev/null; then
-      return 0
+      "https://compute.googleapis.com/compute/v1/projects/${project}/zones/${zone}/instances/${name}/setMetadata")"; then
+      operation_name="$(printf '%s' "$operation" | jq -r '.name // empty')"
+      if wait_for_zone_operation "$token" "$project" "$zone" "$operation_name"; then
+        return 0
+      fi
     fi
     sleep 1
   done
@@ -112,8 +138,10 @@ process_request() {
 }
 
 main() {
-  set_metadata_value "$AGENT_KEY" "ready" || true
   while true; do
+    if [[ "$(metadata_get "$AGENT_KEY")" != "ready" ]]; then
+      set_metadata_value "$AGENT_KEY" "ready" || true
+    fi
     process_request || true
     sleep 2
   done
