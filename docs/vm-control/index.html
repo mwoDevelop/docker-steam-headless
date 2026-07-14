@@ -136,7 +136,10 @@
               <option value="">Select hardware first</option>
             </select>
           </label>
-          <button id="refresh-hardware" class="ghost" type="button">Scan GPU Availability</button>
+          <div class="control-row">
+            <button id="refresh-hardware" class="ghost" type="button">Scan All Compatible GPU Zones</button>
+            <button id="scan-selected-gpu" class="ghost" type="button">Scan Selected GPU Zone</button>
+          </div>
           <div id="hardware-price-estimate" class="hardware-price-card" data-tone="neutral">
             Select hardware and zone to load estimated price.
           </div>
@@ -150,7 +153,7 @@
           <button class="action stop" type="button" data-command="stop">Stop</button>
           <button class="action status" type="button" data-command="status">Status</button>
           <button class="action delete" type="button" data-command="delete">Delete</button>
-          <button id="check-gpu-capacity" class="action capacity-check" type="button">Check GPU Capacity</button>
+          <button id="check-gpu-capacity" class="action capacity-check" type="button">Reserve Selected GPU Capacity</button>
           <button id="release-gpu-capacity" class="action capacity-release" type="button">
             <span data-capacity-label>Release All GPU Probes</span>
             <span id="gpu-probe-count" class="gpu-probe-count" aria-label="Reserved GPU probes">0</span>
@@ -271,6 +274,6 @@
       </section>
     </main>
 
-    <script src="./app.js?v=preserve-manual-target-20260714"></script>
+    <script src="./app.js?v=gpu-zone-scan-20260714"></script>
   </body>
 </html>

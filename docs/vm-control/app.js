@@ -159,6 +159,7 @@
     hardwareSelect: document.querySelector("#hardware-select"),
     zoneSelect: document.querySelector("#zone-select"),
     refreshHardware: document.querySelector("#refresh-hardware"),
+    scanSelectedGpu: document.querySelector("#scan-selected-gpu"),
     cancelGpuScan: document.querySelector("#cancel-gpu-scan"),
     hardwareOptionsStatus: document.querySelector("#hardware-options-status"),
     hardwarePriceEstimate: document.querySelector("#hardware-price-estimate"),
@@ -1003,11 +1004,15 @@
     if (elements.refreshHardware) {
       elements.refreshHardware.textContent = running
         ? "Scanning GPU Availability..."
-        : isFiltered ? "Show All GPU Zones" : "Scan GPU Availability";
+        : isFiltered ? "Show All Compatible GPU Zones" : "Scan All Compatible GPU Zones";
       elements.refreshHardware.title = isFiltered
         ? "Restore all zones compatible with the selected GPU"
         : "Temporarily test GPU capacity in every compatible zone";
       elements.refreshHardware.disabled = state.isBusy || !state.user || !isGpu || running;
+    }
+    if (elements.scanSelectedGpu) {
+      elements.scanSelectedGpu.disabled = state.isBusy || !state.user || !isGpu || running;
+      elements.scanSelectedGpu.title = "Temporarily test GPU capacity in the selected zone without retaining a reservation";
     }
     if (elements.cancelGpuScan) {
       elements.cancelGpuScan.classList.toggle("hidden", !running);
@@ -1374,6 +1379,35 @@
       ? `Capacity scan found ${run.availableZones.length}/${zones.length} available GPU zones, but ${cleanupFailures} temporary reservation cleanup${cleanupFailures === 1 ? "" : "s"} will expire automatically.`
       : `Capacity scan found ${run.availableZones.length}/${zones.length} GPU zones with current capacity. All temporary reservations were released.`;
     setBanner(message, cleanupFailures ? "warning" : "success");
+  }
+
+  async function scanSelectedGpuZoneAvailability() {
+    const profile = selectedHardwareProfile();
+    const target = selectedTargetParams();
+    if (!profile || Number(profile.gpuCount || 0) <= 0 || !String(profile.gpuType || "").trim() || !target.zone) {
+      throw new Error("Select a GPU hardware profile and zone before scanning availability.");
+    }
+
+    const data = await fetchApi("/api/capacity-reservations/scan-zone", {
+      method: "POST",
+      body: JSON.stringify(target),
+    });
+    await refreshGpuCapacityReservationCount();
+    scheduleGpuCapacityReservationCountRefreshes();
+
+    const profileLabel = String(profile.label || profile.id || "GPU");
+    const zoneLabel = zoneDisplayLabel(String(target.zone));
+    if (data && data.available) {
+      const cleanupNote = data.cleanupFailure
+        ? ` Temporary reservation cleanup is pending: ${data.cleanupFailure}`
+        : " Temporary reservation was released immediately.";
+      setCommandStatus(`${profileLabel} is currently available in ${zoneLabel}.${cleanupNote}`, data.cleanupFailure ? "warning" : "success");
+      return data;
+    }
+
+    const detail = data && data.error ? ` ${data.error}` : "";
+    setCommandStatus(`${profileLabel} is not currently available in ${zoneLabel}.${detail}`, "warning");
+    return data;
   }
 
   function getCreatedInstances() {
@@ -3370,6 +3404,23 @@
 
   if (elements.checkGpuCapacity) {
     elements.checkGpuCapacity.addEventListener("click", checkGpuCapacity);
+  }
+
+  if (elements.scanSelectedGpu) {
+    elements.scanSelectedGpu.addEventListener("click", async () => {
+      const loadingToken = setPageLoading("Scanning selected GPU zone capacity...");
+      try {
+        setBusy(true);
+        updateGpuAvailabilityScanButton();
+        await scanSelectedGpuZoneAvailability();
+      } catch (error) {
+        handleError(error);
+      } finally {
+        setBusy(false);
+        updateGpuAvailabilityScanButton();
+        markPageReady("Ready.", loadingToken);
+      }
+    });
   }
 
   if (elements.cancelGpuScan) {
