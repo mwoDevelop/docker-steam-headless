@@ -8,6 +8,18 @@
     sessionTokenExpiresAt: "vm-control-google-session-token-expires-at",
     history: "vm-control-session-history",
   };
+  const minecraftManagementSessionRequest = "vm-control-minecraft-session-request";
+  const minecraftManagementSessionResponse = "vm-control-minecraft-session-response";
+
+  window.addEventListener("message", (event) => {
+    if (event.origin !== window.location.origin || event.data?.type !== minecraftManagementSessionRequest) return;
+    const token = window.sessionStorage.getItem(storageKeys.sessionToken) || "";
+    if (!token || !event.source) return;
+    event.source.postMessage({
+      type: minecraftManagementSessionResponse,
+      token,
+    }, event.origin);
+  });
   const SUNSHINE_POLL_INTERVAL_MS = 3000;
   const SUNSHINE_POLL_TIMEOUT_MS = 1200000;
   const POST_COMMAND_STATUS_REFRESH_DELAY_MS = 2000;

@@ -3,6 +3,8 @@
     config: "vm-control-cloudrun-config",
     sessionToken: "vm-control-google-session-token",
   };
+  const minecraftManagementSessionRequest = "vm-control-minecraft-session-request";
+  const minecraftManagementSessionResponse = "vm-control-minecraft-session-response";
   const params = new URLSearchParams(window.location.search);
   const elements = {
     identity: document.querySelector("#manager-identity"),
@@ -24,6 +26,15 @@
     data: null,
     busy: false,
   };
+
+  window.addEventListener("message", (event) => {
+    if (event.origin !== window.location.origin || event.data?.type !== minecraftManagementSessionResponse) return;
+    const token = String(event.data.token || "");
+    if (!token) return;
+    state.token = token;
+    window.sessionStorage.setItem(storageKeys.sessionToken, token);
+    refresh();
+  });
 
   function targetQuery() {
     const target = new URLSearchParams();
@@ -118,5 +129,10 @@
   elements.back.href = `./index.html${window.location.search}`;
   elements.refresh.addEventListener("click", refresh);
   elements.actionButtons.forEach((button) => button.addEventListener("click", () => runAction(button.dataset.action, button.dataset.playerInput)));
-  refresh();
+  if (!state.token && window.opener) {
+    window.opener.postMessage({ type: minecraftManagementSessionRequest }, window.location.origin);
+    window.setTimeout(refresh, 250);
+  } else {
+    refresh();
+  }
 })();
