@@ -164,7 +164,7 @@
           > Administrator
         </label>`;
       return `
-        <div class="admin-user-row ${row.removable ? "" : "fixed"}">
+        <div class="admin-user-row user-access-row ${row.removable ? "" : "fixed"}">
           <div><code>${escapeHtml(row.email)}</code><br><span>${escapeHtml(row.source)}</span></div>
           ${managementToggle}
           ${administratorToggle}

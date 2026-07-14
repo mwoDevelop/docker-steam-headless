@@ -1030,3 +1030,29 @@ code,
 .admin-user-row.fixed {
   color: var(--muted);
 }
+
+.user-access-row {
+  grid-template-columns: minmax(0, 1fr) max-content max-content auto;
+}
+
+.user-access-row .access-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  white-space: nowrap;
+}
+
+.user-access-row .access-meta input[type="checkbox"] {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+}
+
+@media (max-width: 820px) {
+  .user-access-row {
+    grid-template-columns: 1fr;
+    justify-items: start;
+  }
+}
