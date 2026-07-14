@@ -104,6 +104,7 @@ CONFIG = {
     "admin_google_emails": {value.lower() for value in (csv_env("ADMIN_GOOGLE_EMAILS") or ["mwodevelop@gmail.com"])},
     "access_users_secret_name": os.environ.get("ACCESS_USERS_SECRET_NAME", "steam-vm-control-allowed-users"),
     "minecraft_versions_secret_name": os.environ.get("MINECRAFT_VERSIONS_SECRET_NAME", ""),
+    "vm_minecraft_management_script_b64": os.environ.get("VM_MINECRAFT_MANAGEMENT_SCRIPT_B64", ""),
     "session_token_secret": os.environ.get("VM_CONTROL_SESSION_SECRET", ""),
     "capacity_cleanup_token": os.environ.get("CAPACITY_RESERVATION_CLEANUP_TOKEN", ""),
     "duckdns_domains": normalize_duckdns_domains(csv_env("DUCKDNS_DOMAINS")),
@@ -127,6 +128,9 @@ GPU_COUNT_METADATA_KEY = "vm-gpu-count"
 MINECRAFT_STATUS_METADATA_KEY = "vm-minecraft-status"
 MINECRAFT_STATUS_DETAIL_METADATA_KEY = "vm-minecraft-status-detail"
 MINECRAFT_VERSION_METADATA_KEY = "vm-minecraft-version"
+MINECRAFT_MANAGEMENT_REQUEST_METADATA_KEY = "vm-minecraft-management-request"
+MINECRAFT_MANAGEMENT_RESULT_METADATA_KEY = "vm-minecraft-management-result"
+MINECRAFT_MANAGEMENT_AGENT_METADATA_KEY = "vm-minecraft-management-agent"
 POWER_ACTION_METADATA_KEY = "vm-pending-power-action"
 POWER_ACTION_STATUS_METADATA_KEY = "vm-power-action-status"
 RESTORE_MODE_METADATA_KEY = "vm-restore-mode"
@@ -424,40 +428,64 @@ def secret_path(secret_name: str) -> str:
     return f"projects/{project}/secrets/{secret_name}"
 
 
-def read_access_users_secret() -> set[str]:
+def read_access_user_profiles() -> dict[str, dict[str, bool]]:
     secret_name = str(CONFIG["access_users_secret_name"] or "").strip()
     if not secret_name:
-        return set()
+        return {}
     response = compute_session().get(
         f"{SECRET_MANAGER_BASE_URL}/{secret_path(secret_name)}/versions/latest:access",
         timeout=30,
     )
     if response.status_code == 404:
-        return set()
+        return {}
     if response.status_code >= 400:
         logging.warning("Unable to read managed access users secret: %s", response.text)
-        return set()
+        return {}
     data = response.json()
     encoded = (((data or {}).get("payload") or {}).get("data") or "")
     if not encoded:
-        return set()
+        return {}
     try:
         decoded = base64.b64decode(encoded).decode("utf-8")
         payload = json.loads(decoded)
     except Exception as error:
         logging.warning("Unable to decode managed access users secret: %s", error)
-        return set()
+        return {}
     raw_users = payload.get("users", []) if isinstance(payload, dict) else payload
     if not isinstance(raw_users, list):
-        return set()
-    return {normalize_email(email) for email in raw_users if normalize_email(email)}
+        return {}
+
+    profiles: dict[str, dict[str, bool]] = {}
+    for raw_user in raw_users:
+        if isinstance(raw_user, str):
+            email = normalize_email(raw_user)
+            minecraft_management = False
+        elif isinstance(raw_user, dict):
+            email = normalize_email(str(raw_user.get("email", "")))
+            minecraft_management = bool(raw_user.get("minecraftManagement", False))
+        else:
+            continue
+        if email:
+            profiles[email] = {"minecraftManagement": minecraft_management}
+    return profiles
 
 
-def write_access_users_secret(users: set[str]) -> None:
+def read_access_users_secret() -> set[str]:
+    return set(read_access_user_profiles())
+
+
+def write_access_user_profiles(profiles: dict[str, dict[str, bool]]) -> None:
     secret_name = str(CONFIG["access_users_secret_name"] or "").strip()
     if not secret_name:
         raise ApiError("Managed access users secret is not configured.", 500)
-    payload = json.dumps({"users": sorted(users)}, separators=(",", ":")).encode("utf-8")
+    users = [
+        {
+            "email": email,
+            "minecraftManagement": bool(profile.get("minecraftManagement", False)),
+        }
+        for email, profile in sorted(profiles.items())
+    ]
+    payload = json.dumps({"users": users}, separators=(",", ":")).encode("utf-8")
     response = compute_session().post(
         f"{SECRET_MANAGER_BASE_URL}/{secret_path(secret_name)}:addVersion",
         json={"payload": {"data": base64.b64encode(payload).decode("ascii")}},
@@ -465,6 +493,12 @@ def write_access_users_secret(users: set[str]) -> None:
     )
     if response.status_code >= 400:
         raise ApiError(f"Unable to update managed access users: {response.text}", 502)
+
+
+def write_access_users_secret(users: set[str]) -> None:
+    write_access_user_profiles(
+        {email: {"minecraftManagement": False} for email in users if normalize_email(email)}
+    )
 
 
 def normalize_minecraft_version_list(raw_versions: Any) -> list[str]:
@@ -1663,6 +1697,7 @@ def handle_unexpected_error(error: Exception):
 @app.route("/api/instances", methods=["GET", "OPTIONS"])
 @app.route("/api/price", methods=["GET", "OPTIONS"])
 @app.route("/api/minecraft/versions", methods=["GET", "POST", "OPTIONS"])
+@app.route("/api/minecraft/management", methods=["GET", "POST", "OPTIONS"])
 @app.route("/api/capacity-reservations", methods=["GET", "OPTIONS"])
 @app.route("/api/capacity-reservations/probe", methods=["POST", "OPTIONS"])
 @app.route("/api/capacity-reservations/scan", methods=["POST", "OPTIONS"])
@@ -1703,24 +1738,32 @@ def options_passthrough():
             }
         )
 
-    if request.path == "/api/admin/users":
+      if request.path == "/api/admin/users":
         admin_user = require_admin_user()
         if request.method == "GET":
             return jsonify(build_admin_users_payload(admin_user))
         payload = request.get_json(silent=True) or {}
         action = str(payload.get("action", "")).strip().lower()
         email = validate_email(str(payload.get("email", "")))
-        users = managed_allowed_emails()
-        if action == "add":
-            users.add(email)
-        elif action == "remove":
-            if email in admin_google_emails():
-                raise ApiError("Administrator accounts cannot be removed from this page.", 400)
-            users.discard(email)
-        else:
-            raise ApiError("Unsupported admin action.", 400)
-        write_access_users_secret(users)
-        return jsonify(build_admin_users_payload(admin_user))
+          profiles = read_access_user_profiles()
+          if action == "add":
+              profiles[email] = {
+                  "minecraftManagement": bool(payload.get("minecraftManagement", False)),
+              }
+          elif action == "remove":
+              if email in admin_google_emails():
+                  raise ApiError("Administrator accounts cannot be removed from this page.", 400)
+              profiles.pop(email, None)
+          elif action == "set-minecraft-management":
+              if email in admin_google_emails():
+                  raise ApiError("Administrator accounts always retain Minecraft management access.", 400)
+              profiles[email] = {
+                  "minecraftManagement": bool(payload.get("minecraftManagement", False)),
+              }
+          else:
+              raise ApiError("Unsupported admin action.", 400)
+          write_access_user_profiles(profiles)
+          return jsonify(build_admin_users_payload(admin_user))
 
     if request.path == "/api/hardware":
         require_user()
@@ -1757,11 +1800,20 @@ def options_passthrough():
             }
         )
 
-    if request.path == "/api/minecraft/versions":
+      if request.path == "/api/minecraft/versions":
         require_user()
         if request.method == "POST":
             return jsonify(refresh_minecraft_versions_from_papermc())
-        return jsonify(minecraft_version_payload())
+          return jsonify(minecraft_version_payload())
+
+      if request.path == "/api/minecraft/management":
+          user = require_minecraft_manager_user()
+          if request.method == "GET":
+              apply_target_overrides(request.args)
+              return jsonify(build_minecraft_management_payload(get_instance_or_none(), user))
+          payload = request.get_json(silent=True) or {}
+          apply_target_overrides(payload)
+          return jsonify(execute_minecraft_management_action(get_instance_or_none(), user, payload))
 
     if request.path == "/api/capacity-reservations":
         require_user()
@@ -2000,16 +2052,70 @@ def require_admin_user() -> dict[str, Any]:
     return user_response(user)
 
 
+def user_can_manage_minecraft(user: dict[str, Any]) -> bool:
+    email = normalize_email(str(user.get("email", "")))
+    if not email:
+        return False
+    if email in admin_google_emails():
+        return True
+    profile = read_access_user_profiles().get(email, {})
+    return bool(profile.get("minecraftManagement", False))
+
+
+def require_minecraft_manager_user() -> dict[str, Any]:
+    user = require_user()
+    if not user_can_manage_minecraft(user):
+        raise ApiError(
+            f"Google account {user.get('email', '')} does not have Minecraft management access.",
+            403,
+        )
+    return user
+
+
 def build_admin_users_payload(admin_user: dict[str, Any]) -> dict[str, Any]:
-    managed_users = managed_allowed_emails()
+    managed_profiles = read_access_user_profiles()
+    managed_users = set(managed_profiles)
     admin_emails = admin_google_emails()
     configured_users = configured_allowed_emails() - admin_emails
+    accounts: dict[str, dict[str, Any]] = {}
+    for email in admin_emails:
+        accounts[email] = {
+            "email": email,
+            "source": "administrator",
+            "minecraftManagement": True,
+            "minecraftManagementLocked": True,
+            "removable": False,
+        }
+    for email in configured_users:
+        profile = managed_profiles.get(email, {})
+        accounts[email] = {
+            "email": email,
+            "source": "configured env",
+            "minecraftManagement": bool(profile.get("minecraftManagement", False)),
+            "minecraftManagementLocked": False,
+            "removable": False,
+        }
+    for email, profile in managed_profiles.items():
+        if email in accounts:
+            continue
+        accounts[email] = {
+            "email": email,
+            "source": "managed",
+            "minecraftManagement": bool(profile.get("minecraftManagement", False)),
+            "minecraftManagementLocked": False,
+            "removable": True,
+        }
     return {
         "user": admin_user,
         "adminEmails": sorted(admin_emails),
         "configuredEmails": sorted(configured_users),
         "configuredDomains": sorted(CONFIG["allowed_google_domains"]),
         "managedUsers": sorted(managed_users),
+        "managedUserPermissions": {
+            email: bool(profile.get("minecraftManagement", False))
+            for email, profile in sorted(managed_profiles.items())
+        },
+        "accounts": [accounts[email] for email in sorted(accounts)],
         "effectiveDirectEmails": sorted(configured_users | admin_emails | managed_users),
     }
 
@@ -2505,6 +2611,26 @@ def set_instance_metadata_values(instance: dict[str, Any], updates: dict[str, st
 
 def set_instance_metadata_value(instance: dict[str, Any], key: str, value: str | None) -> None:
     set_instance_metadata_values(instance, {key: value})
+
+
+def minecraft_management_agent_ready(instance: dict[str, Any] | None) -> bool:
+    return bool(
+        instance
+        and metadata_value(instance, MINECRAFT_MANAGEMENT_AGENT_METADATA_KEY).strip().lower() == "ready"
+    )
+
+
+def prepare_minecraft_management_agent(instance: dict[str, Any]) -> None:
+    if not str(CONFIG["vm_minecraft_management_script_b64"] or "").strip():
+        raise ApiError("Minecraft management agent script is not configured.", 500)
+    set_instance_metadata_values(
+        instance,
+        {
+            "startup-script": decode_config_b64("vm_startup_script_b64"),
+            "vm-minecraft-management-script": decode_config_b64("vm_minecraft_management_script_b64"),
+            MINECRAFT_MANAGEMENT_AGENT_METADATA_KEY: "pending-restart",
+        },
+    )
 
 
 def wait_for_instance_metadata_fingerprint() -> dict[str, Any]:
@@ -3098,6 +3224,14 @@ def build_instance_metadata_items(
         {"key": DATA_DISK_DETAIL_METADATA_KEY, "value": "Waiting for shared data disk mount."},
     ]
 
+    if str(CONFIG["vm_minecraft_management_script_b64"] or "").strip():
+        items.append(
+            {
+                "key": "vm-minecraft-management-script",
+                "value": decode_config_b64("vm_minecraft_management_script_b64"),
+            }
+        )
+
     if restore_mode:
         items.append({"key": RESTORE_MODE_METADATA_KEY, "value": restore_mode})
         items.append({"key": RESTORE_STATUS_METADATA_KEY, "value": "pending"})
@@ -3375,6 +3509,70 @@ def minecraft_version_from_instance(instance: dict[str, Any] | None) -> str:
         return concrete_minecraft_version(raw_version)
     except ApiError:
         return ""
+
+
+def minecraft_management_request_result(instance: dict[str, Any] | None) -> dict[str, Any]:
+    if instance is None:
+        return {}
+    raw_result = metadata_value(instance, MINECRAFT_MANAGEMENT_RESULT_METADATA_KEY)
+    if not raw_result:
+        return {}
+    try:
+        result = json.loads(raw_result)
+    except (TypeError, ValueError):
+        return {}
+    if not isinstance(result, dict):
+        return {}
+    output = str(result.get("output", "") or "")
+    return {
+        "id": str(result.get("id", "") or ""),
+        "action": str(result.get("action", "") or ""),
+        "state": str(result.get("state", "") or ""),
+        "output": output[:4096],
+        "completedAt": str(result.get("completedAt", "") or ""),
+    }
+
+
+def build_minecraft_management_payload(
+    instance: dict[str, Any] | None,
+    user: dict[str, Any],
+    *,
+    result: dict[str, Any] | None = None,
+    message: str = "",
+) -> dict[str, Any]:
+    minecraft_status = build_minecraft_status(instance)
+    agent_ready = minecraft_management_agent_ready(instance)
+    agent_prepared = bool(
+        instance and metadata_value(instance, "vm-minecraft-management-script").strip()
+    )
+    return {
+        "user": user,
+        "target": {
+            "project": CONFIG["project"],
+            "zone": selected_zone(),
+            "instance": selected_instance_name(),
+        },
+        "authorized": user_can_manage_minecraft(user),
+        "instanceExists": instance is not None,
+        "instanceState": str((instance or {}).get("status", "NOT_FOUND")),
+        "minecraftStatus": minecraft_status,
+        "agentReady": agent_ready,
+        "agentPrepared": agent_prepared,
+        "restartRequired": agent_prepared and not agent_ready,
+        "actions": [
+            "console",
+            "players",
+            "whitelist-list",
+            "whitelist-add",
+            "whitelist-remove",
+            "op-list",
+            "op-add",
+            "op-remove",
+            "restart",
+        ],
+        "lastResult": result or minecraft_management_request_result(instance),
+        "message": message,
+    }
 
 
 def build_minecraft_status(instance: dict[str, Any] | None) -> dict[str, str]:
@@ -3825,7 +4023,8 @@ def build_status_payload(
                 "password": "",
             },
             "sunshineStatus": build_sunshine_status(None),
-            "minecraftStatus": build_minecraft_status(None),
+              "minecraftStatus": build_minecraft_status(None),
+              "minecraftManagement": build_minecraft_management_payload(None, user),
             "minecraft": {
                 **minecraft_version_payload(),
             },
@@ -3872,7 +4071,8 @@ def build_status_payload(
         "autoStop": build_auto_stop_status(instance),
         "sunshineCredentials": normalize_sunshine_credentials_for_response(credentials),
         "sunshineStatus": build_sunshine_status(instance),
-        "minecraftStatus": build_minecraft_status(instance),
+          "minecraftStatus": build_minecraft_status(instance),
+          "minecraftManagement": build_minecraft_management_payload(instance, user),
         "minecraft": {
             **minecraft_version_payload(),
         },
@@ -4099,6 +4299,101 @@ def update_duckdns(external_ip: str) -> bool:
             logging.warning("DuckDNS update failed for %s after retries: %s", domain, last_error)
             updated = False
     return updated
+
+
+def minecraft_management_player_name(payload: dict[str, Any]) -> str:
+    player = str(payload.get("player", "") or "").strip()
+    if not (3 <= len(player) <= 16 and all(char.isalnum() or char == "_" for char in player)):
+        raise ApiError("Minecraft player name must contain 3-16 letters, digits, or underscores.", 400)
+    return player
+
+
+def minecraft_management_request_payload(payload: dict[str, Any]) -> dict[str, str]:
+    action = str(payload.get("action", "") or "").strip().lower()
+    allowed_actions = {
+        "console",
+        "players",
+        "whitelist-list",
+        "whitelist-add",
+        "whitelist-remove",
+        "op-list",
+        "op-add",
+        "op-remove",
+        "restart",
+    }
+    if action not in allowed_actions:
+        raise ApiError("Unsupported Minecraft management action.", 400)
+
+    request_payload = {"id": secrets.token_urlsafe(18), "action": action}
+    if action == "console":
+        command = str(payload.get("command", "") or "").strip()
+        if not command or len(command) > 300 or any(ord(char) < 32 for char in command):
+            raise ApiError("Console command must be 1-300 printable characters.", 400)
+        request_payload["command"] = command
+    elif action.endswith("-add") or action.endswith("-remove"):
+        request_payload["player"] = minecraft_management_player_name(payload)
+    return request_payload
+
+
+def wait_for_minecraft_management_result(request_id: str, timeout_seconds: int = 75) -> tuple[dict[str, Any], dict[str, Any]]:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        instance = get_instance_or_none()
+        if instance is None:
+            raise ApiError("VM was removed while executing the Minecraft management action.", 409)
+        result = minecraft_management_request_result(instance)
+        if result.get("id") == request_id and result.get("state") in {"done", "failed"}:
+            return instance, result
+        time.sleep(2)
+    raise ApiError("Minecraft management action is still pending on the VM. Refresh the panel shortly.", 504)
+
+
+def execute_minecraft_management_action(
+    instance: dict[str, Any] | None,
+    user: dict[str, Any],
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    action = str(payload.get("action", "") or "").strip().lower()
+    if instance is None:
+        raise ApiError("Create the selected VM before using Minecraft management.", 409)
+    if action == "prepare-agent":
+        prepare_minecraft_management_agent(instance)
+        refreshed = get_instance()
+        return build_minecraft_management_payload(
+            refreshed,
+            user,
+            message="Minecraft management agent was prepared. Restart the VM once from the main GUI to activate it.",
+        )
+
+    minecraft_status = build_minecraft_status(instance)
+    if str(instance.get("status", "")).upper() != "RUNNING" or minecraft_status.get("state") != "running":
+        raise ApiError("Minecraft server must be running before sending management commands.", 409)
+    if not minecraft_management_agent_ready(instance):
+        raise ApiError(
+            "Minecraft management agent is not active yet. Prepare it and restart the VM from the main GUI.",
+            409,
+        )
+
+    request_payload = minecraft_management_request_payload(payload)
+    set_instance_metadata_values(
+        instance,
+        {
+            MINECRAFT_MANAGEMENT_REQUEST_METADATA_KEY: json.dumps(request_payload, separators=(",", ":")),
+            MINECRAFT_MANAGEMENT_RESULT_METADATA_KEY: json.dumps(
+                {
+                    "id": request_payload["id"],
+                    "action": request_payload["action"],
+                    "state": "queued",
+                    "output": "",
+                    "completedAt": "",
+                },
+                separators=(",", ":"),
+            ),
+        },
+    )
+    refreshed, result = wait_for_minecraft_management_result(request_payload["id"])
+    message = "Minecraft management action completed." if result.get("state") == "done" else "Minecraft management action failed on the VM."
+    return build_minecraft_management_payload(refreshed, user, result=result, message=message)
 
 
 def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] | None = None) -> dict[str, Any]:

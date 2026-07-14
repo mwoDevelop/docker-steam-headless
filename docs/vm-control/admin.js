@@ -51,6 +51,9 @@
     elements.googleSignIn.disabled = nextBusy || !state.backendConfig;
     elements.addUser.disabled = nextBusy || !state.user;
     elements.userEmail.disabled = nextBusy || !state.user;
+    document.querySelectorAll("[data-minecraft-management]").forEach((input) => {
+      input.disabled = nextBusy || input.dataset.minecraftManagementLocked === "true";
+    });
   }
 
   function setAuthStatus(message, tone) {
@@ -99,24 +102,33 @@
       <p><strong>Configured users:</strong> <code>${escapeHtml((payload.configuredEmails || []).join(", ") || "none")}</code></p>
       <p><strong>Configured domains:</strong> <code>${escapeHtml((payload.configuredDomains || []).join(", ") || "none")}</code></p>
     `;
-    const fixedRows = [
-      ...(payload.adminEmails || []).map((email) => ({ email, label: "administrator" })),
-      ...(payload.configuredEmails || []).map((email) => ({ email, label: "configured env" })),
+    const rows = payload.accounts || [
+      ...(payload.adminEmails || []).map((email) => ({ email, source: "administrator", minecraftManagement: true, minecraftManagementLocked: true, removable: false })),
+      ...(payload.configuredEmails || []).map((email) => ({ email, source: "configured env", minecraftManagement: false, minecraftManagementLocked: false, removable: false })),
+      ...(payload.managedUsers || []).map((email) => ({ email, source: "managed", minecraftManagement: Boolean((payload.managedUserPermissions || {})[email]), minecraftManagementLocked: false, removable: true })),
     ];
-    const managedRows = (payload.managedUsers || []).map((email) => ({ email, label: "managed" }));
-    const rows = [...fixedRows, ...managedRows];
     if (!rows.length) {
       elements.usersList.innerHTML = '<div class="admin-user-row fixed">No direct users configured.</div>';
       return;
     }
     elements.usersList.innerHTML = rows.map((row) => {
-      const isManaged = row.label === "managed";
-      const button = isManaged
+      const button = row.removable
         ? `<button class="action delete" type="button" data-remove-user="${escapeHtml(row.email)}">Remove</button>`
-        : `<span>${escapeHtml(row.label)}</span>`;
+        : `<span>${escapeHtml(row.source)}</span>`;
+      const managementToggle = `
+        <label class="access-meta">
+          <input
+            type="checkbox"
+            data-minecraft-management="${escapeHtml(row.email)}"
+            data-minecraft-management-locked="${row.minecraftManagementLocked ? "true" : "false"}"
+            ${row.minecraftManagement ? "checked" : ""}
+            ${row.minecraftManagementLocked ? "disabled" : ""}
+          > Minecraft management
+        </label>`;
       return `
-        <div class="admin-user-row ${isManaged ? "" : "fixed"}">
-          <div><code>${escapeHtml(row.email)}</code><br><span>${escapeHtml(row.label)}</span></div>
+        <div class="admin-user-row ${row.removable ? "" : "fixed"}">
+          <div><code>${escapeHtml(row.email)}</code><br><span>${escapeHtml(row.source)}</span></div>
+          ${managementToggle}
           ${button}
         </div>
       `;
@@ -254,13 +266,18 @@
     updateUi();
   }
 
-  async function updateUser(action, email) {
+  async function updateUser(action, email, extra) {
     const payload = await fetchApi("/api/admin/users", {
       method: "POST",
-      body: JSON.stringify({ action, email }),
+      body: JSON.stringify({ action, email, ...(extra || {}) }),
     });
     state.usersPayload = payload;
-    setMessage(action === "add" ? `Added ${email}.` : `Removed ${email}.`, "success");
+    const message = action === "add"
+      ? `Added ${email}.`
+      : action === "remove"
+        ? `Removed ${email}.`
+        : `Updated Minecraft management access for ${email}.`;
+    setMessage(message, "success");
     renderUsers();
   }
 
@@ -328,6 +345,22 @@
     try {
       setBusy(true);
       await updateUser("remove", email);
+    } catch (error) {
+      handleError(error);
+    } finally {
+      setBusy(false);
+    }
+  });
+
+  elements.usersList.addEventListener("change", async (event) => {
+    const input = event.target.closest("[data-minecraft-management]");
+    if (!input || input.dataset.minecraftManagementLocked === "true") {
+      return;
+    }
+    const email = String(input.dataset.minecraftManagement || "");
+    try {
+      setBusy(true);
+      await updateUser("set-minecraft-management", email, { minecraftManagement: input.checked });
     } catch (error) {
       handleError(error);
     } finally {

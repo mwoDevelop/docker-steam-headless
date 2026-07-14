@@ -2778,6 +2778,17 @@
     const canSetSunshinePasswordForAccess = canSetSunshinePassword(payload);
     const sunshineStatusMeta = renderSunshineStatusMeta(payload);
     const minecraftStatusMeta = renderMinecraftStatusMeta(payload);
+    const minecraftManagement = payload.minecraftManagement || {};
+    const minecraftManagementUrl = new URL("./minecraft-admin.html", window.location.href);
+    const currentBackendUrl = String(elements.backendUrl && elements.backendUrl.value || "").trim();
+    if (currentBackendUrl) {
+      minecraftManagementUrl.searchParams.set("backend", currentBackendUrl);
+    }
+    minecraftManagementUrl.searchParams.set("hardwareId", String(elements.hardwareSelect && elements.hardwareSelect.value || ""));
+    minecraftManagementUrl.searchParams.set("zone", selectedZone());
+    const minecraftManagementLink = minecraftManagement.authorized
+      ? `<a href="${escapeHtml(minecraftManagementUrl.toString())}">Open management controls</a>`
+      : "<span class=\"access-meta\">Minecraft management access has not been granted to this account.</span>";
 
     elements.access.className = "access";
     elements.access.innerHTML = `
@@ -2835,11 +2846,11 @@
 
         <article class="access-card accent">
           <h3>Minecraft Server</h3>
-          <p>Use this address in Minecraft Multiplayer. Server management actions are available in the Minecraft Server row above.</p>
+          <p>Use this address in Minecraft Multiplayer. Privileged accounts can open the secure server management panel.</p>
           <p class="access-meta">Address: <code>${minecraftAddressEscaped}</code></p>
           ${minecraftStatusMeta}
           <div class="access-links">
-            <a href="#minecraft-management-controls" data-scroll-target="minecraft-management-controls">Open management controls</a>
+            ${minecraftManagementLink}
           </div>
         </article>
 

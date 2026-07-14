@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Minecraft Server Management</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="./styles.css?v=minecraft-management-20260714">
+    <link rel="stylesheet" href="./minecraft-admin.css?v=20260714">
+  </head>
+  <body>
+    <main class="shell">
+      <section class="hero panel">
+        <div>
+          <p class="eyebrow">Privileged access</p>
+          <h1>Minecraft Management</h1>
+          <p class="hero-copy">The panel sends RCON commands through Cloud Run and the local VM agent. RCON is never exposed to the Internet.</p>
+        </div>
+        <div class="hero-note">
+          <p id="manager-identity">Checking management access...</p>
+          <a id="back-to-control" href="./index.html">Back to VM Control</a>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Server</p>
+            <h2 id="server-heading">Loading selected VM...</h2>
+          </div>
+          <button id="refresh" class="ghost" type="button">Refresh</button>
+        </div>
+        <div id="management-status" class="command-status" data-tone="neutral">Loading management status...</div>
+        <div id="agent-notice" class="management-notice hidden"></div>
+      </section>
+
+      <section class="management-grid">
+        <article class="panel">
+          <p class="eyebrow">Console</p>
+          <h2>RCON command</h2>
+          <textarea id="console-command" rows="5" maxlength="300" placeholder="say Server maintenance starts in 5 minutes"></textarea>
+          <button class="action create" type="button" data-action="console">Send command</button>
+        </article>
+
+        <article class="panel">
+          <p class="eyebrow">Players</p>
+          <h2>Online players</h2>
+          <button class="action" type="button" data-action="players">List players</button>
+          <button class="action restart" type="button" data-action="restart">Restart server</button>
+        </article>
+
+        <article class="panel">
+          <p class="eyebrow">Whitelist</p>
+          <h2>Access control</h2>
+          <input id="whitelist-player" type="text" maxlength="16" placeholder="Minecraft player name">
+          <div class="management-actions">
+            <button class="action" type="button" data-action="whitelist-list">List</button>
+            <button class="action create" type="button" data-action="whitelist-add" data-player-input="whitelist-player">Add</button>
+            <button class="action delete" type="button" data-action="whitelist-remove" data-player-input="whitelist-player">Remove</button>
+          </div>
+        </article>
+
+        <article class="panel">
+          <p class="eyebrow">Operators</p>
+          <h2>Server operators</h2>
+          <input id="operator-player" type="text" maxlength="16" placeholder="Minecraft player name">
+          <div class="management-actions">
+            <button class="action" type="button" data-action="op-list">List</button>
+            <button class="action create" type="button" data-action="op-add" data-player-input="operator-player">Grant OP</button>
+            <button class="action delete" type="button" data-action="op-remove" data-player-input="operator-player">Revoke OP</button>
+          </div>
+        </article>
+      </section>
+
+      <section class="panel">
+        <p class="eyebrow">Result</p>
+        <h2>Last server response</h2>
+        <pre id="command-output" class="management-output">No command has been sent from this panel.</pre>
+      </section>
+    </main>
+    <script src="./minecraft-admin.js?v=20260714"></script>
+  </body>
+</html>

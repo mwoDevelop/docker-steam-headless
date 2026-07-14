@@ -256,6 +256,40 @@ EOF
   systemctl enable --now vm-power-action-daemon.service >/dev/null 2>&1 || true
 }
 
+install_minecraft_management_script() {
+  local payload
+  local target=/usr/local/bin/vm-minecraft-management
+  payload="$(metadata_get vm-minecraft-management-script)"
+  [[ -n "$payload" ]] || return 0
+  install -d -m 0755 "$(dirname "$target")"
+  printf '%s\n' "$payload" > "$target"
+  chmod 0755 "$target"
+}
+
+install_minecraft_management_service() {
+  local service_path=/etc/systemd/system/vm-minecraft-management.service
+  if [[ ! -x /usr/local/bin/vm-minecraft-management ]]; then
+    return 0
+  fi
+  cat > "$service_path" <<'EOF'
+[Unit]
+Description=VM Minecraft RCON management agent
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/vm-minecraft-management daemon
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  systemctl daemon-reload
+  systemctl enable --now vm-minecraft-management.service >/dev/null 2>&1 || true
+}
+
 sync_env_metadata() {
   local token project zone name instance_json fingerprint items payload
   token="$(metadata_token || true)"
@@ -620,6 +654,9 @@ if [ -x /usr/local/bin/vm-persist-state ]; then
     exit 1
   fi
 fi
+
+install_minecraft_management_script
+install_minecraft_management_service
 
 if ! gpu_enabled; then
   mark_backup_ready
