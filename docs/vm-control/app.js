@@ -1508,17 +1508,6 @@
     );
   }
 
-  function runningInstancesOutsideCurrentSelection() {
-    return getCreatedInstances().filter((instance) => (
-      String(instance.status || "").toUpperCase() === "RUNNING"
-      && !instanceMatchesCurrentSelection(instance)
-    ));
-  }
-
-  function runningInstancePromptLabel(instance) {
-    return `${instance.name || "unknown"} (${instanceHardwareLabel(instance)}, ${instance.zone || "unknown zone"})`;
-  }
-
   async function refreshInstances(options) {
     const silent = Boolean(options && options.silent);
     const autoSelect = Boolean(options && options.autoSelect);
@@ -2283,28 +2272,6 @@
       }
     }
 
-    let stopRunningInstances = false;
-    if (command === "create" || command === "start") {
-      try {
-        await refreshInstances({ silent: true });
-      } catch (error) {
-        console.warn("Unable to refresh instances before start/create preflight.", error);
-      }
-      const runningInstances = runningInstancesOutsideCurrentSelection();
-      if (runningInstances.length) {
-        const labels = runningInstances.map(runningInstancePromptLabel).join(", ");
-        const confirmed = window.confirm(
-          `Another VM is currently running: ${labels}. Stop it before running "${command}" for the selected Hardware/Zone?`,
-        );
-        if (!confirmed) {
-          setBanner(`Command "${command}" cancelled. Another VM is already running.`, "warning");
-          setCommandStatus(`Command "${command}" cancelled. Running VM was left unchanged.`, "warning");
-          return;
-        }
-        stopRunningInstances = true;
-      }
-    }
-
     const loadingToken = setPageLoading(`Running "${command}"...`);
     setBusy(true);
     const appLabel = command === "install-app" || command === "uninstall-app"
@@ -2318,9 +2285,6 @@
 
     try {
       const body = { command, ...commandTargetParams };
-      if (stopRunningInstances) {
-        body.stopRunningInstances = true;
-      }
       if (command === "delete") {
         body.confirmDelete = true;
       }
