@@ -28,6 +28,15 @@ COMPOSE_IMAGE_OVERRIDE="${COMPOSE_DIR}/docker-compose.image.override.yml"
 MINECRAFT_ROOT=/mnt/games/minecraft-server
 MINECRAFT_COMPOSE_FILE="${MINECRAFT_ROOT}/docker-compose.yml"
 MINECRAFT_SERVICE=minecraft
+RUNTIME_IMAGE_COMPONENT_METADATA_KEY="vm-runtime-image-component"
+RUNTIME_IMAGE_OPERATION_METADATA_KEY="vm-runtime-image-operation"
+RUNTIME_IMAGE_TARGET_REF_METADATA_KEY="vm-runtime-image-target-ref"
+RUNTIME_IMAGE_TARGET_TAG_METADATA_KEY="vm-runtime-image-target-tag"
+RUNTIME_IMAGE_STATUS_METADATA_KEY="vm-runtime-image-status"
+RUNTIME_IMAGE_DETAIL_METADATA_KEY="vm-runtime-image-detail"
+MINECRAFT_IMAGE_METADATA_KEY="vm-minecraft-image"
+DEFAULT_STEAM_HEADLESS_IMAGE="josh5/steam-headless:debian-dev-frontend-revamp"
+DEFAULT_MINECRAFT_IMAGE="itzg/minecraft-server:latest"
 
 metadata_get() {
   local key="$1"
@@ -265,13 +274,166 @@ validated_minecraft_version() {
   printf '%s\n' "LATEST"
 }
 
+runtime_image_state_key() {
+  local component="$1"
+  local field="$2"
+  printf 'vm-runtime-image-%s-%s\n' "$component" "$field"
+}
+
+runtime_image_ref_is_valid() {
+  local component="$1"
+  local ref="$2"
+  case "$component" in
+    steam-headless)
+      [[ "$ref" =~ ^josh5/steam-headless@sha256:[0-9a-f]{64}$ || "$ref" =~ ^josh5/steam-headless:(debian|latest|debian-dev-frontend-revamp)$ ]]
+      ;;
+    minecraft)
+      [[ "$ref" =~ ^itzg/minecraft-server@sha256:[0-9a-f]{64}$ || "$ref" =~ ^itzg/minecraft-server:(latest|stable|java17|java21|java25|[0-9]{4}\.[0-9]{1,2}\.[0-9]{1,2}-java(17|21|25))$ ]]
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+runtime_image_current_ref() {
+  local component="$1"
+  local current=""
+  current="$(metadata_get "$(runtime_image_state_key "$component" current-ref)" || true)"
+  if [[ -n "$current" ]]; then
+    printf '%s\n' "$current"
+    return 0
+  fi
+  case "$component" in
+    steam-headless)
+      current="$(awk -F= '/^STEAM_HEADLESS_IMAGE=/{print substr($0,index($0,"=")+1)}' "$ENVF" 2>/dev/null | tail -n1 || true)"
+      printf '%s\n' "${current:-$DEFAULT_STEAM_HEADLESS_IMAGE}"
+      ;;
+    minecraft)
+      current="$(metadata_get "$MINECRAFT_IMAGE_METADATA_KEY" || true)"
+      printf '%s\n' "${current:-$DEFAULT_MINECRAFT_IMAGE}"
+      ;;
+  esac
+}
+
+runtime_image_current_tag() {
+  local component="$1"
+  local tag=""
+  tag="$(metadata_get "$(runtime_image_state_key "$component" current-tag)" || true)"
+  if [[ -n "$tag" ]]; then
+    printf '%s\n' "$tag"
+    return 0
+  fi
+  runtime_image_current_ref "$component" | sed -n 's#^.*:\([^:@/]*\)$#\1#p'
+}
+
+runtime_image_local_digest_ref() {
+  local component="$1"
+  local fallback="$2"
+  local container="" image="" resolved="" prefix=""
+  case "$component" in
+    steam-headless)
+      container="$(docker ps --filter 'name=steam-headless' --format '{{.ID}}' | head -n1 || true)"
+      prefix="josh5/steam-headless@sha256:"
+      ;;
+    minecraft)
+      container="$(docker ps --filter "name=^/${MINECRAFT_SERVICE}$" --format '{{.ID}}' | head -n1 || true)"
+      prefix="itzg/minecraft-server@sha256:"
+      ;;
+  esac
+  if [[ -n "$container" ]]; then
+    image="$(docker inspect --format '{{.Config.Image}}' "$container" 2>/dev/null || true)"
+  fi
+  image="${image:-$fallback}"
+  resolved="$(docker image inspect "$image" --format '{{range .RepoDigests}}{{println .}}{{end}}' 2>/dev/null | grep -E "^${prefix}" | head -n1 || true)"
+  printf '%s\n' "${resolved:-$fallback}"
+}
+
+runtime_image_set_status() {
+  local status="$1"
+  local detail="$2"
+  local updates
+  updates="$(jq -n \
+    --arg status_key "$RUNTIME_IMAGE_STATUS_METADATA_KEY" \
+    --arg status_value "$status" \
+    --arg detail_key "$RUNTIME_IMAGE_DETAIL_METADATA_KEY" \
+    --arg detail_value "$detail" \
+    '{($status_key): $status_value, ($detail_key): $detail_value}')"
+  set_instance_metadata_values "$updates" || true
+}
+
+set_steam_image_ref() {
+  local image_ref="$1"
+  mkdir -p "$(dirname "$ENVF")"
+  if [[ -f "$ENVF" ]]; then
+    awk -v value="$image_ref" 'BEGIN{replaced=0} $0 ~ /^STEAM_HEADLESS_IMAGE=/ {if (!replaced) print "STEAM_HEADLESS_IMAGE=" value; replaced=1; next} {print} END{if (!replaced) print "STEAM_HEADLESS_IMAGE=" value}' "$ENVF" > "${ENVF}.tmp"
+    mv "${ENVF}.tmp" "$ENVF"
+  else
+    printf 'STEAM_HEADLESS_IMAGE=%s\n' "$image_ref" > "$ENVF"
+  fi
+  chmod 600 "$ENVF"
+}
+
+write_steam_image_override() {
+  local image_ref="$1"
+  runtime_image_ref_is_valid steam-headless "$image_ref" || return 1
+  cat > "$COMPOSE_IMAGE_OVERRIDE" <<EOF
+---
+version: "3.8"
+
+services:
+  steam-headless:
+    image: ${image_ref}
+EOF
+}
+
+runtime_image_commit() {
+  local component="$1"
+  local current_ref="$2"
+  local current_tag="$3"
+  local previous_ref="$4"
+  local previous_tag="$5"
+  local detail="$6"
+  local current_ref_key previous_ref_key current_tag_key previous_tag_key updates
+  current_ref_key="$(runtime_image_state_key "$component" current-ref)"
+  previous_ref_key="$(runtime_image_state_key "$component" previous-ref)"
+  current_tag_key="$(runtime_image_state_key "$component" current-tag)"
+  previous_tag_key="$(runtime_image_state_key "$component" previous-tag)"
+  if [[ "$component" == "steam-headless" ]]; then
+    updates="$(jq -n \
+      --arg current_ref_key "$current_ref_key" --arg current_ref "$current_ref" \
+      --arg previous_ref_key "$previous_ref_key" --arg previous_ref "$previous_ref" \
+      --arg current_tag_key "$current_tag_key" --arg current_tag "$current_tag" \
+      --arg previous_tag_key "$previous_tag_key" --arg previous_tag "$previous_tag" \
+      --arg steam_key "$STEAM_ENV_METADATA_KEY" --arg steam_env "$(cat "$ENVF")" \
+      --arg status_key "$RUNTIME_IMAGE_STATUS_METADATA_KEY" --arg detail_key "$RUNTIME_IMAGE_DETAIL_METADATA_KEY" --arg detail "$detail" \
+      --arg operation_key "$RUNTIME_IMAGE_OPERATION_METADATA_KEY" --arg target_ref_key "$RUNTIME_IMAGE_TARGET_REF_METADATA_KEY" --arg target_tag_key "$RUNTIME_IMAGE_TARGET_TAG_METADATA_KEY" \
+      '{($current_ref_key):$current_ref,($previous_ref_key):$previous_ref,($current_tag_key):$current_tag,($previous_tag_key):$previous_tag,($steam_key):$steam_env,($status_key):"ready",($detail_key):$detail,($operation_key):null,($target_ref_key):null,($target_tag_key):null}')"
+  else
+    updates="$(jq -n \
+      --arg current_ref_key "$current_ref_key" --arg current_ref "$current_ref" \
+      --arg previous_ref_key "$previous_ref_key" --arg previous_ref "$previous_ref" \
+      --arg current_tag_key "$current_tag_key" --arg current_tag "$current_tag" \
+      --arg previous_tag_key "$previous_tag_key" --arg previous_tag "$previous_tag" \
+      --arg minecraft_key "$MINECRAFT_IMAGE_METADATA_KEY" --arg minecraft_ref "$current_ref" \
+      --arg status_key "$RUNTIME_IMAGE_STATUS_METADATA_KEY" --arg detail_key "$RUNTIME_IMAGE_DETAIL_METADATA_KEY" --arg detail "$detail" \
+      --arg operation_key "$RUNTIME_IMAGE_OPERATION_METADATA_KEY" --arg target_ref_key "$RUNTIME_IMAGE_TARGET_REF_METADATA_KEY" --arg target_tag_key "$RUNTIME_IMAGE_TARGET_TAG_METADATA_KEY" \
+      '{($current_ref_key):$current_ref,($previous_ref_key):$previous_ref,($current_tag_key):$current_tag,($previous_tag_key):$previous_tag,($minecraft_key):$minecraft_ref,($status_key):"ready",($detail_key):$detail,($operation_key):null,($target_ref_key):null,($target_tag_key):null}')"
+  fi
+  set_instance_metadata_values "$updates"
+}
+
 ensure_minecraft_compose() {
   local version="${1:-LATEST}"
+  local image_ref="${2:-$(runtime_image_current_ref minecraft)}"
+  if ! runtime_image_ref_is_valid minecraft "$image_ref"; then
+    image_ref="$DEFAULT_MINECRAFT_IMAGE"
+  fi
   mkdir -p "${MINECRAFT_ROOT}/data"
   cat > "$MINECRAFT_COMPOSE_FILE" <<EOF
 services:
   minecraft:
-    image: itzg/minecraft-server:latest
+    image: ${image_ref}
     container_name: minecraft
     restart: unless-stopped
     ports:
@@ -607,6 +769,112 @@ recreate_steam_headless_stack() {
   (cd "$COMPOSE_DIR" && docker compose "${files[@]}" up -d --force-recreate)
 }
 
+update_steam_runtime_image() {
+  local target_ref="$1"
+  local previous_ref="$2"
+  if ! docker pull "$target_ref"; then
+    return 1
+  fi
+  set_steam_image_ref "$target_ref"
+  write_steam_image_override "$target_ref"
+  if recreate_steam_headless_stack && apply_sunshine_state_credentials && wait_for_local_sunshine_ready; then
+    return 0
+  fi
+  log "Steam Headless image update failed; restoring previous image."
+  set_steam_image_ref "$previous_ref"
+  write_steam_image_override "$previous_ref"
+  recreate_steam_headless_stack || true
+  apply_sunshine_state_credentials || true
+  wait_for_local_sunshine_ready || true
+  return 1
+}
+
+update_minecraft_runtime_image() {
+  local target_ref="$1"
+  local previous_ref="$2"
+  local version
+  version="$(validated_minecraft_version)"
+  if ! docker pull "$target_ref"; then
+    return 1
+  fi
+  ensure_minecraft_compose "$version" "$target_ref"
+  if minecraft_compose up -d --no-deps --force-recreate "$MINECRAFT_SERVICE" && wait_for_local_minecraft_ready; then
+    return 0
+  fi
+  log "Minecraft image update failed; restoring previous image."
+  ensure_minecraft_compose "$version" "$previous_ref"
+  minecraft_compose up -d --no-deps --force-recreate "$MINECRAFT_SERVICE" || true
+  wait_for_local_minecraft_ready || true
+  return 1
+}
+
+run_runtime_image_action() {
+  local action="$1"
+  local token="$2"
+  local component mode target_ref target_tag previous_ref previous_tag current_ref current_tag target_phase
+  component="$(metadata_get "$RUNTIME_IMAGE_COMPONENT_METADATA_KEY" || true)"
+  mode="$(metadata_get "$RUNTIME_IMAGE_OPERATION_METADATA_KEY" || true)"
+  target_ref="$(metadata_get "$RUNTIME_IMAGE_TARGET_REF_METADATA_KEY" || true)"
+  target_tag="$(metadata_get "$RUNTIME_IMAGE_TARGET_TAG_METADATA_KEY" || true)"
+  if [[ "$component" != "steam-headless" && "$component" != "minecraft" ]]; then
+    runtime_image_set_status "failed" "Unsupported runtime image component."
+    set_power_action_status "$action" "$token" "failed" ""
+    return 1
+  fi
+  if [[ "$mode" != "pull" && "$mode" != "apply" && "$mode" != "rollback" ]]; then
+    runtime_image_set_status "failed" "Unsupported runtime image operation."
+    set_power_action_status "$action" "$token" "failed" ""
+    return 1
+  fi
+  if [[ "$mode" == "rollback" ]]; then
+    target_ref="$(metadata_get "$(runtime_image_state_key "$component" previous-ref)" || true)"
+    target_tag="$(metadata_get "$(runtime_image_state_key "$component" previous-tag)" || true)"
+  fi
+  if ! runtime_image_ref_is_valid "$component" "$target_ref"; then
+    runtime_image_set_status "failed" "Selected runtime image reference is invalid."
+    set_power_action_status "$action" "$token" "failed" ""
+    return 1
+  fi
+
+  current_ref="$(runtime_image_current_ref "$component")"
+  current_ref="$(runtime_image_local_digest_ref "$component" "$current_ref")"
+  current_tag="$(runtime_image_current_tag "$component")"
+  set_power_action_status "$action" "$token" "running"
+  runtime_image_set_status "running" "${mode^} ${component} image ${target_tag:-$target_ref}."
+
+  if [[ "$mode" == "pull" ]]; then
+    if docker pull "$target_ref"; then
+      runtime_image_set_status "pulled" "Image ${target_tag:-$target_ref} was pulled without restarting a service."
+      set_power_action_status "$action" "$token" "pulled" ""
+      return 0
+    fi
+    runtime_image_set_status "failed" "Unable to pull image ${target_tag:-$target_ref}."
+    set_power_action_status "$action" "$token" "failed" ""
+    return 1
+  fi
+
+  if [[ "$component" == "steam-headless" ]]; then
+    set_sunshine_status "starting" "Updating Steam Headless and Sunshine image."
+    update_steam_runtime_image "$target_ref" "$current_ref" || {
+      runtime_image_set_status "failed" "Steam Headless image update failed; previous image was restored."
+      set_power_action_status "$action" "$token" "failed" ""
+      return 1
+    }
+  else
+    set_minecraft_status "starting" "Updating Minecraft container image."
+    update_minecraft_runtime_image "$target_ref" "$current_ref" || {
+      runtime_image_set_status "failed" "Minecraft image update failed; previous image was restored."
+      set_power_action_status "$action" "$token" "failed" ""
+      return 1
+    }
+  fi
+
+  runtime_image_commit "$component" "$target_ref" "$target_tag" "$current_ref" "$current_tag" "${mode^} completed for ${component} image ${target_tag:-$target_ref}."
+  target_phase="updated"
+  [[ "$mode" == "rollback" ]] && target_phase="rolled-back"
+  set_power_action_status "$action" "$token" "$target_phase" ""
+}
+
 apply_sunshine_password() {
   local action="$1"
   local token="$2"
@@ -917,6 +1185,9 @@ run_daemon() {
           ;;
         install-minecraft|start-minecraft|stop-minecraft|restart-minecraft|remove-minecraft)
           run_minecraft_action "$action" "$token" || true
+          ;;
+        update-runtime-image)
+          run_runtime_image_action "$action" "$token" || true
           ;;
       esac
     fi

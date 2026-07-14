@@ -5,6 +5,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import secrets
 import time
 from datetime import datetime, timedelta, timezone
@@ -105,6 +106,7 @@ CONFIG = {
     "access_users_secret_name": os.environ.get("ACCESS_USERS_SECRET_NAME", "steam-vm-control-allowed-users"),
     "endpoints_secret_name": os.environ.get("ENDPOINTS_SECRET_NAME", "steam-vm-control-endpoints"),
     "minecraft_versions_secret_name": os.environ.get("MINECRAFT_VERSIONS_SECRET_NAME", ""),
+    "runtime_images_secret_name": os.environ.get("RUNTIME_IMAGES_SECRET_NAME", ""),
     "vm_minecraft_management_script_b64": os.environ.get("VM_MINECRAFT_MANAGEMENT_SCRIPT_B64", ""),
     "session_token_secret": os.environ.get("VM_CONTROL_SESSION_SECRET", ""),
     "capacity_cleanup_token": os.environ.get("CAPACITY_RESERVATION_CLEANUP_TOKEN", ""),
@@ -132,6 +134,17 @@ MINECRAFT_VERSION_METADATA_KEY = "vm-minecraft-version"
 MINECRAFT_MANAGEMENT_REQUEST_METADATA_KEY = "vm-minecraft-management-request"
 MINECRAFT_MANAGEMENT_RESULT_METADATA_KEY = "vm-minecraft-management-result"
 MINECRAFT_MANAGEMENT_AGENT_METADATA_KEY = "vm-minecraft-management-agent"
+RUNTIME_IMAGE_COMPONENT_METADATA_KEY = "vm-runtime-image-component"
+RUNTIME_IMAGE_OPERATION_METADATA_KEY = "vm-runtime-image-operation"
+RUNTIME_IMAGE_TARGET_REF_METADATA_KEY = "vm-runtime-image-target-ref"
+RUNTIME_IMAGE_TARGET_TAG_METADATA_KEY = "vm-runtime-image-target-tag"
+RUNTIME_IMAGE_CURRENT_REF_METADATA_KEY = "vm-runtime-image-current-ref"
+RUNTIME_IMAGE_CURRENT_TAG_METADATA_KEY = "vm-runtime-image-current-tag"
+RUNTIME_IMAGE_PREVIOUS_REF_METADATA_KEY = "vm-runtime-image-previous-ref"
+RUNTIME_IMAGE_PREVIOUS_TAG_METADATA_KEY = "vm-runtime-image-previous-tag"
+RUNTIME_IMAGE_STATUS_METADATA_KEY = "vm-runtime-image-status"
+RUNTIME_IMAGE_DETAIL_METADATA_KEY = "vm-runtime-image-detail"
+MINECRAFT_IMAGE_METADATA_KEY = "vm-minecraft-image"
 POWER_ACTION_METADATA_KEY = "vm-pending-power-action"
 POWER_ACTION_STATUS_METADATA_KEY = "vm-power-action-status"
 RESTORE_MODE_METADATA_KEY = "vm-restore-mode"
@@ -233,6 +246,30 @@ PAPERMC_PROJECT_URL = "https://fill.papermc.io/v3/projects/paper"
 PAPERMC_USER_AGENT = "docker-steam-headless-vm-control/1.0"
 MINECRAFT_VERSION_CACHE: dict[str, Any] = {
     "versions": [],
+    "source": "static",
+    "updatedAt": "",
+    "lastError": "",
+    "loaded": False,
+}
+DEFAULT_STEAM_HEADLESS_IMAGE: Final = "josh5/steam-headless:debian-dev-frontend-revamp"
+DEFAULT_MINECRAFT_IMAGE: Final = "itzg/minecraft-server:latest"
+DOCKER_HUB_TAGS_URL: Final = "https://hub.docker.com/v2/repositories/{repository}/tags"
+RUNTIME_IMAGE_COMPONENTS: Final = {
+    "steam-headless": {
+        "label": "Steam Headless + Sunshine",
+        "repository": "josh5/steam-headless",
+        "requiresGpu": True,
+        "fallbackTags": ["debian", "latest", "debian-dev-frontend-revamp"],
+    },
+    "minecraft": {
+        "label": "Minecraft container",
+        "repository": "itzg/minecraft-server",
+        "requiresGpu": False,
+        "fallbackTags": ["stable", "latest"],
+    },
+}
+RUNTIME_IMAGE_CATALOG_CACHE: dict[str, Any] = {
+    "components": {},
     "source": "static",
     "updatedAt": "",
     "lastError": "",
@@ -590,6 +627,371 @@ def save_persisted_minecraft_versions(versions: list[str], *, source: str, updat
     )
     if response.status_code >= 400:
         raise ApiError(f"Unable to save Minecraft versions cache: {response.text}", 502)
+
+
+def runtime_image_component(raw_component: Any) -> str:
+    component = str(raw_component or "").strip().lower()
+    if component not in RUNTIME_IMAGE_COMPONENTS:
+        raise ApiError("Unsupported runtime image component.", 400)
+    return component
+
+
+def runtime_image_state_metadata_key(component: str, field: str) -> str:
+    return f"vm-runtime-image-{component}-{field}"
+
+
+def runtime_image_tag_allowed(component: str, raw_tag: Any) -> bool:
+    tag = str(raw_tag or "").strip()
+    if component == "steam-headless":
+        return tag in set(RUNTIME_IMAGE_COMPONENTS[component]["fallbackTags"])
+    return bool(
+        tag in {"latest", "stable", "java17", "java21", "java25"}
+        or re.fullmatch(r"\d{4}\.\d{1,2}\.\d{1,2}-java(?:17|21|25)", tag)
+    )
+
+
+def runtime_image_digest_ref(repository: str, raw_digest: Any) -> str:
+    digest = str(raw_digest or "").strip().lower()
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+        return ""
+    return f"{repository}@{digest}"
+
+
+def runtime_image_catalog_template() -> dict[str, Any]:
+    return {
+        "components": {
+            component: {
+                "label": str(definition["label"]),
+                "repository": str(definition["repository"]),
+                "requiresGpu": bool(definition["requiresGpu"]),
+                "candidates": [
+                    {"tag": tag, "imageRef": "", "updatedAt": ""}
+                    for tag in definition["fallbackTags"]
+                ],
+            }
+            for component, definition in RUNTIME_IMAGE_COMPONENTS.items()
+        },
+        "source": "static",
+        "updatedAt": "",
+        "lastError": "",
+    }
+
+
+def normalize_runtime_image_catalog(raw_value: Any) -> dict[str, Any]:
+    result = runtime_image_catalog_template()
+    if not isinstance(raw_value, dict):
+        return result
+    raw_components = raw_value.get("components")
+    if not isinstance(raw_components, dict):
+        return result
+    for component, definition in RUNTIME_IMAGE_COMPONENTS.items():
+        raw_component = raw_components.get(component)
+        raw_candidates = raw_component.get("candidates") if isinstance(raw_component, dict) else []
+        candidates: list[dict[str, str]] = []
+        if isinstance(raw_candidates, list):
+            for raw_candidate in raw_candidates:
+                if not isinstance(raw_candidate, dict):
+                    continue
+                tag = str(raw_candidate.get("tag") or "").strip()
+                image_ref = str(raw_candidate.get("imageRef") or "").strip()
+                repository = str(definition["repository"])
+                if not runtime_image_tag_allowed(component, tag):
+                    continue
+                if not image_ref.startswith(f"{repository}@sha256:"):
+                    continue
+                if not runtime_image_digest_ref(repository, image_ref.removeprefix(f"{repository}@")):
+                    continue
+                if any(existing["imageRef"] == image_ref for existing in candidates):
+                    continue
+                candidates.append(
+                    {
+                        "tag": tag,
+                        "imageRef": image_ref,
+                        "updatedAt": str(raw_candidate.get("updatedAt") or ""),
+                    }
+                )
+        if candidates:
+            result["components"][component]["candidates"] = candidates
+    result["source"] = str(raw_value.get("source") or "cache")
+    result["updatedAt"] = str(raw_value.get("updatedAt") or "")
+    result["lastError"] = str(raw_value.get("lastError") or "")
+    return result
+
+
+def load_persisted_runtime_image_catalog() -> None:
+    if RUNTIME_IMAGE_CATALOG_CACHE.get("loaded"):
+        return
+    RUNTIME_IMAGE_CATALOG_CACHE["loaded"] = True
+    secret_name = str(CONFIG["runtime_images_secret_name"] or "").strip()
+    if not secret_name:
+        return
+    try:
+        response = compute_session().get(
+            f"{SECRET_MANAGER_BASE_URL}/{secret_path(secret_name)}/versions/latest:access",
+            timeout=30,
+        )
+        if response.status_code == 404:
+            return
+        if response.status_code >= 400:
+            raise ApiError(f"Unable to read runtime image catalog: {response.text}", 502)
+        encoded = str(((response.json() or {}).get("payload") or {}).get("data") or "")
+        payload = json.loads(base64.b64decode(encoded).decode("utf-8"))
+        catalog = normalize_runtime_image_catalog(payload)
+        RUNTIME_IMAGE_CATALOG_CACHE.update(catalog)
+    except Exception as error:
+        logging.warning("Unable to load persisted runtime image catalog: %s", error)
+        RUNTIME_IMAGE_CATALOG_CACHE["lastError"] = str(error)
+
+
+def save_persisted_runtime_image_catalog(catalog: dict[str, Any]) -> None:
+    secret_name = str(CONFIG["runtime_images_secret_name"] or "").strip()
+    if not secret_name:
+        raise ApiError("Runtime image catalog secret is not configured.", 500)
+    payload = json.dumps(catalog, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    response = compute_session().post(
+        f"{SECRET_MANAGER_BASE_URL}/{secret_path(secret_name)}:addVersion",
+        json={"payload": {"data": base64.b64encode(payload).decode("ascii")}},
+        timeout=30,
+    )
+    if response.status_code >= 400:
+        raise ApiError(f"Unable to save runtime image catalog: {response.text}", 502)
+
+
+def fetch_runtime_image_component_catalog(component: str) -> dict[str, Any]:
+    definition = RUNTIME_IMAGE_COMPONENTS[component]
+    repository = str(definition["repository"])
+    response = requests.get(
+        DOCKER_HUB_TAGS_URL.format(repository=repository),
+        params={"page_size": 100, "ordering": "last_updated"},
+        headers={"Accept": "application/json", "User-Agent": "docker-steam-headless-vm-control/1.0"},
+        timeout=30,
+    )
+    if response.status_code >= 400:
+        raise ApiError(f"Docker Hub returned {response.status_code} for {repository}.", 502)
+    payload = response.json()
+    raw_tags = payload.get("results") if isinstance(payload, dict) else []
+    if not isinstance(raw_tags, list):
+        raise ApiError(f"Docker Hub returned an invalid tag list for {repository}.", 502)
+    candidates: list[dict[str, str]] = []
+    for raw_tag in raw_tags:
+        if not isinstance(raw_tag, dict):
+            continue
+        tag = str(raw_tag.get("name") or "").strip()
+        if not runtime_image_tag_allowed(component, tag):
+            continue
+        digest = ""
+        images = raw_tag.get("images")
+        if isinstance(images, list):
+            for image in images:
+                if not isinstance(image, dict):
+                    continue
+                if str(image.get("architecture") or "") == "amd64" and str(image.get("os") or "") == "linux":
+                    digest = str(image.get("digest") or "")
+                    break
+        image_ref = runtime_image_digest_ref(repository, digest)
+        if not image_ref:
+            continue
+        candidates.append(
+            {
+                "tag": tag,
+                "imageRef": image_ref,
+                "updatedAt": str(raw_tag.get("last_updated") or ""),
+            }
+        )
+    if not candidates:
+        raise ApiError(f"Docker Hub did not return a supported image version for {repository}.", 502)
+    candidates.sort(key=lambda candidate: (candidate["updatedAt"], candidate["tag"]), reverse=True)
+    return {
+        "label": str(definition["label"]),
+        "repository": repository,
+        "requiresGpu": bool(definition["requiresGpu"]),
+        "candidates": candidates[:24],
+    }
+
+
+def refresh_runtime_image_catalog() -> dict[str, Any]:
+    load_persisted_runtime_image_catalog()
+    previous = normalize_runtime_image_catalog(RUNTIME_IMAGE_CATALOG_CACHE)
+    try:
+        components = {
+            component: fetch_runtime_image_component_catalog(component)
+            for component in RUNTIME_IMAGE_COMPONENTS
+        }
+        updated_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        catalog = {
+            "components": components,
+            "source": "docker-hub",
+            "updatedAt": updated_at,
+            "lastError": "",
+        }
+        save_persisted_runtime_image_catalog(catalog)
+        RUNTIME_IMAGE_CATALOG_CACHE.update(catalog)
+        RUNTIME_IMAGE_CATALOG_CACHE["loaded"] = True
+        return catalog
+    except Exception as error:
+        message = error.message if isinstance(error, ApiError) else str(error)
+        RUNTIME_IMAGE_CATALOG_CACHE.update(previous)
+        RUNTIME_IMAGE_CATALOG_CACHE["loaded"] = True
+        RUNTIME_IMAGE_CATALOG_CACHE["lastError"] = message
+        return normalize_runtime_image_catalog(RUNTIME_IMAGE_CATALOG_CACHE)
+
+
+def runtime_image_catalog() -> dict[str, Any]:
+    load_persisted_runtime_image_catalog()
+    catalog = normalize_runtime_image_catalog(RUNTIME_IMAGE_CATALOG_CACHE)
+    has_digest = any(
+        candidate.get("imageRef")
+        for component in catalog["components"].values()
+        for candidate in component.get("candidates", [])
+    )
+    if not has_digest:
+        catalog = refresh_runtime_image_catalog()
+    return normalize_runtime_image_catalog(catalog)
+
+
+def runtime_image_candidate(component: str, raw_image_ref: Any) -> dict[str, str]:
+    image_ref = str(raw_image_ref or "").strip()
+    if not image_ref:
+        raise ApiError("A runtime image version must be selected.", 400)
+    catalog = runtime_image_catalog()
+    candidates = catalog["components"][component].get("candidates", [])
+    for candidate in candidates:
+        if candidate.get("imageRef") == image_ref:
+            return dict(candidate)
+    raise ApiError("Selected runtime image is not in the trusted version catalog. Refresh the catalog and try again.", 400)
+
+
+def runtime_image_reference_from_instance(instance: dict[str, Any] | None, component: str) -> str:
+    if instance is None:
+        return ""
+    current = metadata_value(instance, runtime_image_state_metadata_key(component, "current-ref")).strip()
+    if current:
+        return current
+    if component == "steam-headless":
+        return metadata_env_value(metadata_value(instance, STEAM_ENV_METADATA_KEY), "STEAM_HEADLESS_IMAGE") or DEFAULT_STEAM_HEADLESS_IMAGE
+    return metadata_value(instance, MINECRAFT_IMAGE_METADATA_KEY).strip() or DEFAULT_MINECRAFT_IMAGE
+
+
+def runtime_image_instance_payload(instance: dict[str, Any] | None) -> dict[str, Any]:
+    return {
+        "steam-headless": {
+            "currentRef": runtime_image_reference_from_instance(instance, "steam-headless"),
+            "previousRef": metadata_value(instance, runtime_image_state_metadata_key("steam-headless", "previous-ref")).strip(),
+            "currentTag": metadata_value(instance, runtime_image_state_metadata_key("steam-headless", "current-tag")).strip(),
+            "previousTag": metadata_value(instance, runtime_image_state_metadata_key("steam-headless", "previous-tag")).strip(),
+        },
+        "minecraft": {
+            "currentRef": runtime_image_reference_from_instance(instance, "minecraft"),
+            "previousRef": metadata_value(instance, runtime_image_state_metadata_key("minecraft", "previous-ref")).strip(),
+            "currentTag": metadata_value(instance, runtime_image_state_metadata_key("minecraft", "current-tag")).strip(),
+            "previousTag": metadata_value(instance, runtime_image_state_metadata_key("minecraft", "previous-tag")).strip(),
+        },
+        "operation": metadata_value(instance, RUNTIME_IMAGE_OPERATION_METADATA_KEY).strip(),
+        "status": metadata_value(instance, RUNTIME_IMAGE_STATUS_METADATA_KEY).strip(),
+        "detail": metadata_value(instance, RUNTIME_IMAGE_DETAIL_METADATA_KEY).strip(),
+    }
+
+
+def build_admin_runtime_images_payload(admin_user: dict[str, Any]) -> dict[str, Any]:
+    endpoints: list[dict[str, Any]] = []
+    for endpoint in read_endpoint_records():
+        instance = endpoint_instance_or_none(endpoint)
+        endpoints.append(
+            {
+                **endpoint_public_payload(endpoint),
+                "instanceState": str((instance or {}).get("status", "NOT_FOUND")),
+                "sunshine": build_sunshine_status(instance),
+                "minecraft": build_minecraft_status(instance),
+                "runtimeImages": runtime_image_instance_payload(instance),
+            }
+        )
+    return {"user": admin_user, "catalog": runtime_image_catalog(), "endpoints": endpoints}
+
+
+def execute_admin_runtime_image_action(admin_user: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    action = str(payload.get("action") or "").strip().lower()
+    if action == "refresh-catalog":
+        refresh_runtime_image_catalog()
+        return build_admin_runtime_images_payload(admin_user)
+    if action not in {"pull", "apply", "rollback"}:
+        raise ApiError("Unsupported runtime image action.", 400)
+
+    apply_target_overrides(payload)
+    instance = get_instance_or_none()
+    if instance is None:
+        raise ApiError("Selected endpoint does not have a VM.", 400)
+    if str(instance.get("status", "")).upper() != "RUNNING":
+        raise ApiError("Runtime image operations require a running VM.", 400)
+    require_no_active_power_action(instance, "runtime image update")
+
+    component = runtime_image_component(payload.get("component"))
+    if component == "steam-headless" and is_gpu_disabled_for_instance(instance):
+        raise ApiError("Steam Headless and Sunshine image updates require a GPU-enabled VM.", 409)
+    if component == "minecraft" and action in {"apply", "rollback"}:
+        if minecraft_state(instance) != "running":
+            raise ApiError("Minecraft container updates require a running installed Minecraft server.", 409)
+    if action in {"apply", "rollback"}:
+        if not bool(payload.get("confirm")):
+            raise ApiError("Runtime image update requires explicit confirmation.", 400)
+        require_live_backup_ready(instance, "runtime image update")
+
+    current_ref = runtime_image_reference_from_instance(instance, component)
+    current_tag = metadata_value(instance, runtime_image_state_metadata_key(component, "current-tag")).strip()
+    if action == "rollback":
+        target_ref = metadata_value(instance, runtime_image_state_metadata_key(component, "previous-ref")).strip()
+        target_tag = metadata_value(instance, runtime_image_state_metadata_key(component, "previous-tag")).strip()
+        if not target_ref:
+            raise ApiError("No previous immutable image digest is available for rollback.", 400)
+    else:
+        candidate = runtime_image_candidate(component, payload.get("imageRef"))
+        target_ref = candidate["imageRef"]
+        target_tag = candidate["tag"]
+
+    if action == "apply" and target_ref == current_ref:
+        raise ApiError("Selected image is already active for this component.", 400)
+
+    action_name = "update-runtime-image"
+    status_detail = (
+        f"Pulling {component} image {target_tag or target_ref}."
+        if action == "pull"
+        else f"{('Rolling back' if action == 'rollback' else 'Updating')} {component} image to {target_tag or target_ref}."
+    )
+    extra_metadata: dict[str, str | None] = {
+        RUNTIME_IMAGE_COMPONENT_METADATA_KEY: component,
+        RUNTIME_IMAGE_OPERATION_METADATA_KEY: action,
+        RUNTIME_IMAGE_TARGET_REF_METADATA_KEY: target_ref,
+        RUNTIME_IMAGE_TARGET_TAG_METADATA_KEY: target_tag,
+        RUNTIME_IMAGE_STATUS_METADATA_KEY: "requested",
+        RUNTIME_IMAGE_DETAIL_METADATA_KEY: status_detail,
+    }
+    if component == "minecraft":
+        extra_metadata[MINECRAFT_STATUS_METADATA_KEY] = "starting"
+        extra_metadata[MINECRAFT_STATUS_DETAIL_METADATA_KEY] = status_detail
+
+    instance, token = request_live_power_action(
+        instance,
+        action=action_name,
+        status_detail=status_detail,
+        extra_metadata=extra_metadata,
+        sunshine_state="starting" if component == "steam-headless" else None,
+    )
+    target_phase = {"pull": "pulled", "apply": "updated", "rollback": "rolled-back"}[action]
+    wait_for_power_action_phase(
+        action=action_name,
+        token=token,
+        target_phase=target_phase,
+        timeout_seconds=900,
+    )
+    result = build_admin_runtime_images_payload(admin_user)
+    result["operation"] = {
+        "action": action,
+        "component": component,
+        "targetRef": target_ref,
+        "targetTag": target_tag,
+        "previousRef": current_ref,
+        "previousTag": current_tag,
+    }
+    return result
 
 
 def configured_allowed_emails() -> set[str]:
@@ -2013,6 +2415,7 @@ def handle_unexpected_error(error: Exception):
 @app.route("/api/config", methods=["GET", "OPTIONS"])
 @app.route("/api/admin/users", methods=["GET", "POST", "OPTIONS"])
 @app.route("/api/admin/endpoints", methods=["GET", "POST", "OPTIONS"])
+@app.route("/api/admin/runtime-images", methods=["GET", "POST", "OPTIONS"])
 @app.route("/api/hardware", methods=["GET", "OPTIONS"])
 @app.route("/api/instances", methods=["GET", "OPTIONS"])
 @app.route("/api/price", methods=["GET", "OPTIONS"])
@@ -2097,6 +2500,13 @@ def options_passthrough():
             raise ApiError("Unsupported admin action.", 400)
         write_access_user_profiles(profiles)
         return jsonify(build_admin_users_payload(admin_user))
+
+    if request.path == "/api/admin/runtime-images":
+        admin_user = require_admin_user()
+        if request.method == "GET":
+            return jsonify(build_admin_runtime_images_payload(admin_user))
+        payload = request.get_json(silent=True) or {}
+        return jsonify(execute_admin_runtime_image_action(admin_user, payload))
 
     if request.path == "/api/admin/endpoints":
         admin_user = require_admin_user()
@@ -3400,7 +3810,8 @@ def wait_for_power_action_phase(
             if phase == target_phase:
                 return last_instance
             if phase == "failed":
-                raise ApiError(f"VM action {action} failed.", 502)
+                runtime_detail = metadata_value(last_instance, RUNTIME_IMAGE_DETAIL_METADATA_KEY).strip()
+                raise ApiError(runtime_detail or f"VM action {action} failed.", 502)
         time.sleep(4)
 
     if last_instance:
@@ -3848,6 +4259,17 @@ def build_sunshine_status(instance: dict[str, Any] | None) -> dict[str, str]:
             "detail": detail or "Updating Sunshine application list.",
             "version": version,
         }
+    if (
+        power_action == "update-runtime-image"
+        and phase in {"requested", "running"}
+        and metadata_value(instance, RUNTIME_IMAGE_COMPONENT_METADATA_KEY).strip() == "steam-headless"
+    ):
+        return {
+            "state": "starting",
+            "label": "Updating image",
+            "detail": detail or metadata_value(instance, RUNTIME_IMAGE_DETAIL_METADATA_KEY) or "Updating Steam Headless and Sunshine image.",
+            "version": version,
+        }
     if power_action in {"delete", "stop"} and phase in {"requested", "running", "backed-up", "stopping"}:
         return {
             "state": "stopping",
@@ -4047,6 +4469,17 @@ def build_minecraft_status(instance: dict[str, Any] | None) -> dict[str, str]:
             "state": action_states.get(power_action, "starting"),
             "label": action_labels.get(power_action, "Updating"),
             "detail": detail or "Minecraft server action is running.",
+            "version": version,
+        }
+    if (
+        power_action == "update-runtime-image"
+        and phase in {"requested", "running"}
+        and metadata_value(instance, RUNTIME_IMAGE_COMPONENT_METADATA_KEY).strip() == "minecraft"
+    ):
+        return {
+            "state": "starting",
+            "label": "Updating image",
+            "detail": detail or metadata_value(instance, RUNTIME_IMAGE_DETAIL_METADATA_KEY) or "Updating Minecraft container image.",
             "version": version,
         }
 

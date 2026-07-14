@@ -24,6 +24,9 @@
     adminMessage: document.querySelector("#admin-message"),
     usersList: document.querySelector("#users-list"),
     endpointsList: document.querySelector("#endpoints-list"),
+    refreshRuntimeImages: document.querySelector("#refresh-runtime-images"),
+    runtimeEndpoint: document.querySelector("#runtime-endpoint"),
+    runtimeImagesList: document.querySelector("#runtime-images-list"),
   };
 
   const state = {
@@ -36,6 +39,7 @@
     isBusy: false,
     usersPayload: null,
     endpointsPayload: null,
+    runtimeImagesPayload: null,
   };
 
   function loadConfig() {
@@ -71,6 +75,11 @@
     document.querySelectorAll("[data-endpoint-action], [data-endpoint-zone]").forEach((input) => {
       input.disabled = nextBusy || !state.user;
     });
+    elements.refreshRuntimeImages.disabled = nextBusy || !state.user;
+    elements.runtimeEndpoint.disabled = nextBusy || !state.user;
+    document.querySelectorAll("[data-runtime-action], [data-runtime-image-select]").forEach((input) => {
+      input.disabled = nextBusy || !state.user || input.dataset.runtimeDisabled === "true";
+    });
   }
 
   function setAuthStatus(message, tone) {
@@ -96,6 +105,7 @@
     }
     renderUsers();
     renderEndpoints();
+    renderRuntimeImages();
     setBusy(state.isBusy);
   }
 
@@ -194,6 +204,77 @@
     }).join("");
   }
 
+  function runtimeComponentRow(endpoint, componentId, definition) {
+    const details = endpoint.runtimeImages && endpoint.runtimeImages[componentId] || {};
+    const candidates = Array.isArray(definition.candidates) ? definition.candidates : [];
+    const currentRef = String(details.currentRef || "");
+    const previousRef = String(details.previousRef || "");
+    const currentTag = String(details.currentTag || "");
+    const isRunning = String(endpoint.instanceState || "").toUpperCase() === "RUNNING";
+    const minecraftReady = componentId !== "minecraft" || String(endpoint.minecraft && endpoint.minecraft.state || "") === "running";
+    const canApply = isRunning && minecraftReady && candidates.some((candidate) => candidate.imageRef);
+    const canRollback = isRunning && minecraftReady && Boolean(previousRef);
+    const options = candidates.map((candidate) => {
+      const ref = String(candidate.imageRef || "");
+      const label = `${candidate.tag || "untagged"}${candidate.updatedAt ? ` · ${candidate.updatedAt.slice(0, 10)}` : ""}`;
+      return `<option value="${escapeHtml(ref)}" ${ref && ref === currentRef ? "selected" : ""} ${ref ? "" : "disabled"}>${escapeHtml(label)}</option>`;
+    }).join("");
+    const status = details.detail ? `<br><span>${escapeHtml(details.detail)}</span>` : "";
+    return `
+      <div class="admin-user-row fixed">
+        <div>
+          <code>${escapeHtml(definition.label || componentId)}</code><br>
+          <span>Current: ${escapeHtml(currentTag || currentRef || "not recorded")}</span>
+          ${previousRef ? `<br><span>Rollback: ${escapeHtml(details.previousTag || previousRef)}</span>` : ""}
+          ${status}
+        </div>
+        <label class="access-meta">Target
+          <select data-runtime-image-select="${escapeHtml(componentId)}">${options || '<option value="">Refresh trusted versions first</option>'}</select>
+        </label>
+        <button class="action start" type="button" data-runtime-action="pull" data-runtime-component="${escapeHtml(componentId)}" data-runtime-disabled="${isRunning ? "false" : "true"}">Pull Only</button>
+        <button class="action create" type="button" data-runtime-action="apply" data-runtime-component="${escapeHtml(componentId)}" data-runtime-disabled="${canApply ? "false" : "true"}">Apply Update</button>
+        <button class="action delete" type="button" data-runtime-action="rollback" data-runtime-component="${escapeHtml(componentId)}" data-runtime-disabled="${canRollback ? "false" : "true"}">Rollback</button>
+      </div>
+    `;
+  }
+
+  function renderRuntimeImages() {
+    const payload = state.runtimeImagesPayload;
+    if (!payload || !Array.isArray(payload.endpoints)) {
+      elements.runtimeEndpoint.innerHTML = "";
+      elements.runtimeImagesList.innerHTML = "";
+      return;
+    }
+    const previousSelection = String(elements.runtimeEndpoint.value || "");
+    elements.runtimeEndpoint.innerHTML = payload.endpoints.map((endpoint) => {
+      const id = String(endpoint.id || "");
+      const label = `${id} · ${endpoint.domain || "no DNS"}${endpoint.instanceName ? ` · ${endpoint.instanceName}` : ""}`;
+      return `<option value="${escapeHtml(id)}">${escapeHtml(label)}</option>`;
+    }).join("");
+    const selectedId = payload.endpoints.some((endpoint) => endpoint.id === previousSelection)
+      ? previousSelection
+      : String(payload.endpoints[0] && payload.endpoints[0].id || "");
+    elements.runtimeEndpoint.value = selectedId;
+    const endpoint = payload.endpoints.find((entry) => entry.id === selectedId);
+    if (!endpoint) {
+      elements.runtimeImagesList.innerHTML = '<div class="admin-user-row fixed">No endpoints configured.</div>';
+      return;
+    }
+    const components = payload.catalog && payload.catalog.components || {};
+    const catalogInfo = payload.catalog && payload.catalog.updatedAt
+      ? `Trusted catalog: ${payload.catalog.source || "cache"} · ${payload.catalog.updatedAt}`
+      : `Trusted catalog: ${payload.catalog && payload.catalog.source || "static"}`;
+    const status = endpoint.runtimeImages && endpoint.runtimeImages.status
+      ? `<div class="admin-user-row fixed"><span>${escapeHtml(`Last runtime operation: ${endpoint.runtimeImages.status}${endpoint.runtimeImages.detail ? ` · ${endpoint.runtimeImages.detail}` : ""}`)}</span></div>`
+      : "";
+    elements.runtimeImagesList.innerHTML = `
+      <div class="admin-user-row fixed"><span>${escapeHtml(catalogInfo)}</span><span>VM: ${escapeHtml(endpoint.instanceState || "NOT_FOUND")}</span></div>
+      ${runtimeComponentRow(endpoint, "steam-headless", components["steam-headless"] || { label: "Steam Headless + Sunshine", candidates: [] })}
+      ${runtimeComponentRow(endpoint, "minecraft", components.minecraft || { label: "Minecraft container", candidates: [] })}
+      ${status}
+    `;
+  }
+
   async function waitForGoogleIdentity() {
     for (let attempt = 0; attempt < 50; attempt += 1) {
       if (window.google && window.google.accounts && window.google.accounts.oauth2) {
@@ -281,6 +362,7 @@
     state.user = null;
     state.usersPayload = null;
     state.endpointsPayload = null;
+    state.runtimeImagesPayload = null;
     if (revokeGoogleSession && token && window.google && window.google.accounts && window.google.accounts.oauth2) {
       window.google.accounts.oauth2.revoke(token, () => {});
     }
@@ -335,13 +417,15 @@
   }
 
   async function loadUsers() {
-    const [payload, endpoints] = await Promise.all([
+    const [payload, endpoints, runtimeImages] = await Promise.all([
       fetchApi("/api/admin/users", { method: "GET" }),
       fetchApi("/api/admin/endpoints", { method: "GET" }),
+      fetchApi("/api/admin/runtime-images", { method: "GET" }),
     ]);
     state.user = payload.user;
     state.usersPayload = payload;
     state.endpointsPayload = endpoints;
+    state.runtimeImagesPayload = runtimeImages;
     setMessage("Managed GUI users loaded.", "success");
     updateUi();
   }
@@ -372,6 +456,25 @@
     const actionLabel = action === "add" ? "Added" : action === "remove" ? "Removed" : action === "reserve-ip" ? "Reserved IP for" : "Released IP for";
     setMessage(`${actionLabel} ${endpointId}.`, "success");
     renderEndpoints();
+  }
+
+  async function updateRuntimeImages(action, component, extra) {
+    const endpointId = String(elements.runtimeEndpoint.value || "");
+    const payload = await fetchApi("/api/admin/runtime-images", {
+      method: "POST",
+      body: JSON.stringify({ action, endpointId, component, ...(extra || {}) }),
+    });
+    state.runtimeImagesPayload = payload;
+    const operation = payload.operation || {};
+    const label = action === "refresh-catalog"
+      ? "Trusted image versions refreshed."
+      : action === "pull"
+        ? `Pulled ${operation.component || component} image without restart.`
+        : action === "rollback"
+          ? `Rolled back ${operation.component || component} image.`
+          : `Updated ${operation.component || component} image.`;
+    setMessage(label, "success");
+    renderRuntimeImages();
   }
 
   function handleError(error) {
@@ -517,6 +620,53 @@
     try {
       setBusy(true);
       await updateEndpoint(action, endpointId, action === "reserve-ip" ? { zone } : {});
+    } catch (error) {
+      handleError(error);
+    } finally {
+      setBusy(false);
+    }
+  });
+
+  elements.runtimeEndpoint.addEventListener("change", () => {
+    renderRuntimeImages();
+    setBusy(state.isBusy);
+  });
+
+  elements.refreshRuntimeImages.addEventListener("click", async () => {
+    try {
+      setBusy(true);
+      await updateRuntimeImages("refresh-catalog", "");
+    } catch (error) {
+      handleError(error);
+    } finally {
+      setBusy(false);
+    }
+  });
+
+  elements.runtimeImagesList.addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-runtime-action]");
+    if (!button || button.disabled) {
+      return;
+    }
+    const action = String(button.dataset.runtimeAction || "");
+    const component = String(button.dataset.runtimeComponent || "");
+    const select = elements.runtimeImagesList.querySelector(`[data-runtime-image-select="${CSS.escape(component)}"]`);
+    const imageRef = String(select && select.value || "");
+    if (action !== "rollback" && !imageRef) {
+      setMessage("Select a trusted image version first.", "warning");
+      return;
+    }
+    const confirmation = action === "apply"
+      ? `Apply the selected ${component} image? The affected service will restart. A ready backup is required.`
+      : action === "rollback"
+        ? `Rollback ${component} to its previous immutable image? The affected service will restart.`
+        : `Pull the selected ${component} image without restarting a service?`;
+    if (!window.confirm(confirmation)) {
+      return;
+    }
+    try {
+      setBusy(true);
+      await updateRuntimeImages(action, component, { imageRef, confirm: action !== "pull" });
     } catch (error) {
       handleError(error);
     } finally {

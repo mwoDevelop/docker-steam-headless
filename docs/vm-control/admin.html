@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;700&display=swap"
       rel="stylesheet"
     >
-    <link rel="stylesheet" href="./styles.css?v=admin-users-20260702">
+    <link rel="stylesheet" href="./styles.css?v=runtime-images-20260714">
     <script src="https://accounts.google.com/gsi/client" async defer></script>
   </head>
   <body>
@@ -113,8 +113,27 @@
         <p>Reserve IP fixes an endpoint to the selected region. Release IP is allowed only after its VM has been deleted.</p>
         <div id="endpoints-list" class="admin-list"></div>
       </section>
+
+      <section class="panel">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Runtime images</p>
+            <h2>Steam, Sunshine and Minecraft updates</h2>
+          </div>
+          <button id="refresh-runtime-images" class="ghost" type="button">Refresh Trusted Versions</button>
+        </div>
+        <p>
+          Versions are resolved to immutable Docker digests. Applying an update restarts only the selected service,
+          verifies it locally, and restores the previous image automatically if the health-check fails.
+        </p>
+        <label>
+          <span>Endpoint</span>
+          <select id="runtime-endpoint"></select>
+        </label>
+        <div id="runtime-images-list" class="admin-list"></div>
+      </section>
     </main>
 
-    <script src="./admin.js?v=multi-endpoints-20260714"></script>
+    <script src="./admin.js?v=runtime-images-20260714"></script>
   </body>
 </html>
