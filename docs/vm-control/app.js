@@ -1027,8 +1027,8 @@
         : selectedZoneGpuScan ? "Show All GPUs in Selected Zone" : "Scan All GPUs in Selected Zone";
       elements.scanSelectedGpu.disabled = state.isBusy || !state.user || !selectedZone() || running;
       elements.scanSelectedGpu.title = selectedZoneGpuScan
-        ? "Restore every GPU profile declared for the selected zone"
-        : "Temporarily test every GPU profile declared for the selected zone without retaining reservations";
+        ? "Restore every known GPU profile for the selected zone"
+        : "Temporarily test every known GPU profile in the selected zone without retaining reservations";
     }
     if (elements.cancelGpuScan) {
       elements.cancelGpuScan.classList.toggle("hidden", !running);
@@ -1418,18 +1418,16 @@
       renderHardwareOptions(state.hardwarePayload);
       await refreshPriceEstimate({ silent: false });
       await refreshStatus({ silent: true });
-      setCommandStatus(`All declared GPU profiles are shown again for ${zoneDisplayLabel(zone)}.`, "success");
+      setCommandStatus(`All known GPU profiles are shown again for ${zoneDisplayLabel(zone)}.`, "success");
       return;
     }
 
     const profiles = getHardwareProfiles().filter((profile) => (
       Number(profile.gpuCount || 0) > 0
       && String(profile.gpuType || "").trim()
-      && Array.isArray(profile.zones)
-      && profile.zones.includes(zone)
     ));
     if (!zone || !profiles.length) {
-      throw new Error("The selected zone does not declare any GPU hardware profiles to scan.");
+      throw new Error("No GPU hardware profiles are configured for the capacity scan.");
     }
 
     const run = {
