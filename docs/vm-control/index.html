@@ -136,6 +136,17 @@
               <option value="">Select hardware first</option>
             </select>
           </label>
+          <label>
+            <span>GPU scan scope</span>
+            <select id="gpu-scan-scope" name="gpu-scan-scope">
+              <option value="all">All regions</option>
+              <option value="europe">Europe</option>
+              <option value="americas">Americas</option>
+              <option value="asia-pacific">Asia Pacific</option>
+              <option value="middle-east">Middle East</option>
+              <option value="africa">Africa</option>
+            </select>
+          </label>
           <div class="control-row">
             <button id="refresh-hardware" class="ghost" type="button">Scan All Compatible GPU Zones</button>
             <button id="scan-selected-gpu" class="ghost" type="button">Scan All GPUs in Selected Zone</button>
@@ -274,6 +285,6 @@
       </section>
     </main>
 
-    <script src="./app.js?v=zone-gpu-catalog-scan-all-profiles-20260715"></script>
+    <script src="./app.js?v=continent-gpu-scan-20260715"></script>
   </body>
 </html>

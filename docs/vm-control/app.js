@@ -158,6 +158,7 @@
     endpointStatus: document.querySelector("#endpoint-status"),
     hardwareSelect: document.querySelector("#hardware-select"),
     zoneSelect: document.querySelector("#zone-select"),
+    gpuScanScope: document.querySelector("#gpu-scan-scope"),
     refreshHardware: document.querySelector("#refresh-hardware"),
     scanSelectedGpu: document.querySelector("#scan-selected-gpu"),
     cancelGpuScan: document.querySelector("#cancel-gpu-scan"),
@@ -986,9 +987,47 @@
     return profile ? String(profile.label || profile.id) : "";
   }
 
+  function selectedGpuScanScope() {
+    return String(elements.gpuScanScope && elements.gpuScanScope.value || "all");
+  }
+
+  function gpuScanScopeLabel(scope = selectedGpuScanScope()) {
+    return ({
+      all: "all regions",
+      europe: "Europe",
+      americas: "Americas",
+      "asia-pacific": "Asia Pacific",
+      "middle-east": "Middle East",
+      africa: "Africa",
+    })[scope] || "all regions";
+  }
+
+  function gpuScanScopePrefixes(scope = selectedGpuScanScope()) {
+    return ({
+      all: [],
+      europe: ["europe-"],
+      americas: ["us-", "northamerica-", "southamerica-"],
+      "asia-pacific": ["asia-", "australia-"],
+      "middle-east": ["me-"],
+      africa: ["africa-"],
+    })[scope] || [];
+  }
+
+  function zonesForGpuScanScope(zones, scope = selectedGpuScanScope()) {
+    const prefixes = gpuScanScopePrefixes(scope);
+    return prefixes.length
+      ? zones.filter((zone) => prefixes.some((prefix) => zone.startsWith(prefix)))
+      : zones;
+  }
+
   function activeGpuAvailabilityScan(profile) {
     const scan = state.gpuAvailabilityScan;
-    return scan && profile && String(scan.hardwareId) === String(profile.id) ? scan : null;
+    return scan
+      && profile
+      && String(scan.hardwareId) === String(profile.id)
+      && String(scan.scope || "all") === selectedGpuScanScope()
+      ? scan
+      : null;
   }
 
   function activeSelectedZoneGpuAvailabilityScan(zone) {
@@ -1012,14 +1051,22 @@
     const isGpu = profile && Number(profile.gpuCount || 0) > 0 && String(profile.gpuType || "").trim();
     const isFiltered = Boolean(activeGpuAvailabilityScan(profile));
     const selectedZoneGpuScan = activeSelectedZoneGpuAvailabilityScan(selectedZone());
+    const scope = selectedGpuScanScope();
+    const scopeLabel = gpuScanScopeLabel(scope);
+    const scanLabel = scope === "all"
+      ? "Scan All Compatible GPU Zones"
+      : `Scan ${selectedHardwareLabel() || "Selected GPU"} in ${scopeLabel}`;
     if (elements.refreshHardware) {
       elements.refreshHardware.textContent = state.gpuAvailabilityScanRun && !state.gpuAvailabilityScanRun.finished
-        ? "Scanning All Compatible GPU Zones..."
-        : isFiltered ? "Show All Compatible GPU Zones" : "Scan All Compatible GPU Zones";
+        ? scope === "all" ? "Scanning All Compatible GPU Zones..." : `Scanning ${scopeLabel} GPU Zones...`
+        : isFiltered ? "Show All Compatible GPU Zones" : scanLabel;
       elements.refreshHardware.title = isFiltered
         ? "Restore all zones compatible with the selected GPU"
-        : "Temporarily test GPU capacity in every compatible zone";
+        : `Temporarily test selected GPU capacity in ${scopeLabel}`;
       elements.refreshHardware.disabled = state.isBusy || !state.user || !isGpu || running;
+    }
+    if (elements.gpuScanScope) {
+      elements.gpuScanScope.disabled = state.isBusy || !state.user || running;
     }
     if (elements.scanSelectedGpu) {
       elements.scanSelectedGpu.textContent = runningZoneCatalogScan
@@ -1051,7 +1098,7 @@
       ? `Cancelling GPU capacity scan after the current request. Checked ${completed}/${total} ${zoneCatalogScan ? "GPU profiles" : "zones"}.${current}`
       : zoneCatalogScan
         ? `Scanning GPU capacity in ${zoneDisplayLabel(run.zone)}: ${completed}/${total} GPU profiles checked, ${available} currently available.${current}`
-        : `Scanning GPU capacity: ${completed}/${total} zones checked, ${available} currently available.${current}`;
+        : `Scanning GPU capacity${run.scope && run.scope !== "all" ? ` in ${gpuScanScopeLabel(run.scope)}` : ""}: ${completed}/${total} zones checked, ${available} currently available.${current}`;
     if (elements.hardwareOptionsStatus) {
       elements.hardwareOptionsStatus.textContent = message;
     }
@@ -1326,11 +1373,20 @@
       return;
     }
 
-    const zones = Array.isArray(profile.zones)
-      ? profile.zones.map((zone) => String(zone || "").trim()).filter(Boolean)
-      : [];
+    const scope = selectedGpuScanScope();
+    const zones = zonesForGpuScanScope(
+      Array.isArray(profile.zones)
+        ? profile.zones.map((zone) => String(zone || "").trim()).filter(Boolean)
+        : [],
+      scope
+    );
+    if (!zones.length) {
+      throw new Error(`No compatible ${String(profile.label || profile.id)} zones are declared in ${gpuScanScopeLabel(scope)}.`);
+    }
     const run = {
       hardwareId: String(profile.id || ""),
+      hardwareLabel: String(profile.label || profile.id || "GPU"),
+      scope,
       target: selectedTargetParams(),
       zones,
       completed: 0,
@@ -1383,6 +1439,7 @@
       if (run.cancelRequested) {
         state.gpuAvailabilityScan = {
           hardwareId: run.hardwareId,
+          scope: run.scope,
           availableZones: run.availableZones,
         };
         renderZoneOptions();
@@ -1399,6 +1456,7 @@
 
     state.gpuAvailabilityScan = {
       hardwareId: run.hardwareId,
+      scope: run.scope,
       availableZones: run.availableZones,
     };
     renderZoneOptions();
@@ -3482,7 +3540,12 @@
   if (elements.refreshHardware) {
     elements.refreshHardware.addEventListener("click", async () => {
       const restoringZones = Boolean(activeGpuAvailabilityScan(selectedHardwareProfile()));
-      const loadingToken = setPageLoading(restoringZones ? "Restoring compatible GPU zones..." : "Scanning GPU capacity across all compatible zones...");
+      const scope = selectedGpuScanScope();
+      const loadingToken = setPageLoading(restoringZones
+        ? "Restoring compatible GPU zones..."
+        : scope === "all"
+          ? "Scanning GPU capacity across all compatible zones..."
+          : `Scanning GPU capacity in ${gpuScanScopeLabel(scope)}...`);
       try {
         setBusy(true);
         await scanGpuAvailabilityAcrossZones();
@@ -3492,6 +3555,21 @@
         setBusy(false);
         markPageReady("Ready.", loadingToken);
       }
+    });
+  }
+
+  if (elements.gpuScanScope) {
+    elements.gpuScanScope.addEventListener("change", async () => {
+      if (!state.gpuAvailabilityScan) {
+        updateGpuAvailabilityScanButton();
+        return;
+      }
+      resetGpuAvailabilityScan();
+      renderZoneOptions();
+      await refreshPriceEstimate({ silent: false });
+      await refreshStatus({ silent: true });
+      setCommandStatus("GPU scan scope changed. All compatible zones are shown again.", "success");
+      updateGpuAvailabilityScanButton();
     });
   }
 
