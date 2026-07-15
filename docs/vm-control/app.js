@@ -1246,7 +1246,7 @@
         ? ` Refreshed: ${state.hardwarePayload.refreshedAt}.`
         : "";
       elements.hardwareOptionsStatus.textContent = scan
-        ? `Capacity scan found GPU capacity in ${zones.length}/${compatibleZones.length} compatible zone${compatibleZones.length === 1 ? "" : "s"}. Temporary test reservations were released immediately.`
+        ? `Capacity scan found GPU capacity in ${zones.length}/${zonesForGpuScanScope(compatibleZones, scan.scope).length} compatible zone${zonesForGpuScanScope(compatibleZones, scan.scope).length === 1 ? "" : "s"}. Temporary test reservations were released immediately.`
         : `${selectedHardwareLabel()} available in ${zones.length} zone${zones.length === 1 ? "" : "s"}.${refreshedAt}`;
     }
     renderHardwarePriceEstimate(selectedPriceEstimate());
