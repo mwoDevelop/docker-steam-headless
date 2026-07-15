@@ -361,8 +361,19 @@ select {
 }
 
 .gpu-scan-scope-group,
-.single-zone-gpu-scan-row {
+.hardware-zone-actions {
   grid-column: 1 / -1;
+}
+
+.hardware-zone-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  align-items: end;
+}
+
+.single-zone-gpu-scan-row {
+  align-self: end;
 }
 
 .gpu-scan-scope-group {
@@ -988,6 +999,10 @@ code,
 }
 
 @media (max-width: 820px) {
+  .hardware-zone-actions {
+    grid-template-columns: 1fr;
+  }
+
   .shell {
     width: min(100vw - 20px, 1120px);
     padding-top: 18px;

@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;700&display=swap"
       rel="stylesheet"
     >
-    <link rel="stylesheet" href="./styles.css?v=gpu-scan-scope-group-20260715">
+    <link rel="stylesheet" href="./styles.css?v=gpu-zone-scan-row-20260715">
     <script src="https://accounts.google.com/gsi/client" async defer></script>
   </head>
   <body class="is-page-loading">
@@ -124,18 +124,23 @@
           </label>
           <p id="endpoint-status">Each endpoint has a separate DuckDNS name and regional external IP address.</p>
 
-          <label>
-            <span>Hardware</span>
-            <select id="hardware-select" name="hardware-select">
-              <option value="">Connect and sign in to load hardware</option>
-            </select>
-          </label>
-          <label>
-            <span>Zone</span>
-            <select id="zone-select" name="zone-select">
-              <option value="">Select hardware first</option>
-            </select>
-          </label>
+          <div class="hardware-zone-actions">
+            <label>
+              <span>Hardware</span>
+              <select id="hardware-select" name="hardware-select">
+                <option value="">Connect and sign in to load hardware</option>
+              </select>
+            </label>
+            <label>
+              <span>Zone</span>
+              <select id="zone-select" name="zone-select">
+                <option value="">Select hardware first</option>
+              </select>
+            </label>
+            <div class="control-row single-zone-gpu-scan-row">
+              <button id="scan-selected-gpu" class="ghost" type="button">Scan All GPUs in Selected Zone</button>
+            </div>
+          </div>
           <fieldset class="gpu-scan-scope-group">
             <legend>Selected GPU - geographic scan</legend>
             <label>
@@ -153,9 +158,6 @@
               <button id="refresh-hardware" class="ghost" type="button">Scan All Compatible GPU Zones</button>
             </div>
           </fieldset>
-          <div class="control-row single-zone-gpu-scan-row">
-            <button id="scan-selected-gpu" class="ghost" type="button">Scan All GPUs in Selected Zone</button>
-          </div>
           <div id="hardware-price-estimate" class="hardware-price-card" data-tone="neutral">
             Select hardware and zone to load estimated price.
           </div>
