@@ -991,18 +991,29 @@
     return scan && profile && String(scan.hardwareId) === String(profile.id) ? scan : null;
   }
 
+  function activeSelectedZoneGpuAvailabilityScan(zone) {
+    const scan = state.selectedZoneGpuAvailabilityScan;
+    return scan && String(scan.zone) === String(zone) ? scan : null;
+  }
+
   function resetGpuAvailabilityScan() {
     state.gpuAvailabilityScan = null;
   }
 
+  function resetSelectedZoneGpuAvailabilityScan() {
+    state.selectedZoneGpuAvailabilityScan = null;
+  }
+
   function updateGpuAvailabilityScanButton() {
-    const run = state.gpuAvailabilityScanRun;
+    const run = state.gpuAvailabilityScanRun || state.selectedZoneGpuAvailabilityScanRun;
     const running = Boolean(run && !run.finished);
+    const runningZoneCatalogScan = Boolean(state.selectedZoneGpuAvailabilityScanRun && !state.selectedZoneGpuAvailabilityScanRun.finished);
     const profile = selectedHardwareProfile();
     const isGpu = profile && Number(profile.gpuCount || 0) > 0 && String(profile.gpuType || "").trim();
     const isFiltered = Boolean(activeGpuAvailabilityScan(profile));
+    const selectedZoneGpuScan = activeSelectedZoneGpuAvailabilityScan(selectedZone());
     if (elements.refreshHardware) {
-      elements.refreshHardware.textContent = running
+      elements.refreshHardware.textContent = state.gpuAvailabilityScanRun && !state.gpuAvailabilityScanRun.finished
         ? "Scanning All Compatible GPU Zones..."
         : isFiltered ? "Show All Compatible GPU Zones" : "Scan All Compatible GPU Zones";
       elements.refreshHardware.title = isFiltered
@@ -1011,8 +1022,13 @@
       elements.refreshHardware.disabled = state.isBusy || !state.user || !isGpu || running;
     }
     if (elements.scanSelectedGpu) {
-      elements.scanSelectedGpu.disabled = state.isBusy || !state.user || !isGpu || running;
-      elements.scanSelectedGpu.title = "Temporarily test GPU capacity in the selected zone without retaining a reservation";
+      elements.scanSelectedGpu.textContent = runningZoneCatalogScan
+        ? "Scanning GPUs in Selected Zone..."
+        : selectedZoneGpuScan ? "Show All GPUs in Selected Zone" : "Scan All GPUs in Selected Zone";
+      elements.scanSelectedGpu.disabled = state.isBusy || !state.user || !selectedZone() || running;
+      elements.scanSelectedGpu.title = selectedZoneGpuScan
+        ? "Restore every GPU profile declared for the selected zone"
+        : "Temporarily test every GPU profile declared for the selected zone without retaining reservations";
     }
     if (elements.cancelGpuScan) {
       elements.cancelGpuScan.classList.toggle("hidden", !running);
@@ -1025,12 +1041,17 @@
       return;
     }
     const completed = Number(run.completed || 0);
-    const total = Number(run.zones && run.zones.length || 0);
-    const available = Number(run.availableZones && run.availableZones.length || 0);
-    const current = run.currentZone ? ` Current zone: ${zoneDisplayLabel(run.currentZone)}.` : "";
+    const zoneCatalogScan = run.kind === "zone-gpus";
+    const total = Number(zoneCatalogScan ? run.profiles && run.profiles.length : run.zones && run.zones.length || 0);
+    const available = Number(zoneCatalogScan ? run.availableHardwareIds && run.availableHardwareIds.length : run.availableZones && run.availableZones.length || 0);
+    const current = zoneCatalogScan
+      ? run.currentProfile ? ` Current GPU: ${String(run.currentProfile.label || run.currentProfile.id || "GPU")}.` : ""
+      : run.currentZone ? ` Current zone: ${zoneDisplayLabel(run.currentZone)}.` : "";
     const message = run.cancelRequested
-      ? `Cancelling GPU capacity scan after the current request. Checked ${completed}/${total} zones.${current}`
-      : `Scanning GPU capacity: ${completed}/${total} zones checked, ${available} currently available.${current}`;
+      ? `Cancelling GPU capacity scan after the current request. Checked ${completed}/${total} ${zoneCatalogScan ? "GPU profiles" : "zones"}.${current}`
+      : zoneCatalogScan
+        ? `Scanning GPU capacity in ${zoneDisplayLabel(run.zone)}: ${completed}/${total} GPU profiles checked, ${available} currently available.${current}`
+        : `Scanning GPU capacity: ${completed}/${total} zones checked, ${available} currently available.${current}`;
     if (elements.hardwareOptionsStatus) {
       elements.hardwareOptionsStatus.textContent = message;
     }
@@ -1040,7 +1061,7 @@
   }
 
   function cancelGpuAvailabilityScan() {
-    const run = state.gpuAvailabilityScanRun;
+    const run = state.gpuAvailabilityScanRun || state.selectedZoneGpuAvailabilityScanRun;
     if (!run || run.finished || run.cancelRequested) {
       return;
     }
@@ -1053,6 +1074,10 @@
   function selectedTargetParams() {
     const profile = selectedHardwareProfile();
     const zone = selectedZone();
+    return targetParamsForHardwareProfile(profile, zone);
+  }
+
+  function targetParamsForHardwareProfile(profile, zone) {
     if (!profile || !zone) {
       return { endpointId: selectedEndpointId() };
     }
@@ -1089,8 +1114,8 @@
     }
 
     state.hardwarePayload = payload || state.hardwarePayload;
-    const profiles = getHardwareProfiles();
-    if (!profiles.length) {
+    const allProfiles = getHardwareProfiles();
+    if (!allProfiles.length) {
       elements.hardwareSelect.innerHTML = '<option value="">No hardware profiles loaded</option>';
       elements.zoneSelect.innerHTML = '<option value="">No zones loaded</option>';
       renderHardwarePriceEstimate(null);
@@ -1100,6 +1125,11 @@
       updateActionAvailability();
       return;
     }
+
+    const zoneScan = activeSelectedZoneGpuAvailabilityScan(selectedZone());
+    const profiles = zoneScan
+      ? allProfiles.filter((profile) => Number(profile.gpuCount || 0) <= 0 || zoneScan.availableHardwareIds.includes(String(profile.id)))
+      : allProfiles;
 
     const previousHardware = elements.hardwareSelect.value
       || elements.hardwareSelect.dataset.savedValue
@@ -1381,33 +1411,96 @@
     setBanner(message, cleanupFailures ? "warning" : "success");
   }
 
-  async function scanSelectedGpuZoneAvailability() {
-    const profile = selectedHardwareProfile();
-    const target = selectedTargetParams();
-    if (!profile || Number(profile.gpuCount || 0) <= 0 || !String(profile.gpuType || "").trim() || !target.zone) {
-      throw new Error("Select a GPU hardware profile and zone before scanning availability.");
+  async function scanSelectedZoneGpuAvailability() {
+    const zone = selectedZone();
+    if (activeSelectedZoneGpuAvailabilityScan(zone)) {
+      resetSelectedZoneGpuAvailabilityScan();
+      renderHardwareOptions(state.hardwarePayload);
+      await refreshPriceEstimate({ silent: false });
+      await refreshStatus({ silent: true });
+      setCommandStatus(`All declared GPU profiles are shown again for ${zoneDisplayLabel(zone)}.`, "success");
+      return;
     }
 
-    const data = await fetchApi("/api/capacity-reservations/scan-zone", {
-      method: "POST",
-      body: JSON.stringify(target),
-    });
-    await refreshGpuCapacityReservationCount();
-    scheduleGpuCapacityReservationCountRefreshes();
-
-    const profileLabel = String(profile.label || profile.id || "GPU");
-    const zoneLabel = zoneDisplayLabel(String(target.zone));
-    if (data && data.available) {
-      const cleanupNote = data.cleanupFailure
-        ? ` Temporary reservation cleanup is pending: ${data.cleanupFailure}`
-        : " Temporary reservation was released immediately.";
-      setCommandStatus(`${profileLabel} is currently available in ${zoneLabel}.${cleanupNote}`, data.cleanupFailure ? "warning" : "success");
-      return data;
+    const profiles = getHardwareProfiles().filter((profile) => (
+      Number(profile.gpuCount || 0) > 0
+      && String(profile.gpuType || "").trim()
+      && Array.isArray(profile.zones)
+      && profile.zones.includes(zone)
+    ));
+    if (!zone || !profiles.length) {
+      throw new Error("The selected zone does not declare any GPU hardware profiles to scan.");
     }
 
-    const detail = data && data.error ? ` ${data.error}` : "";
-    setCommandStatus(`${profileLabel} is not currently available in ${zoneLabel}.${detail}`, "warning");
-    return data;
+    const run = {
+      kind: "zone-gpus",
+      zone,
+      profiles,
+      completed: 0,
+      currentProfile: null,
+      availableHardwareIds: [],
+      cleanupFailures: [],
+      cancelRequested: false,
+      finished: false,
+      abortController: new AbortController(),
+    };
+    state.selectedZoneGpuAvailabilityScanRun = run;
+    updateGpuAvailabilityScanButton();
+    renderGpuAvailabilityScanProgress(run);
+    try {
+      for (const profile of profiles) {
+        if (run.cancelRequested) {
+          break;
+        }
+        run.currentProfile = profile;
+        renderGpuAvailabilityScanProgress(run);
+        try {
+          const data = await fetchApi("/api/capacity-reservations/scan-zone", {
+            method: "POST",
+            body: JSON.stringify(targetParamsForHardwareProfile(profile, zone)),
+            signal: run.abortController.signal,
+          });
+          if (data && data.available) {
+            run.availableHardwareIds.push(String(profile.id));
+          }
+          if (data && data.cleanupFailure) {
+            run.cleanupFailures.push({ profile, error: String(data.cleanupFailure) });
+          }
+          run.completed += 1;
+        } catch (error) {
+          if (run.cancelRequested || error.name === "AbortError") {
+            break;
+          }
+          run.completed += 1;
+          setCommandStatus(`GPU scan skipped ${String(profile.label || profile.id)}: ${formatErrorMessage(error)}`, "warning");
+        }
+        renderGpuAvailabilityScanProgress(run);
+      }
+    } finally {
+      run.finished = true;
+      run.currentProfile = null;
+      state.selectedZoneGpuAvailabilityScanRun = null;
+      updateGpuAvailabilityScanButton();
+      await refreshGpuCapacityReservationCount();
+      scheduleGpuCapacityReservationCountRefreshes();
+    }
+
+    state.selectedZoneGpuAvailabilityScan = {
+      zone,
+      availableHardwareIds: run.availableHardwareIds,
+    };
+    renderHardwareOptions(state.hardwarePayload);
+    await refreshPriceEstimate({ silent: false });
+    await refreshStatus({ silent: true });
+    const cleanupFailures = run.cleanupFailures.length;
+    const prefix = run.cancelRequested ? "GPU capacity scan cancelled" : "GPU capacity scan completed";
+    const message = cleanupFailures
+      ? `${prefix} for ${zoneDisplayLabel(zone)}: ${run.availableHardwareIds.length}/${profiles.length} GPU profiles currently available; ${cleanupFailures} temporary reservation cleanup${cleanupFailures === 1 ? "" : "s"} will expire automatically.`
+      : `${prefix} for ${zoneDisplayLabel(zone)}: ${run.availableHardwareIds.length}/${profiles.length} GPU profiles currently available. Temporary test reservations were released immediately.`;
+    if (elements.hardwareOptionsStatus) {
+      elements.hardwareOptionsStatus.textContent = message;
+    }
+    setCommandStatus(message, cleanupFailures ? "warning" : "success");
   }
 
   function getCreatedInstances() {
@@ -3366,6 +3459,8 @@
   if (elements.zoneSelect) {
     elements.zoneSelect.addEventListener("change", async () => {
       const loadingToken = setPageLoading("Loading selected zone status...");
+      resetSelectedZoneGpuAvailabilityScan();
+      renderHardwareOptions(state.hardwarePayload);
       resetGpuCapacityProbeButton();
       saveConfig();
       renderTargetSummary();
@@ -3408,11 +3503,12 @@
 
   if (elements.scanSelectedGpu) {
     elements.scanSelectedGpu.addEventListener("click", async () => {
-      const loadingToken = setPageLoading("Scanning selected GPU zone capacity...");
+      const restoringProfiles = Boolean(activeSelectedZoneGpuAvailabilityScan(selectedZone()));
+      const loadingToken = setPageLoading(restoringProfiles ? "Restoring declared GPU profiles..." : "Scanning all GPU profiles in the selected zone...");
       try {
         setBusy(true);
         updateGpuAvailabilityScanButton();
-        await scanSelectedGpuZoneAvailability();
+        await scanSelectedZoneGpuAvailability();
       } catch (error) {
         handleError(error);
       } finally {
