@@ -226,9 +226,6 @@ UNSUPPORTED_SUNSHINE_VWS_ACCELERATORS: Final = {
 }
 
 
-def gpu_pricing_type(gpu_type: str) -> str:
-    """Return the billing-catalog GPU type for a Compute vWS accelerator."""
-    return str(gpu_type or "").removesuffix("-vws")
 PERSISTENT_DISK_PRICE_TYPES: Final = {
     "pd-ssd": "SSD backed PD Capacity",
     "pd-balanced": "Balanced PD Capacity",
@@ -1790,8 +1787,9 @@ def is_standard_gpu_price_description(description: str, gpu_type: str) -> bool:
     if not normalized:
         return False
 
+    is_vws = gpu_type.endswith("-vws")
+    dws_marker = "attached to DWS Defined Duration VMs"
     excluded_markers = (
-        "attached to DWS Defined Duration VMs",
         "attached to Spot Preemptible VMs",
         "Commitment ",
         "DWS Calendar Mode",
@@ -1802,6 +1800,12 @@ def is_standard_gpu_price_description(description: str, gpu_type: str) -> bool:
         return False
 
     for alias in GPU_PRICE_DESCRIPTION_ALIASES.get(gpu_type, (gpu_billing_label(gpu_type),)):
+        if dws_marker in normalized:
+            if is_vws and normalized.startswith(f"{alias} {dws_marker} running in "):
+                return True
+            continue
+        if is_vws:
+            continue
         if normalized.startswith(f"{alias} running in "):
             return True
     return False
@@ -2006,10 +2010,9 @@ def build_price_estimate(
         components.append({"label": f"{spec['memoryGb']:g} GB RAM", "amountPln": round(amount, 4)})
 
     if gpu_count > 0:
-        pricing_gpu_type = gpu_pricing_type(gpu_type)
-        gpu_rate = region_prices.get(("gpu", pricing_gpu_type))
+        gpu_rate = region_prices.get(("gpu", gpu_type))
         if gpu_rate is None:
-            missing.append(pricing_gpu_type)
+            missing.append(gpu_type)
         else:
             amount = float(gpu_count) * gpu_rate
             total += amount
@@ -2153,9 +2156,8 @@ def priced_gpu_regions(gpu_type: str) -> set[str] | None:
         return None
 
     regions: set[str] = set()
-    pricing_gpu_type = gpu_pricing_type(gpu_type)
     for region, region_prices in (price_index.get("index", {}) or {}).items():
-        if isinstance(region_prices, dict) and ("gpu", pricing_gpu_type) in region_prices:
+        if isinstance(region_prices, dict) and ("gpu", gpu_type) in region_prices:
             regions.add(str(region))
     return regions
 
@@ -2258,10 +2260,7 @@ def build_hardware_payload() -> dict[str, Any]:
             gpu_type="nvidia-tesla-t4-vws",
             gpu_count=1,
             accelerator_mode="attached",
-            zones=filter_zones_by_gpu_price(
-                "nvidia-tesla-t4-vws",
-                by_accelerator.get("nvidia-tesla-t4-vws") or by_accelerator.get("nvidia-tesla-t4", []),
-            ),
+            zones=filter_zones_by_gpu_price("nvidia-tesla-t4-vws", by_accelerator.get("nvidia-tesla-t4-vws", [])),
         ),
         hardware_profile(
             hardware_id="nvidia-l4",
@@ -2270,10 +2269,7 @@ def build_hardware_payload() -> dict[str, Any]:
             gpu_type="nvidia-l4-vws",
             gpu_count=1,
             accelerator_mode="attached",
-            zones=filter_zones_by_gpu_price(
-                "nvidia-l4-vws",
-                by_accelerator.get("nvidia-l4-vws") or by_accelerator.get("nvidia-l4", []),
-            ),
+            zones=filter_zones_by_gpu_price("nvidia-l4-vws", by_accelerator.get("nvidia-l4-vws", [])),
         ),
     ]
 
