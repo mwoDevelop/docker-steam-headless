@@ -2646,7 +2646,7 @@ def options_passthrough():
 
     if request.path == "/api/price":
         require_user()
-        apply_target_overrides(request.args)
+        apply_target_overrides(request.args, respect_existing_endpoint_hardware=False)
         instance = get_instance_or_none()
         persistent_disks, disk_source = persistent_disks_for_price(instance)
         return jsonify(
