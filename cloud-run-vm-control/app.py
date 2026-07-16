@@ -1459,6 +1459,8 @@ def unbind_selected_endpoint_instance() -> dict[str, Any]:
     endpoint["zone"] = ""
     endpoint["hardware"] = {}
     endpoint["externalIp"] = ""
+    if not endpoint_has_manual_static_ip(endpoint):
+        endpoint["region"] = ""
     return persist_endpoint(endpoint)
 
 
