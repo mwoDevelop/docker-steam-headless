@@ -2185,6 +2185,7 @@
 
     const response = await window.fetch(`${state.backendUrl}/api/config`, {
       method: "GET",
+      cache: "no-store",
       headers: {
         Accept: "application/json",
       },
@@ -2390,6 +2391,7 @@
 
     const response = await window.fetch(`${state.backendUrl}${path}`, {
       ...options,
+      cache: "no-store",
       headers,
     });
 
