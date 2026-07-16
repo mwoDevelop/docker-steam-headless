@@ -224,6 +224,11 @@ UNSUPPORTED_SUNSHINE_VWS_ACCELERATORS: Final = {
     "nvidia-tesla-p4-vws",
     "nvidia-tesla-p100-vws",
 }
+
+
+def gpu_pricing_type(gpu_type: str) -> str:
+    """Return the billing-catalog GPU type for a Compute vWS accelerator."""
+    return str(gpu_type or "").removesuffix("-vws")
 PERSISTENT_DISK_PRICE_TYPES: Final = {
     "pd-ssd": "SSD backed PD Capacity",
     "pd-balanced": "Balanced PD Capacity",
@@ -2001,9 +2006,10 @@ def build_price_estimate(
         components.append({"label": f"{spec['memoryGb']:g} GB RAM", "amountPln": round(amount, 4)})
 
     if gpu_count > 0:
-        gpu_rate = region_prices.get(("gpu", gpu_type))
+        pricing_gpu_type = gpu_pricing_type(gpu_type)
+        gpu_rate = region_prices.get(("gpu", pricing_gpu_type))
         if gpu_rate is None:
-            missing.append(gpu_type)
+            missing.append(pricing_gpu_type)
         else:
             amount = float(gpu_count) * gpu_rate
             total += amount
@@ -2147,8 +2153,9 @@ def priced_gpu_regions(gpu_type: str) -> set[str] | None:
         return None
 
     regions: set[str] = set()
+    pricing_gpu_type = gpu_pricing_type(gpu_type)
     for region, region_prices in (price_index.get("index", {}) or {}).items():
-        if isinstance(region_prices, dict) and ("gpu", gpu_type) in region_prices:
+        if isinstance(region_prices, dict) and ("gpu", pricing_gpu_type) in region_prices:
             regions.add(str(region))
     return regions
 
@@ -2251,7 +2258,10 @@ def build_hardware_payload() -> dict[str, Any]:
             gpu_type="nvidia-tesla-t4-vws",
             gpu_count=1,
             accelerator_mode="attached",
-            zones=filter_zones_by_gpu_price("nvidia-tesla-t4-vws", by_accelerator.get("nvidia-tesla-t4-vws", [])),
+            zones=filter_zones_by_gpu_price(
+                "nvidia-tesla-t4-vws",
+                by_accelerator.get("nvidia-tesla-t4-vws") or by_accelerator.get("nvidia-tesla-t4", []),
+            ),
         ),
         hardware_profile(
             hardware_id="nvidia-l4",
@@ -2260,7 +2270,10 @@ def build_hardware_payload() -> dict[str, Any]:
             gpu_type="nvidia-l4-vws",
             gpu_count=1,
             accelerator_mode="attached",
-            zones=filter_zones_by_gpu_price("nvidia-l4-vws", by_accelerator.get("nvidia-l4-vws", [])),
+            zones=filter_zones_by_gpu_price(
+                "nvidia-l4-vws",
+                by_accelerator.get("nvidia-l4-vws") or by_accelerator.get("nvidia-l4", []),
+            ),
         ),
     ]
 
