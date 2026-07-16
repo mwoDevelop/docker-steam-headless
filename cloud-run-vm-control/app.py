@@ -1817,7 +1817,7 @@ def price_key_for_sku(sku: dict[str, Any]) -> tuple[str, str] | None:
         return None
 
     description = str(sku.get("description", ""))
-    excluded_terms = ("Commitment", "Spot", "Preemptible", "DWS Defined Duration")
+    excluded_terms = ("Commitment", "Spot", "Preemptible")
     if any(term in description for term in excluded_terms):
         return None
 
@@ -2164,7 +2164,7 @@ def priced_gpu_regions(gpu_type: str) -> set[str] | None:
 
 def filter_zones_by_gpu_price(gpu_type: str, zones: list[str]) -> list[str]:
     priced_regions = priced_gpu_regions(gpu_type)
-    if priced_regions is None:
+    if not priced_regions:
         return zones
     return [zone for zone in zones if zone_region(zone) in priced_regions]
 
