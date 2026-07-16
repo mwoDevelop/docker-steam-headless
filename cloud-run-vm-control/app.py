@@ -1071,6 +1071,12 @@ def normalize_endpoint_record(raw_value: Any) -> dict[str, Any] | None:
     except ApiError:
         return None
     hardware = raw_value.get("hardware") if isinstance(raw_value.get("hardware"), dict) else {}
+    instance_name = bounded_gce_name(str(raw_value.get("instanceName", "") or "")) if raw_value.get("instanceName") else ""
+    zone = str(raw_value.get("zone", "") or "")
+    region = str(raw_value.get("region", "") or "")
+    static_ip = str(raw_value.get("staticIp", "") or "")
+    external_ip = str(raw_value.get("externalIp", "") or "")
+    ip_reservation_mode = "manual" if str(raw_value.get("ipReservationMode", "") or "").strip().lower() == "manual" else "ephemeral"
     normalized_hardware = {
         "id": str(hardware.get("id", "") or ""),
         "machineType": str(hardware.get("machineType", "") or ""),
@@ -1078,17 +1084,23 @@ def normalize_endpoint_record(raw_value: Any) -> dict[str, Any] | None:
         "gpuCount": int(hardware.get("gpuCount", 0) or 0),
         "acceleratorMode": str(hardware.get("acceleratorMode", "") or ""),
     }
+    if not instance_name:
+        zone = ""
+        external_ip = ""
+        normalized_hardware = {}
+        if ip_reservation_mode == "ephemeral":
+            region = ""
     return {
         "id": endpoint_id,
         "domain": domain,
-        "instanceName": bounded_gce_name(str(raw_value.get("instanceName", "") or "")) if raw_value.get("instanceName") else "",
-        "zone": str(raw_value.get("zone", "") or ""),
-        "region": str(raw_value.get("region", "") or ""),
+        "instanceName": instance_name,
+        "zone": zone,
+        "region": region,
         "addressName": bounded_gce_name(str(raw_value.get("addressName", f"steam-{endpoint_id}-ip") or f"steam-{endpoint_id}-ip")),
-        "staticIp": str(raw_value.get("staticIp", "") or ""),
-        "externalIp": str(raw_value.get("externalIp", "") or ""),
-        "ipReservationMode": "manual" if str(raw_value.get("ipReservationMode", "") or "").strip().lower() == "manual" else "ephemeral",
-        "hardware": normalized_hardware if normalized_hardware["id"] else {},
+        "staticIp": static_ip,
+        "externalIp": external_ip,
+        "ipReservationMode": ip_reservation_mode,
+        "hardware": normalized_hardware if normalized_hardware.get("id") else {},
     }
 
 
