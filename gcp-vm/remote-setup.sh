@@ -110,7 +110,7 @@ metadata_token() {
 set_instance_metadata_value() {
   local key="$1"
   local value="${2-}"
-  local token project zone name instance_json fingerprint items payload
+  local token project zone name instance_json fingerprint items items_file payload payload_file
   token="$(metadata_token || true)"
   project="$(project_id || true)"
   zone="$(zone_name || true)"
@@ -124,27 +124,33 @@ set_instance_metadata_value() {
   fingerprint="$(printf '%s' "$instance_json" | jq -r '.metadata.fingerprint // empty')"
   [[ -n "$fingerprint" ]] || return 0
   items="$(printf '%s' "$instance_json" | jq --arg key "$key" '[.metadata.items // [] | .[] | select(.key != $key)]')"
+  items_file="$(mktemp)"
+  printf '%s' "$items" > "$items_file"
 
   if [ -n "$value" ]; then
     payload="$(jq -n \
       --arg fingerprint "$fingerprint" \
       --arg key "$key" \
       --arg value "$value" \
-      --argjson items "$items" \
-      '{fingerprint: $fingerprint, items: ($items + [{key: $key, value: $value}])}')"
+      --slurpfile items "$items_file" \
+      '{fingerprint: $fingerprint, items: ($items[0] + [{key: $key, value: $value}])}')"
   else
     payload="$(jq -n \
       --arg fingerprint "$fingerprint" \
-      --argjson items "$items" \
-      '{fingerprint: $fingerprint, items: $items}')"
+      --slurpfile items "$items_file" \
+      '{fingerprint: $fingerprint, items: $items[0]}')"
   fi
+  rm -f "$items_file"
+  payload_file="$(mktemp)"
+  printf '%s' "$payload" > "$payload_file"
 
   curl --fail --silent --show-error \
     -X POST \
     -H "Authorization: Bearer ${token}" \
     -H "Content-Type: application/json" \
-    -d "$payload" \
+    --data-binary "@${payload_file}" \
     "https://compute.googleapis.com/compute/v1/projects/${project}/zones/${zone}/instances/${name}/setMetadata" >/dev/null || true
+  rm -f "$payload_file"
 }
 
 set_sunshine_status() {
@@ -211,14 +217,50 @@ sync_env_metadata() {
 wait_for_apt_idle
 apt-get update -y
 set_sunshine_status "starting" "VM setup in progress."
-apt-get install -y ca-certificates curl gnupg lsb-release ubuntu-drivers-common jq zstd rclone
+apt-get install -y ca-certificates curl gnupg lsb-release python3 ubuntu-drivers-common jq zstd rclone
 
-if ! command -v nvidia-smi >/dev/null 2>&1; then
-  ubuntu-drivers autoinstall || true
-  echo "Rebooting to load NVIDIA driver"
-  reboot || true
-  exit 0
-fi
+GPU_TYPE="$(metadata_get vm-gpu-type || true)"
+case "$GPU_TYPE" in
+  nvidia-tesla-t4-vws|nvidia-l4-vws)
+    VWS_MARKER=/var/lib/steam-headless-gce/nvidia-vws-driver-installing
+    VWS_INSTALLER=/opt/google/cuda-installer/cuda_installer.pyz
+    mkdir -p "$(dirname "$VWS_MARKER")" "$(dirname "$VWS_INSTALLER")"
+    if [[ -f "$VWS_MARKER" ]]; then
+      for _ in $(seq 1 180); do
+        if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1; then
+          rm -f "$VWS_MARKER"
+          break
+        fi
+        sleep 2
+      done
+      [[ ! -f "$VWS_MARKER" ]] || { set_sunshine_status "error" "NVIDIA RTX vWS driver did not become ready after reboot."; exit 1; }
+    elif [[ ! -f "$VWS_MARKER" ]]; then
+      touch "$VWS_MARKER"
+      curl -fsSL https://storage.googleapis.com/compute-gpu-installation-us/installer/latest/cuda_installer.pyz -o "$VWS_INSTALLER"
+      chmod 0755 "$VWS_INSTALLER"
+      if command -v nvidia-smi >/dev/null 2>&1; then
+        python3 "$VWS_INSTALLER" uninstall_driver || true
+        VWS_GENERIC_PACKAGES="$(dpkg-query -W -f='${db:Status-Status} ${binary:Package}\n' \
+          'nvidia-driver-*' 'nvidia-dkms-*' 'nvidia-utils-*' 'nvidia-compute-utils-*' \
+          'nvidia-kernel-common-*' 'nvidia-kernel-source-*' 'nvidia-firmware-*' 2>/dev/null | \
+          awk '$1 == "installed" {print $2}')"
+        [[ -z "$VWS_GENERIC_PACKAGES" ]] || apt-get purge -y $VWS_GENERIC_PACKAGES
+      fi
+      python3 "$VWS_INSTALLER" install_driver --installation-mode=binary --installation-branch=lts
+      echo "Rebooting to activate the NVIDIA RTX vWS driver"
+      reboot || true
+      exit 0
+    fi
+    ;;
+  *)
+    if ! command -v nvidia-smi >/dev/null 2>&1; then
+      ubuntu-drivers autoinstall || true
+      echo "Rebooting to load NVIDIA driver"
+      reboot || true
+      exit 0
+    fi
+    ;;
+esac
 
 # Docker Engine + compose plugin
 install -m 0755 -d /etc/apt/keyrings

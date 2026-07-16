@@ -118,7 +118,7 @@ normalize_metadata_value() {
 set_instance_metadata_value() {
   local key="$1"
   local value="${2-}"
-  local token project zone name instance_json fingerprint items payload operation_json operation_name
+  local token project zone name instance_json fingerprint items items_file payload payload_file operation_json operation_name
   token="$(metadata_token || true)"
   project="$(project_id || true)"
   zone="$(zone_name || true)"
@@ -133,31 +133,38 @@ set_instance_metadata_value() {
     fingerprint="$(printf '%s' "$instance_json" | jq -r '.metadata.fingerprint // empty')"
     [[ -n "$fingerprint" ]] || return 0
     items="$(printf '%s' "$instance_json" | jq --arg key "$key" '[.metadata.items // [] | .[] | select(.key != $key)]')"
+    items_file="$(mktemp)"
+    printf '%s' "$items" > "$items_file"
 
     if [ -n "$value" ]; then
       payload="$(jq -n \
         --arg fingerprint "$fingerprint" \
         --arg key "$key" \
         --arg value "$value" \
-        --argjson items "$items" \
-        '{fingerprint: $fingerprint, items: ($items + [{key: $key, value: $value}])}')"
+        --slurpfile items "$items_file" \
+        '{fingerprint: $fingerprint, items: ($items[0] + [{key: $key, value: $value}])}')"
     else
       payload="$(jq -n \
         --arg fingerprint "$fingerprint" \
-        --argjson items "$items" \
-        '{fingerprint: $fingerprint, items: $items}')"
+        --slurpfile items "$items_file" \
+        '{fingerprint: $fingerprint, items: $items[0]}')"
     fi
+    rm -f "$items_file"
+    payload_file="$(mktemp)"
+    printf '%s' "$payload" > "$payload_file"
 
     if operation_json="$(curl --fail --silent --show-error \
       -X POST \
       -H "Authorization: Bearer ${token}" \
       -H "Content-Type: application/json" \
-      -d "$payload" \
+      --data-binary "@${payload_file}" \
       "https://compute.googleapis.com/compute/v1/projects/${project}/zones/${zone}/instances/${name}/setMetadata")"; then
+      rm -f "$payload_file"
       operation_name="$(printf '%s\n' "$operation_json" | jq -r '.name // empty' 2>/dev/null || true)"
       wait_for_zone_operation "$token" "$project" "$zone" "$operation_name"
       return 0
     fi
+    rm -f "$payload_file"
 
     sleep 2
   done
@@ -179,6 +186,13 @@ record_sunshine_version() {
   raw_version="$(docker exec "$container_id" sunshine --version 2>/dev/null | head -n 1 || true)"
   version="$(printf '%s\n' "$raw_version" | grep -Eo '[0-9]+(\.[0-9]+){1,3}([+-][0-9A-Za-z.-]+)?' | head -n 1 || true)"
   [[ -n "$version" ]] && set_instance_metadata_value vm-sunshine-version "$version"
+}
+
+sunshine_video_startup_error() {
+  local container_id
+  container_id="$(docker compose "${COMPOSE_FILES[@]}" ps -q | head -n 1 || true)"
+  [[ -n "$container_id" ]] || return 1
+  docker exec "$container_id" bash -lc "grep -E -m1 'Fatal: Unable to find display or encoder|Fatal: Please check that a display is connected|Video failed to find working encoder' /home/default/.config/sunshine/sunshine.log 2>/dev/null" || true
 }
 
 clear_backup_ready_marker() {
@@ -467,8 +481,126 @@ gpu_enabled() {
   [[ -z "$count" || "$count" != "0" ]]
 }
 
+display_capable_gpu() {
+  case "$(metadata_get vm-gpu-type)" in
+    nvidia-tesla-t4-vws|nvidia-l4-vws)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+is_nvidia_vws_driver_ready() {
+  is_nvidia_ready && nvidia-smi -q 2>/dev/null | \
+    awk '/vGPU Software Licensed Product/{section=1} section && /Product Name[[:space:]]*:[[:space:]]*NVIDIA RTX Virtual Workstation/{found=1} END{exit !found}'
+}
+
+legacy_vws_driver_url() {
+  case "$(metadata_get vm-gpu-type)" in
+    nvidia-tesla-p4-vws|nvidia-tesla-p100-vws)
+      printf '%s\n' 'https://storage.googleapis.com/nvidia-drivers-us-public/GRID/vGPU16.14/nvidia-linux-grid-535_535.309.01_amd64.deb'
+      ;;
+  esac
+}
+
+remove_generic_nvidia_driver() {
+  local packages=()
+  while IFS= read -r package; do
+    [[ -n "$package" ]] && packages+=("$package")
+  done < <(dpkg-query -W -f='${db:Status-Status} ${binary:Package}\n' \
+    'nvidia-driver-*' 'nvidia-dkms-*' 'nvidia-utils-*' 'nvidia-compute-utils-*' \
+    'nvidia-kernel-common-*' 'nvidia-kernel-source-*' 'nvidia-firmware-*' 2>/dev/null | \
+    awk '$1 == "installed" {print $2}')
+  [[ ${#packages[@]} -eq 0 ]] || apt-get purge -y "${packages[@]}"
+}
+
+ensure_nvidia_vws_driver() {
+  local retry_file="${STATE_DIR}/nvidia-vws-driver-installing"
+  local installer_dir="/opt/google/cuda-installer"
+  local installer_file="${installer_dir}/cuda_installer.pyz"
+  local legacy_driver_url=""
+  local legacy_driver_deb=""
+
+  if [[ -f "$retry_file" ]]; then
+    for _ in $(seq 1 30); do
+      modprobe nvidia 2>/dev/null || true
+      modprobe nvidia_uvm 2>/dev/null || true
+      if is_nvidia_vws_driver_ready; then
+        rm -f "$retry_file"
+        return 0
+      fi
+      sleep 2
+    done
+  fi
+
+  if [[ -f "$retry_file" ]]; then
+    log "Continuing NVIDIA RTX vWS driver installation after reboot."
+  else
+    log "Installing the Google Compute Engine NVIDIA RTX vWS driver."
+    touch "$retry_file"
+  fi
+  mkdir -p "$installer_dir"
+  if ! curl -fsSL https://storage.googleapis.com/compute-gpu-installation-us/installer/latest/cuda_installer.pyz -o "$installer_file"; then
+    rm -f "$retry_file"
+    set_sunshine_status "error" "Could not download the NVIDIA RTX vWS driver installer."
+    return 1
+  fi
+  chmod 0755 "$installer_file"
+
+  legacy_driver_url="$(legacy_vws_driver_url)"
+  if [[ -z "$legacy_driver_url" ]] && is_nvidia_ready && ! is_nvidia_vws_driver_ready; then
+    python3 "$installer_file" uninstall_driver || true
+    if ! remove_generic_nvidia_driver; then
+      rm -f "$retry_file"
+      set_sunshine_status "error" "Could not remove the generic NVIDIA driver before installing NVIDIA RTX vWS."
+      return 1
+    fi
+  fi
+  if [[ -n "$legacy_driver_url" ]]; then
+    legacy_driver_deb="${installer_dir}/$(basename "$legacy_driver_url")"
+    apt-get install -y build-essential libvulkan1 gcc-12 "linux-headers-$(uname -r)"
+    update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 12 || true
+    if ! curl -fsSL "$legacy_driver_url" -o "$legacy_driver_deb"; then
+      rm -f "$retry_file"
+      set_sunshine_status "error" "Could not download the legacy NVIDIA RTX vWS driver."
+      return 1
+    fi
+    if ! dpkg -i "$legacy_driver_deb" && ! apt-get install -f -y; then
+      rm -f "$retry_file"
+      set_sunshine_status "error" "Legacy NVIDIA RTX vWS driver installation failed."
+      return 1
+    fi
+    if is_nvidia_vws_driver_ready; then
+      rm -f "$retry_file"
+      return 0
+    fi
+    log "Rebooting once to activate the legacy NVIDIA RTX vWS driver."
+    reboot || true
+    exit 0
+  fi
+
+  if ! python3 "$installer_file" install_driver --installation-mode=binary --installation-branch=lts; then
+    rm -f "$retry_file"
+    set_sunshine_status "error" "NVIDIA RTX vWS driver installation failed."
+    return 1
+  fi
+
+  if is_nvidia_vws_driver_ready; then
+    rm -f "$retry_file"
+    return 0
+  fi
+
+  log "Rebooting once to activate the NVIDIA RTX vWS driver."
+  reboot || true
+  exit 0
+}
+
 ensure_nvidia_driver() {
   local retry_file="${STATE_DIR}/nvidia-driver-bootstrapped"
+  if display_capable_gpu; then
+    ensure_nvidia_vws_driver
+    return $?
+  fi
   if is_nvidia_ready; then
     rm -f "$retry_file"
     return 0
@@ -504,7 +636,7 @@ log "Installing base packages"
 clear_backup_ready_marker
 set_sunshine_status "starting" "VM startup in progress."
 apt-get update -y
-apt-get install -y ca-certificates curl gnupg lsb-release ubuntu-drivers-common jq zstd rclone
+apt-get install -y ca-certificates curl gnupg lsb-release python3 ubuntu-drivers-common jq zstd rclone
 if gpu_enabled; then
   ensure_nvidia_driver
   is_nvidia_ready || log "NVIDIA stack check warning: proceeding with best-effort startup."
@@ -735,17 +867,29 @@ if [[ "$(metadata_get vm-restore-mode)" == "create" ]]; then
 fi
 
 sunshine_http_code=""
+sunshine_ready_polls=0
+sunshine_video_error=""
 for _ in $(seq 1 60); do
+  sunshine_video_error="$(sunshine_video_startup_error || true)"
+  if [[ -n "$sunshine_video_error" ]]; then
+    set_sunshine_status "error" "Sunshine video initialization failed: ${sunshine_video_error}"
+    break
+  fi
   sunshine_http_code="$(curl -k --silent --output /dev/null --write-out '%{http_code}' --max-time 5 https://127.0.0.1:47990/ || true)"
   if [[ "$sunshine_http_code" == "200" || "$sunshine_http_code" == "401" || "$sunshine_http_code" == "403" ]]; then
-    record_sunshine_version
-    set_sunshine_status "ready" "Sunshine Web UI responded with HTTP ${sunshine_http_code}."
-    break
+    sunshine_ready_polls=$((sunshine_ready_polls + 1))
+    if [[ "$sunshine_ready_polls" -ge 6 ]]; then
+      record_sunshine_version
+      set_sunshine_status "ready" "Sunshine Web UI and video initialization are ready."
+      break
+    fi
+  else
+    sunshine_ready_polls=0
   fi
   sleep 2
 done
 
-if [[ "$sunshine_http_code" != "200" && "$sunshine_http_code" != "401" && "$sunshine_http_code" != "403" ]]; then
+if [[ -z "$sunshine_video_error" && "$sunshine_ready_polls" -lt 6 ]]; then
   set_sunshine_status "starting" "VM is running, but Sunshine Web UI is still warming up."
 fi
 

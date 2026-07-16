@@ -71,7 +71,7 @@ CONFIG = {
     "instance": os.environ.get("GCE_NAME", ""),
     "legacy_instance_names": csv_env("LEGACY_GCE_NAMES"),
     "machine_type": os.environ.get("MACHINE_TYPE", "n1-standard-4"),
-    "gpu_type": os.environ.get("GPU_TYPE", "nvidia-tesla-t4"),
+    "gpu_type": os.environ.get("GPU_TYPE", "nvidia-tesla-t4-vws"),
     "gpu_count": int(os.environ.get("GPU_COUNT", "1") or "1"),
     "boot_disk_size": os.environ.get("BOOT_DISK_SIZE", "60GB"),
     "boot_disk_type": os.environ.get("BOOT_DISK_TYPE", "pd-ssd"),
@@ -184,9 +184,13 @@ MACHINE_TYPE_SPECS: Final = {
 }
 GPU_PRICE_DESCRIPTION_ALIASES: Final = {
     "nvidia-l4": ("Nvidia L4 GPU",),
+    "nvidia-l4-vws": ("Nvidia L4 Virtual Workstation GPU", "Nvidia L4 GPU"),
     "nvidia-tesla-t4": ("Nvidia Tesla T4 GPU",),
+    "nvidia-tesla-t4-vws": ("Nvidia Tesla T4 Virtual Workstation GPU", "Nvidia Tesla T4 GPU"),
     "nvidia-tesla-p4": ("Nvidia Tesla P4 GPU",),
+    "nvidia-tesla-p4-vws": ("Nvidia Tesla P4 Virtual Workstation GPU", "Nvidia Tesla P4 GPU"),
     "nvidia-tesla-p100": ("Nvidia Tesla P100 GPU",),
+    "nvidia-tesla-p100-vws": ("Nvidia Tesla P100 Virtual Workstation GPU", "Nvidia Tesla P100 GPU"),
     "nvidia-tesla-v100": ("Nvidia Tesla V100 GPU",),
     "nvidia-tesla-a100": ("Nvidia Tesla A100 GPU",),
     "nvidia-a100-80gb": ("Nvidia Tesla A100 80GB GPU", "Nvidia A100 80GB GPU"),
@@ -199,9 +203,13 @@ GPU_PRICE_DESCRIPTION_ALIASES: Final = {
 }
 GPU_VRAM_GB: Final = {
     "nvidia-l4": 24,
+    "nvidia-l4-vws": 24,
     "nvidia-tesla-t4": 16,
+    "nvidia-tesla-t4-vws": 16,
     "nvidia-tesla-p4": 8,
+    "nvidia-tesla-p4-vws": 8,
     "nvidia-tesla-p100": 16,
+    "nvidia-tesla-p100-vws": 16,
     "nvidia-tesla-v100": 16,
     "nvidia-tesla-a100": 40,
     "nvidia-a100-80gb": 80,
@@ -211,6 +219,10 @@ GPU_VRAM_GB: Final = {
     "nvidia-b200": 180,
     "nvidia-gb200": 186,
     "nvidia-rtx-pro-6000": 96,
+}
+UNSUPPORTED_SUNSHINE_VWS_ACCELERATORS: Final = {
+    "nvidia-tesla-p4-vws",
+    "nvidia-tesla-p100-vws",
 }
 PERSISTENT_DISK_PRICE_TYPES: Final = {
     "pd-ssd": "SSD backed PD Capacity",
@@ -1231,11 +1243,12 @@ def clean_resource_name_part(raw: str) -> str:
 def hardware_name_slug(hardware_id: str, gpu_type: str, gpu_count: int) -> str:
     if int(gpu_count or 0) <= 0 or hardware_id == CPU_HARDWARE_ID:
         return "cpu"
+    catalog_gpu_type = gpu_type.removesuffix("-vws")
     aliases = {
         "nvidia-tesla-t4": "t4",
         "nvidia-l4": "l4",
     }
-    return aliases.get(gpu_type, aliases.get(hardware_id, clean_resource_name_part(gpu_type or hardware_id)))
+    return aliases.get(catalog_gpu_type, aliases.get(hardware_id, clean_resource_name_part(catalog_gpu_type or hardware_id)))
 
 
 def bounded_gce_name(raw_name: str) -> str:
@@ -2233,35 +2246,40 @@ def build_hardware_payload() -> dict[str, Any]:
         ),
         hardware_profile(
             hardware_id="nvidia-tesla-t4",
-            label="GPU T4",
+            label="GPU T4 vWS",
             machine_type=DEFAULT_T4_MACHINE_TYPE,
-            gpu_type="nvidia-tesla-t4",
+            gpu_type="nvidia-tesla-t4-vws",
             gpu_count=1,
             accelerator_mode="attached",
-            zones=filter_zones_by_gpu_price("nvidia-tesla-t4", by_accelerator.get("nvidia-tesla-t4", [])),
+            zones=filter_zones_by_gpu_price("nvidia-tesla-t4-vws", by_accelerator.get("nvidia-tesla-t4-vws", [])),
         ),
         hardware_profile(
             hardware_id="nvidia-l4",
-            label="GPU L4",
+            label="GPU L4 vWS",
             machine_type=DEFAULT_L4_MACHINE_TYPE,
-            gpu_type="nvidia-l4",
+            gpu_type="nvidia-l4-vws",
             gpu_count=1,
-            accelerator_mode="builtin",
-            zones=filter_zones_by_gpu_price("nvidia-l4", by_accelerator.get("nvidia-l4", [])),
+            accelerator_mode="attached",
+            zones=filter_zones_by_gpu_price("nvidia-l4-vws", by_accelerator.get("nvidia-l4-vws", [])),
         ),
     ]
 
-    known = {str(profile["id"]) for profile in profiles}
+    known_gpu_types = {str(profile["gpuType"]) for profile in profiles}
     for accelerator_name, accelerator_zone_list in by_accelerator.items():
-        if accelerator_name in known or not is_priceable_gpu_accelerator(accelerator_name):
+        if (
+            accelerator_name in known_gpu_types
+            or accelerator_name in UNSUPPORTED_SUNSHINE_VWS_ACCELERATORS
+            or (not accelerator_name.endswith("-vws") and f"{accelerator_name}-vws" in by_accelerator)
+            or not is_priceable_gpu_accelerator(accelerator_name)
+        ):
             continue
         priced_zones = filter_zones_by_gpu_price(accelerator_name, accelerator_zone_list)
         if not priced_zones:
             continue
         profiles.append(
             hardware_profile(
-                hardware_id=accelerator_name,
-                label=accelerator_name,
+                hardware_id=accelerator_name.removesuffix("-vws"),
+                label=accelerator_name.removesuffix("-vws") + (" vWS" if accelerator_name.endswith("-vws") else ""),
                 machine_type=DEFAULT_T4_MACHINE_TYPE,
                 gpu_type=accelerator_name,
                 gpu_count=1,
@@ -2322,10 +2340,13 @@ def instance_hardware_selection(instance: dict[str, Any]) -> dict[str, Any]:
             "acceleratorMode": "none",
         }
 
-    accelerator_mode = "builtin" if machine_type.startswith("g2-") or gpu_type == "nvidia-l4" else "attached"
-    label = "GPU L4" if gpu_type == "nvidia-l4" else "GPU T4" if gpu_type == "nvidia-tesla-t4" else gpu_type
+    hardware_id = gpu_type.removesuffix("-vws")
+    accelerator_mode = "builtin" if machine_type.startswith("g2-") and not gpu_type.endswith("-vws") else "attached"
+    label = "GPU L4" if hardware_id == "nvidia-l4" else "GPU T4" if hardware_id == "nvidia-tesla-t4" else hardware_id
+    if gpu_type.endswith("-vws"):
+        label += " vWS"
     return {
-        "id": gpu_type,
+        "id": hardware_id,
         "label": label,
         "machineType": machine_type,
         "gpuType": gpu_type,
@@ -3663,6 +3684,24 @@ def reconcile_stopped_instance_hardware(instance: dict[str, Any]) -> dict[str, A
     return set_instance_scheduling_for_selected_hardware(instance)
 
 
+def ensure_instance_virtual_display(instance: dict[str, Any]) -> dict[str, Any]:
+    display_device = instance.get("displayDevice", {}) or {}
+    if isinstance(display_device, dict) and bool(display_device.get("enableDisplay")):
+        return instance
+    if str(instance.get("status", "")).upper() != "TERMINATED":
+        raise ApiError("The VM virtual display can only be enabled while the VM is stopped.", 400)
+
+    operation = compute_request(
+        "POST",
+        f"{instance_self_url(instance)}/updateDisplayDevice",
+        json={"enableDisplay": True},
+    )
+    if not isinstance(operation, dict):
+        raise ApiError("Failed to enable the VM virtual display device.", 502)
+    wait_for_zone_operation(operation, zone=instance_zone_name(instance), timeout_seconds=180)
+    return get_instance()
+
+
 def parse_auto_stop_hours(payload: dict[str, Any]) -> int | None:
     raw = payload.get("autoStopHours")
     if raw in (None, "", False):
@@ -4255,6 +4294,7 @@ def build_instance_create_request(
             "onHostMaintenance": "TERMINATE",
             "automaticRestart": True,
         },
+        "displayDevice": {"enableDisplay": True},
             "metadata": {
                 "items": build_instance_metadata_items(
                     auto_stop_hours=auto_stop_hours,
@@ -4386,6 +4426,14 @@ def build_sunshine_status(instance: dict[str, Any] | None) -> dict[str, str]:
             "state": "stopping",
             "label": "Stopping",
             "detail": detail or "Steam Headless and Sunshine are stopping for the requested VM action.",
+            "version": version,
+        }
+    gpu_type = metadata_value(instance, "vm-gpu-type").strip() or instance_accelerator_summary(instance)[0]
+    if gpu_type in UNSUPPORTED_SUNSHINE_VWS_ACCELERATORS:
+        return {
+            "state": "error",
+            "label": "Unsupported GPU",
+            "detail": f"{gpu_type} uses a legacy vGPU license that does not provide NVIDIA RTX Virtual Workstation for Sunshine. Create the VM with T4 vWS or L4 vWS.",
             "version": version,
         }
     if is_gpu_disabled_for_instance(instance):
@@ -5362,6 +5410,7 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
 
             current_instance, sunshine_credentials = ensure_sunshine_credentials(current_instance)
             current_instance = reconcile_stopped_instance_hardware(current_instance)
+            current_instance = ensure_instance_virtual_display(current_instance)
             current_instance = release_selected_endpoint_ephemeral_ip(current_instance)
             current_instance = ensure_instance_external_access_config(current_instance)
             set_instance_metadata_values(

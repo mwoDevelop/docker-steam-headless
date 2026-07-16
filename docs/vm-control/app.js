@@ -2971,7 +2971,7 @@
       await refreshGpuCapacityReservationCount();
       if (!options || options.refreshInstances !== false) {
         try {
-          await refreshInstances({ silent: true });
+          await refreshInstances({ silent: true, autoSelect: false });
         } catch (error) {
           console.warn("Failed to refresh instance list after status update.", error);
         }

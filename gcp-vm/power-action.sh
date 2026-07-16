@@ -94,7 +94,7 @@ zone_name() {
 
 set_instance_metadata_values() {
   local updates_json="$1"
-  local token project zone name attempt instance_json fingerprint items payload response_file response_code operation_name
+  local token project zone name attempt instance_json fingerprint items items_file payload payload_file response_file response_code operation_name
   token="$(metadata_token || true)"
   project="$(project_id || true)"
   zone="$(zone_name || true)"
@@ -111,9 +111,11 @@ set_instance_metadata_values() {
     fingerprint="$(printf '%s' "$instance_json" | jq -r '.metadata.fingerprint // empty')"
     [[ -n "$fingerprint" ]] || return 1
     items="$(printf '%s' "$instance_json" | jq '[.metadata.items // [] | .[]]')"
+    items_file="$(mktemp)"
+    printf '%s' "$items" > "$items_file"
     payload="$(jq -n \
       --arg fingerprint "$fingerprint" \
-      --argjson existing "$items" \
+      --slurpfile existing "$items_file" \
       --argjson updates "$updates_json" \
       '
         def update_items($existing; $updates):
@@ -124,9 +126,12 @@ set_instance_metadata_values() {
           );
         {
           fingerprint: $fingerprint,
-          items: update_items($existing; $updates)
+          items: update_items($existing[0]; $updates)
         }
       ')"
+    rm -f "$items_file"
+    payload_file="$(mktemp)"
+    printf '%s' "$payload" > "$payload_file"
 
     response_file="$(mktemp)"
     response_code="$(curl --silent --show-error \
@@ -135,8 +140,9 @@ set_instance_metadata_values() {
       -X POST \
       -H "Authorization: Bearer ${token}" \
       -H "Content-Type: application/json" \
-      -d "$payload" \
+      --data-binary "@${payload_file}" \
       "https://compute.googleapis.com/compute/v1/projects/${project}/zones/${zone}/instances/${name}/setMetadata" || true)"
+    rm -f "$payload_file"
 
     if [[ "$response_code" == "200" ]]; then
       operation_name="$(jq -r '.name // empty' "$response_file")"
@@ -205,6 +211,12 @@ set_power_action_status() {
   fi
 }
 
+set_instance_metadata_value() {
+  local key="$1"
+  local value="$2"
+  set_instance_metadata_values "$(jq -n --arg key "$key" --arg value "$value" '{($key): $value}')"
+}
+
 set_sunshine_status() {
   local state="$1"
   local detail="${2-}"
@@ -226,6 +238,13 @@ record_sunshine_version() {
   version="$(printf '%s\n' "$raw_version" | grep -Eo '[0-9]+(\.[0-9]+){1,3}([+-][0-9A-Za-z.-]+)?' | head -n 1 || true)"
   [[ -n "$version" ]] || return 0
   set_instance_metadata_value vm-sunshine-version "$version"
+}
+
+sunshine_video_startup_error() {
+  local container_id
+  container_id="$(docker ps --filter 'name=steam-headless' --format '{{.ID}}' | head -n 1 || true)"
+  [[ -n "$container_id" ]] || return 1
+  docker exec "$container_id" bash -lc "grep -E -m1 'Fatal: Unable to find display or encoder|Fatal: Please check that a display is connected|Video failed to find working encoder' /home/default/.config/sunshine/sunshine.log 2>/dev/null" || true
 }
 
 set_minecraft_status() {
@@ -631,13 +650,23 @@ run_minecraft_action() {
 }
 
 wait_for_local_sunshine_ready() {
-  local http_code
+  local http_code video_error ready_polls=0
   for _ in $(seq 1 90); do
+    video_error="$(sunshine_video_startup_error || true)"
+    if [[ -n "$video_error" ]]; then
+      set_sunshine_status "error" "Sunshine video initialization failed: ${video_error}"
+      return 1
+    fi
     http_code="$(curl -k --silent --output /dev/null --write-out '%{http_code}' --max-time 5 https://127.0.0.1:47990/ || true)"
     if [[ "$http_code" == "200" || "$http_code" == "401" || "$http_code" == "403" ]]; then
-      record_sunshine_version
-      set_sunshine_status "ready" "Sunshine Web UI responded locally with HTTP ${http_code}."
-      return 0
+      ready_polls=$((ready_polls + 1))
+      if [[ "$ready_polls" -ge 6 ]]; then
+        record_sunshine_version
+        set_sunshine_status "ready" "Sunshine Web UI and video initialization are ready."
+        return 0
+      fi
+    else
+      ready_polls=0
     fi
     sleep 2
   done
