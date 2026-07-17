@@ -255,6 +255,48 @@ GPU_CREATION_PROFILE_SPECS: Final = {
         "machineType": DEFAULT_T4_MACHINE_TYPE,
         "acceleratorMode": "attached",
     },
+    "nvidia-tesla-a100": {
+        "id": "nvidia-tesla-a100",
+        "label": "GPU A100",
+        "machineType": DEFAULT_T4_MACHINE_TYPE,
+        "acceleratorMode": "attached",
+    },
+    "nvidia-a100-80gb": {
+        "id": "nvidia-a100-80gb",
+        "label": "GPU A100 80 GB",
+        "machineType": DEFAULT_T4_MACHINE_TYPE,
+        "acceleratorMode": "attached",
+    },
+    "nvidia-h100-80gb": {
+        "id": "nvidia-h100-80gb",
+        "label": "GPU H100 80 GB",
+        "machineType": DEFAULT_T4_MACHINE_TYPE,
+        "acceleratorMode": "attached",
+    },
+    "nvidia-h100-mega-80gb": {
+        "id": "nvidia-h100-mega-80gb",
+        "label": "GPU H100 Mega 80 GB",
+        "machineType": DEFAULT_T4_MACHINE_TYPE,
+        "acceleratorMode": "attached",
+    },
+    "nvidia-h200-141gb": {
+        "id": "nvidia-h200-141gb",
+        "label": "GPU H200 141 GB",
+        "machineType": DEFAULT_T4_MACHINE_TYPE,
+        "acceleratorMode": "attached",
+    },
+    "nvidia-b200": {
+        "id": "nvidia-b200",
+        "label": "GPU B200",
+        "machineType": DEFAULT_T4_MACHINE_TYPE,
+        "acceleratorMode": "attached",
+    },
+    "nvidia-gb200": {
+        "id": "nvidia-gb200",
+        "label": "GPU GB200",
+        "machineType": DEFAULT_T4_MACHINE_TYPE,
+        "acceleratorMode": "attached",
+    },
 }
 
 
