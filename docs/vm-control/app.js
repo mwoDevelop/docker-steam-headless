@@ -1505,6 +1505,8 @@
       &&
       Number(profile.gpuCount || 0) > 0
       && String(profile.gpuType || "").trim()
+      && Array.isArray(profile.zones)
+      && profile.zones.includes(zone)
     ));
     if (!zone || !profiles.length) {
       throw new Error("No GPU hardware profiles are configured for the capacity scan.");
