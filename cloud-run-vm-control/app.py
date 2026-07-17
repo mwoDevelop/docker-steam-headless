@@ -224,6 +224,38 @@ UNSUPPORTED_SUNSHINE_VWS_ACCELERATORS: Final = {
     "nvidia-tesla-p4-vws",
     "nvidia-tesla-p100-vws",
 }
+GPU_CREATION_PROFILE_SPECS: Final = {
+    "nvidia-tesla-t4-vws": {
+        "id": "nvidia-tesla-t4",
+        "label": "GPU T4 vWS",
+        "machineType": DEFAULT_T4_MACHINE_TYPE,
+        "acceleratorMode": "attached",
+    },
+    "nvidia-l4-vws": {
+        "id": "nvidia-l4",
+        "label": "GPU L4 vWS",
+        "machineType": DEFAULT_L4_MACHINE_TYPE,
+        "acceleratorMode": "attached",
+    },
+    "nvidia-tesla-p4": {
+        "id": "nvidia-tesla-p4",
+        "label": "GPU P4",
+        "machineType": DEFAULT_T4_MACHINE_TYPE,
+        "acceleratorMode": "attached",
+    },
+    "nvidia-tesla-p100": {
+        "id": "nvidia-tesla-p100",
+        "label": "GPU P100",
+        "machineType": DEFAULT_T4_MACHINE_TYPE,
+        "acceleratorMode": "attached",
+    },
+    "nvidia-tesla-v100": {
+        "id": "nvidia-tesla-v100",
+        "label": "GPU V100",
+        "machineType": DEFAULT_T4_MACHINE_TYPE,
+        "acceleratorMode": "attached",
+    },
+}
 
 
 PERSISTENT_DISK_PRICE_TYPES: Final = {
@@ -913,7 +945,7 @@ def runtime_image_agent_ready(instance: dict[str, Any] | None) -> bool:
 
 def build_admin_runtime_images_payload(admin_user: dict[str, Any]) -> dict[str, Any]:
     endpoints: list[dict[str, Any]] = []
-    for endpoint in read_endpoint_records():
+    for endpoint in reconcile_endpoint_instance_bindings():
         instance = endpoint_instance_or_none(endpoint)
         endpoints.append(
             {
@@ -1203,7 +1235,7 @@ def endpoint_public_payload(endpoint: dict[str, Any]) -> dict[str, Any]:
 
 
 def build_admin_endpoints_payload(admin_user: dict[str, Any]) -> dict[str, Any]:
-    return {"user": admin_user, "endpoints": [endpoint_public_payload(endpoint) for endpoint in read_endpoint_records()]}
+    return {"user": admin_user, "endpoints": [endpoint_public_payload(endpoint) for endpoint in reconcile_endpoint_instance_bindings()]}
 
 
 def request_override(name: str, fallback: Any) -> Any:
@@ -1414,6 +1446,22 @@ def endpoint_instance_or_none(endpoint: dict[str, Any]) -> dict[str, Any] | None
     return compute_request("GET", explicit_instance_url(zone, name), allow_404=True)
 
 
+def reconcile_endpoint_instance_bindings(records: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+    records = records if records is not None else read_endpoint_records()
+    changed = False
+    for endpoint in records:
+        name = str(endpoint.get("instanceName", "") or "")
+        zone = str(endpoint.get("zone", "") or "")
+        if not name and not zone:
+            continue
+        if not name or not zone or endpoint_instance_or_none(endpoint) is None:
+            clear_endpoint_instance_binding(endpoint)
+            changed = True
+    if changed:
+        write_endpoint_records(records)
+    return records
+
+
 def persist_endpoint(endpoint: dict[str, Any]) -> dict[str, Any]:
     records = read_endpoint_records()
     updated = False
@@ -1482,13 +1530,18 @@ def bind_selected_endpoint_to_instance(instance: dict[str, Any]) -> dict[str, An
 
 def unbind_selected_endpoint_instance() -> dict[str, Any]:
     endpoint = selected_endpoint()
+    clear_endpoint_instance_binding(endpoint)
+    return persist_endpoint(endpoint)
+
+
+def clear_endpoint_instance_binding(endpoint: dict[str, Any]) -> dict[str, Any]:
     endpoint["instanceName"] = ""
     endpoint["zone"] = ""
     endpoint["hardware"] = {}
     endpoint["externalIp"] = ""
     if not endpoint_has_manual_static_ip(endpoint):
         endpoint["region"] = ""
-    return persist_endpoint(endpoint)
+    return endpoint
 
 
 def endpoint_has_manual_static_ip(endpoint: dict[str, Any]) -> bool:
@@ -2178,6 +2231,8 @@ def hardware_profile(
     gpu_count: int,
     accelerator_mode: str,
     zones: list[str],
+    supported: bool = True,
+    unavailable_reason: str = "",
 ) -> dict[str, Any]:
     return {
         "id": hardware_id,
@@ -2188,6 +2243,8 @@ def hardware_profile(
         "vramGb": GPU_VRAM_GB.get(gpu_type),
         "acceleratorMode": accelerator_mode,
         "zones": zones,
+        "supported": supported,
+        "unavailableReason": unavailable_reason,
     }
 
 
@@ -2198,7 +2255,7 @@ def lowest_profile_price_estimate(profile: dict[str, Any]) -> dict[str, Any] | N
     zone.  One representative zone per region is therefore sufficient and keeps
     building the hardware combobox local after the shared catalog cache is warm.
     """
-    if int(profile.get("gpuCount", 0) or 0) <= 0:
+    if not bool(profile.get("supported", True)) or int(profile.get("gpuCount", 0) or 0) <= 0:
         return None
 
     representative_zones: dict[str, str] = {}
@@ -2253,47 +2310,36 @@ def build_hardware_payload() -> dict[str, Any]:
             accelerator_mode="none",
             zones=zones,
         ),
-        hardware_profile(
-            hardware_id="nvidia-tesla-t4",
-            label="GPU T4 vWS",
-            machine_type=DEFAULT_T4_MACHINE_TYPE,
-            gpu_type="nvidia-tesla-t4-vws",
-            gpu_count=1,
-            accelerator_mode="attached",
-            zones=filter_zones_by_gpu_price("nvidia-tesla-t4-vws", by_accelerator.get("nvidia-tesla-t4-vws", [])),
-        ),
-        hardware_profile(
-            hardware_id="nvidia-l4",
-            label="GPU L4 vWS",
-            machine_type=DEFAULT_L4_MACHINE_TYPE,
-            gpu_type="nvidia-l4-vws",
-            gpu_count=1,
-            accelerator_mode="attached",
-            zones=filter_zones_by_gpu_price("nvidia-l4-vws", by_accelerator.get("nvidia-l4-vws", [])),
-        ),
     ]
 
-    known_gpu_types = {str(profile["gpuType"]) for profile in profiles}
     for accelerator_name, accelerator_zone_list in by_accelerator.items():
-        if (
-            accelerator_name in known_gpu_types
-            or accelerator_name in UNSUPPORTED_SUNSHINE_VWS_ACCELERATORS
-            or (not accelerator_name.endswith("-vws") and f"{accelerator_name}-vws" in by_accelerator)
-            or not is_priceable_gpu_accelerator(accelerator_name)
-        ):
+        if not accelerator_name.startswith("nvidia-"):
             continue
-        priced_zones = filter_zones_by_gpu_price(accelerator_name, accelerator_zone_list)
-        if not priced_zones:
-            continue
+        spec = GPU_CREATION_PROFILE_SPECS.get(accelerator_name)
+        supported = spec is not None
+        if accelerator_name in UNSUPPORTED_SUNSHINE_VWS_ACCELERATORS:
+            unavailable_reason = (
+                "This legacy vGPU profile does not provide the NVIDIA RTX Virtual Workstation license required by Sunshine."
+            )
+        elif not supported:
+            unavailable_reason = (
+                "No validated VM machine profile and Sunshine compatibility are configured for this GPU yet."
+            )
+        else:
+            unavailable_reason = ""
+        profile_id = str(spec["id"]) if spec else f"catalog-{accelerator_name}"
+        label = str(spec["label"]) if spec else gpu_billing_label(accelerator_name)
         profiles.append(
             hardware_profile(
-                hardware_id=accelerator_name.removesuffix("-vws"),
-                label=accelerator_name.removesuffix("-vws") + (" vWS" if accelerator_name.endswith("-vws") else ""),
-                machine_type=DEFAULT_T4_MACHINE_TYPE,
+                hardware_id=profile_id,
+                label=label,
+                machine_type=str(spec["machineType"]) if spec else "",
                 gpu_type=accelerator_name,
                 gpu_count=1,
-                accelerator_mode="attached",
-                zones=priced_zones,
+                accelerator_mode=str(spec["acceleratorMode"]) if spec else "attached",
+                zones=sorted(accelerator_zone_list),
+                supported=supported,
+                unavailable_reason=unavailable_reason,
             )
         )
 
@@ -2425,6 +2471,7 @@ def list_managed_compute_instances() -> list[dict[str, Any]]:
 
 
 def build_instances_payload() -> dict[str, Any]:
+    reconcile_endpoint_instance_bindings()
     return {
         "refreshedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "project": CONFIG["project"],
@@ -2521,6 +2568,7 @@ def options_passthrough():
         return jsonify({"ok": True})
 
     if request.path == "/api/config":
+        endpoints = reconcile_endpoint_instance_bindings()
         return jsonify(
             {
                 "service": "cloud-run-vm-control",
@@ -2534,8 +2582,8 @@ def options_passthrough():
                     "instance": selected_computed_instance_name(),
                     "baseInstance": bounded_gce_name(CONFIG["instance"]),
                 },
-                "duckdnsDomains": [endpoint["domain"] for endpoint in read_endpoint_records()],
-                "endpoints": [endpoint_public_payload(endpoint) for endpoint in read_endpoint_records()],
+                "duckdnsDomains": [endpoint["domain"] for endpoint in endpoints],
+                "endpoints": [endpoint_public_payload(endpoint) for endpoint in endpoints],
                 "ports": {
                     "novnc": CONFIG["novnc_port"],
                     "sunshine": CONFIG["sunshine_port"],
@@ -3226,6 +3274,8 @@ def gpu_hardware_profile(hardware_id: str) -> dict[str, Any]:
         if str(profile.get("id", "")) == normalized_id:
             if int(profile.get("gpuCount", 0) or 0) <= 0 or not str(profile.get("gpuType", "")).strip():
                 raise ApiError("GPU capacity scans require a selected GPU hardware profile.", 400)
+            if not bool(profile.get("supported", True)):
+                raise ApiError(str(profile.get("unavailableReason") or "This GPU is not supported by the current VM stack."), 400)
             return profile
     raise ApiError("The selected GPU hardware profile is no longer available.", 400)
 
@@ -3307,17 +3357,12 @@ def probe_gpu_capacity_zone(profile: dict[str, Any], zone: str, token: str) -> d
 
 
 def scan_gpu_capacity_zone(payload: dict[str, Any]) -> dict[str, Any]:
-    apply_target_overrides(payload, respect_existing_endpoint_hardware=False)
-    if selected_gpu_count() <= 0 or not selected_gpu_type():
-        raise ApiError("GPU capacity scans require a selected GPU hardware profile.", 400)
-    profile = {
-        "id": selected_hardware_id(),
-        "machineType": selected_machine_type(),
-        "gpuType": selected_gpu_type(),
-        "gpuCount": selected_gpu_count(),
-        "acceleratorMode": selected_accelerator_mode(),
-    }
-    zone = selected_zone()
+    profile = gpu_hardware_profile(str(payload.get("hardwareId", "")))
+    zone = str(payload.get("zone", "")).strip()
+    if not zone:
+        raise ApiError("GPU capacity scans require a zone.", 400)
+    if zone not in {str(item) for item in profile.get("zones", [])}:
+        raise ApiError("The selected zone is not compatible with this GPU profile.", 400)
     result = probe_gpu_capacity_zone(profile, zone, secrets.token_hex(4))
     result["hardwareId"] = str(profile["id"])
     return result
@@ -3326,6 +3371,15 @@ def scan_gpu_capacity_zone(payload: dict[str, Any]) -> dict[str, Any]:
 def scan_gpu_capacity_availability(payload: dict[str, Any]) -> dict[str, Any]:
     profile = gpu_hardware_profile(str(payload.get("hardwareId", "")))
     zones = [str(zone) for zone in profile.get("zones", []) if str(zone).strip()]
+    requested_zones = payload.get("zones")
+    if requested_zones is not None:
+        if not isinstance(requested_zones, list):
+            raise ApiError("GPU capacity scan zones must be a list.", 400)
+        allowed_zones = set(zones)
+        zones = list(dict.fromkeys(str(zone).strip() for zone in requested_zones if str(zone).strip()))
+        unsupported_zones = [zone for zone in zones if zone not in allowed_zones]
+        if unsupported_zones:
+            raise ApiError("The GPU capacity scan contains incompatible zones.", 400)
     if not zones:
         raise ApiError("No compatible zones are available for the selected GPU profile.", 400)
 

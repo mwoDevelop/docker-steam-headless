@@ -838,6 +838,10 @@
     return profiles.filter((profile) => profile && profile.id && Array.isArray(profile.zones));
   }
 
+  function hardwareProfileSupported(profile) {
+    return Boolean(profile) && profile.supported !== false;
+  }
+
   function selectedHardwareProfile() {
     const selectedId = String(elements.hardwareSelect && elements.hardwareSelect.value || "").trim();
     return getHardwareProfiles().find((profile) => String(profile.id) === selectedId) || null;
@@ -1048,7 +1052,7 @@
     const running = Boolean(run && !run.finished);
     const runningZoneCatalogScan = Boolean(state.selectedZoneGpuAvailabilityScanRun && !state.selectedZoneGpuAvailabilityScanRun.finished);
     const profile = selectedHardwareProfile();
-    const isGpu = profile && Number(profile.gpuCount || 0) > 0 && String(profile.gpuType || "").trim();
+    const isGpu = hardwareProfileSupported(profile) && Number(profile.gpuCount || 0) > 0 && String(profile.gpuType || "").trim();
     const isFiltered = Boolean(activeGpuAvailabilityScan(profile));
     const selectedZoneGpuScan = activeSelectedZoneGpuAvailabilityScan(selectedZone());
     const scope = selectedGpuScanScope();
@@ -1175,8 +1179,13 @@
 
     const zoneScan = activeSelectedZoneGpuAvailabilityScan(selectedZone());
     const profiles = zoneScan
-      ? allProfiles.filter((profile) => Number(profile.gpuCount || 0) <= 0 || zoneScan.availableHardwareIds.includes(String(profile.id)))
+      ? allProfiles.filter((profile) => (
+        !hardwareProfileSupported(profile)
+        || Number(profile.gpuCount || 0) <= 0
+        || zoneScan.availableHardwareIds.includes(String(profile.id))
+      ))
       : allProfiles;
+    const selectableProfiles = profiles.filter((profile) => hardwareProfileSupported(profile));
 
     const previousHardware = elements.hardwareSelect.value
       || elements.hardwareSelect.dataset.savedValue
@@ -1194,12 +1203,16 @@
       const price = gpuCount > 0
         ? ` - ${estimate && estimate.display ? estimate.display : "Price unavailable"}`
         : "";
-      return `<option value="${escapeHtml(id)}">${escapeHtml(profile.label || id)}${escapeHtml(price)} (${escapeHtml(suffix)}, ${zoneCount} zones)</option>`;
+      const unavailable = !hardwareProfileSupported(profile);
+      const availability = unavailable
+        ? ` - unavailable: ${String(profile.unavailableReason || "unsupported by this VM stack")}`
+        : "";
+      return `<option value="${escapeHtml(id)}"${unavailable ? " disabled" : ""}>${escapeHtml(profile.label || id)}${escapeHtml(price)} (${escapeHtml(suffix)}, ${zoneCount} zones)${escapeHtml(availability)}</option>`;
     }).join("");
-    if (profiles.some((profile) => String(profile.id) === previousHardware)) {
+    if (selectableProfiles.some((profile) => String(profile.id) === previousHardware)) {
       elements.hardwareSelect.value = previousHardware;
     } else {
-      elements.hardwareSelect.value = String(profiles[0].id || "");
+      elements.hardwareSelect.value = String((selectableProfiles[0] || {}).id || "");
     }
     elements.hardwareSelect.dataset.savedValue = "";
     renderZoneOptions();
@@ -1360,7 +1373,7 @@
 
   async function scanGpuAvailabilityAcrossZones() {
     const profile = selectedHardwareProfile();
-    if (!profile || Number(profile.gpuCount || 0) <= 0 || !String(profile.gpuType || "").trim()) {
+    if (!hardwareProfileSupported(profile) || Number(profile.gpuCount || 0) <= 0 || !String(profile.gpuType || "").trim()) {
       throw new Error("Select a GPU hardware profile before scanning availability.");
     }
     if (activeGpuAvailabilityScan(profile)) {
@@ -1387,7 +1400,14 @@
       hardwareId: String(profile.id || ""),
       hardwareLabel: String(profile.label || profile.id || "GPU"),
       scope,
-      target: selectedTargetParams(),
+      target: {
+        endpointId: selectedEndpointId(),
+        hardwareId: String(profile.id || ""),
+        machineType: String(profile.machineType || ""),
+        gpuType: String(profile.gpuType || ""),
+        gpuCount: Number(profile.gpuCount || 0),
+        acceleratorMode: String(profile.acceleratorMode || "attached"),
+      },
       zones,
       completed: 0,
       currentZone: "",
@@ -1481,6 +1501,8 @@
     }
 
     const profiles = getHardwareProfiles().filter((profile) => (
+      hardwareProfileSupported(profile)
+      &&
       Number(profile.gpuCount || 0) > 0
       && String(profile.gpuType || "").trim()
     ));
@@ -1705,12 +1727,32 @@
     if (!silent && elements.instancesStatus) {
       elements.instancesStatus.textContent = "Refreshing created instances...";
     }
+    await refreshEndpointRegistry();
     const data = await fetchApi("/api/instances", { method: "GET" });
     renderInstanceOptions(data);
     if (autoSelect) {
       await autoSelectCreatedInstanceIfNeeded({ silent: true });
     }
     return data;
+  }
+
+  async function refreshEndpointRegistry() {
+    const response = await window.fetch(`${state.backendUrl}/api/config`, {
+      method: "GET",
+      cache: "no-store",
+      headers: {
+        Accept: "application/json",
+      },
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(text || `Backend returned ${response.status}.`);
+    }
+    const config = await response.json();
+    state.backendConfig = config;
+    renderEndpointOptions(config);
+    renderTargetSummary();
+    return config;
   }
 
   function profileForInstance(instance) {
