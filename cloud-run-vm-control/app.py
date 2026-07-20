@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import secrets
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Final
@@ -313,6 +314,7 @@ PRICE_INDEX_CACHE: dict[str, Any] = {
     "effective_time": "",
     "conversion_rate": None,
 }
+PRICE_INDEX_LOCK = threading.Lock()
 FIREWALL_WEB_ALLOWED: Final = [{"IPProtocol": "tcp", "ports": ["22", "8083"]}]
 FIREWALL_SUNSHINE_ALLOWED: Final = [
     {"IPProtocol": "tcp", "ports": ["47984", "47989", "47990", "48010", "27036-27037"]},
@@ -1949,55 +1951,66 @@ def refresh_price_index(currency: str = PRICE_CURRENCY_CODE, *, allow_fetch: boo
     if not allow_fetch:
         raise ApiError("Pricing catalog is not loaded yet.", 503)
 
-    index: dict[str, dict[tuple[str, str], float]] = {}
-    effective_time = ""
-    conversion_rate: float | None = None
-    page_token = ""
-    session = compute_session()
-    for _ in range(20):
-        params = {
-            "currencyCode": currency,
-            "pageSize": "5000",
-        }
-        if page_token:
-            params["pageToken"] = page_token
-        response = session.get(
-            f"https://cloudbilling.googleapis.com/v1/services/{COMPUTE_BILLING_SERVICE_ID}/skus",
-            params=params,
-            timeout=30,
-        )
-        if response.status_code >= 400:
-            raise ApiError(f"Cloud Billing pricing catalog returned {response.status_code}.", 502)
-        data = response.json()
-        for sku in data.get("skus", []) or []:
-            if not isinstance(sku, dict):
-                continue
-            key = price_key_for_sku(sku)
-            price = sku_disk_hourly_price(sku) if key and key[0] == "disk" else sku_hourly_price(sku)
-            if not key or price is None:
-                continue
-            pricing_info = sku.get("pricingInfo", []) or []
-            if pricing_info:
-                effective_time = effective_time or str(pricing_info[0].get("effectiveTime", ""))
-                conversion_rate = conversion_rate or pricing_info[0].get("currencyConversionRate")
-            for region in sku.get("serviceRegions", []) or []:
-                region_key = str(region)
-                region_prices = index.setdefault(region_key, {})
-                region_prices.setdefault(key, price)
-        page_token = str(data.get("nextPageToken", "") or "")
-        if not page_token:
-            break
+    # A cold Cloud Run revision can receive several hardware requests in
+    # parallel. Only one request should scan the complete Billing catalog.
+    with PRICE_INDEX_LOCK:
+        now = time.time()
+        if (
+            PRICE_INDEX_CACHE["index"]
+            and PRICE_INDEX_CACHE["currency"] == currency
+            and now - float(PRICE_INDEX_CACHE["loaded_at"]) < PRICE_CACHE_TTL_SECONDS
+        ):
+            return PRICE_INDEX_CACHE
 
-    PRICE_INDEX_CACHE.update(
-        {
-            "loaded_at": now,
-            "currency": currency,
-            "index": index,
-            "effective_time": effective_time,
-            "conversion_rate": conversion_rate,
-        }
-    )
-    return PRICE_INDEX_CACHE
+        index: dict[str, dict[tuple[str, str], float]] = {}
+        effective_time = ""
+        conversion_rate: float | None = None
+        page_token = ""
+        session = compute_session()
+        for _ in range(20):
+            params = {
+                "currencyCode": currency,
+                "pageSize": "5000",
+            }
+            if page_token:
+                params["pageToken"] = page_token
+            response = session.get(
+                f"https://cloudbilling.googleapis.com/v1/services/{COMPUTE_BILLING_SERVICE_ID}/skus",
+                params=params,
+                timeout=30,
+            )
+            if response.status_code >= 400:
+                raise ApiError(f"Cloud Billing pricing catalog returned {response.status_code}.", 502)
+            data = response.json()
+            for sku in data.get("skus", []) or []:
+                if not isinstance(sku, dict):
+                    continue
+                key = price_key_for_sku(sku)
+                price = sku_disk_hourly_price(sku) if key and key[0] == "disk" else sku_hourly_price(sku)
+                if not key or price is None:
+                    continue
+                pricing_info = sku.get("pricingInfo", []) or []
+                if pricing_info:
+                    effective_time = effective_time or str(pricing_info[0].get("effectiveTime", ""))
+                    conversion_rate = conversion_rate or pricing_info[0].get("currencyConversionRate")
+                for region in sku.get("serviceRegions", []) or []:
+                    region_key = str(region)
+                    region_prices = index.setdefault(region_key, {})
+                    region_prices.setdefault(key, price)
+            page_token = str(data.get("nextPageToken", "") or "")
+            if not page_token:
+                break
+
+        PRICE_INDEX_CACHE.update(
+            {
+                "loaded_at": now,
+                "currency": currency,
+                "index": index,
+                "effective_time": effective_time,
+                "conversion_rate": conversion_rate,
+            }
+        )
+        return PRICE_INDEX_CACHE
 
 
 def machine_spec(machine_type: str) -> dict[str, float | str] | None:
@@ -2342,6 +2355,14 @@ def sort_hardware_profiles_by_price(profiles: list[dict[str, Any]]) -> list[dict
 
 
 def build_hardware_payload() -> dict[str, Any]:
+    # Hardware options include the lowest GPU price and are sorted by it. Warm
+    # the catalog before rendering the first list, instead of requiring a later
+    # /api/price request for the selected profile to populate the cache.
+    try:
+        refresh_price_index(PRICE_CURRENCY_CODE)
+    except Exception as error:
+        logging.warning("Hardware list loaded without pricing catalog: %s", error)
+
     zones = list_available_zones()
     by_accelerator = accelerator_zones(zones)
     profiles = [
