@@ -262,6 +262,18 @@ select {
   appearance: none;
 }
 
+#hardware-select option.sunshine-verified {
+  color: #6ae4d0;
+}
+
+#hardware-select option.sunshine-incompatible {
+  color: #ff8b82;
+}
+
+#hardware-select option.sunshine-untested {
+  color: #f2c66d;
+}
+
 .auth-grid {
   display: grid;
   gap: 16px;
@@ -552,6 +564,29 @@ select {
   margin: 0 0 4px;
   color: var(--muted);
   line-height: 1.5;
+}
+
+.gpu-compatibility-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  font-size: 0.88rem;
+}
+
+.gpu-compatibility-legend span {
+  font-weight: 700;
+}
+
+.gpu-compatibility-legend .sunshine-verified {
+  color: #6ae4d0;
+}
+
+.gpu-compatibility-legend .sunshine-incompatible {
+  color: #ff8b82;
+}
+
+.gpu-compatibility-legend .sunshine-untested {
+  color: #f2c66d;
 }
 
 button {

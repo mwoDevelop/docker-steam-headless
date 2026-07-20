@@ -389,6 +389,8 @@
         ? ["status"]
         : []);
 
+    const selectedProfile = selectedHardwareProfile();
+    const profileSupportsCreate = hardwareProfileSupported(selectedProfile);
     if (elements.refreshStatus) {
       elements.refreshStatus.disabled = !state.user;
     }
@@ -409,7 +411,7 @@
     if (elements.zoneSelect) {
       elements.zoneSelect.disabled = state.isBusy || !state.user || !selectedHardwareProfile();
     }
-    const canEditAutoStop = allowed.has("start") || allowed.has("create") || allowed.has("set-auto-stop");
+    const canEditAutoStop = allowed.has("start") || (allowed.has("create") && profileSupportsCreate) || allowed.has("set-auto-stop");
     elements.autoStopHours.disabled = state.isBusy || !state.user || !canEditAutoStop;
     if (elements.backupSelect) {
       const hasBackups = getAvailableBackups(state.lastStatus).length > 0;
@@ -440,6 +442,7 @@
       && target.zone
       && target.gpuType
       && Number(target.gpuCount || 0) > 0
+      && profileSupportsCreate
     );
     if (elements.checkGpuCapacity) {
       elements.checkGpuCapacity.disabled = state.isBusy || !state.user || !canCheckGpuCapacity;
@@ -458,6 +461,7 @@
         || (command !== "status" && (
           state.isBusy
           || !allowed.has(command)
+          || (command === "create" && !profileSupportsCreate)
           || (needsBackup && !hasSelectedBackup)
           || (needsApplication && !hasSelectedApplication)
           || (needsMinecraftState && !minecraftCommandAvailable(command))
@@ -842,6 +846,23 @@
     return Boolean(profile) && profile.supported !== false;
   }
 
+  function sunshineCompatibility(profile) {
+    const compatibility = profile && profile.sunshineCompatibility && typeof profile.sunshineCompatibility === "object"
+      ? profile.sunshineCompatibility
+      : {};
+    const state = String(compatibility.state || "untested").trim().toLowerCase();
+    const labels = {
+      verified: "Tested: works",
+      incompatible: "Tested: fails",
+      untested: "Not tested",
+    };
+    return {
+      state: Object.prototype.hasOwnProperty.call(labels, state) ? state : "untested",
+      label: String(compatibility.label || labels[state] || labels.untested),
+      detail: String(compatibility.detail || ""),
+    };
+  }
+
   function selectedHardwareProfile() {
     const selectedId = String(elements.hardwareSelect && elements.hardwareSelect.value || "").trim();
     return getHardwareProfiles().find((profile) => String(profile.id) === selectedId) || null;
@@ -1185,7 +1206,7 @@
         || zoneScan.availableHardwareIds.includes(String(profile.id))
       ))
       : allProfiles;
-    const selectableProfiles = profiles.filter((profile) => hardwareProfileSupported(profile));
+    const selectableProfiles = profiles;
 
     const previousHardware = elements.hardwareSelect.value
       || elements.hardwareSelect.dataset.savedValue
@@ -1203,11 +1224,13 @@
       const price = gpuCount > 0
         ? ` - ${estimate && estimate.display ? estimate.display : "Price unavailable"}`
         : "";
+      const compatibility = sunshineCompatibility(profile);
+      const compatibilityNote = gpuCount > 0 ? ` [Sunshine: ${compatibility.label}]` : "";
       const unavailable = !hardwareProfileSupported(profile);
       const availability = unavailable
-        ? ` - unavailable: ${String(profile.unavailableReason || "unsupported by this VM stack")}`
+        ? ` - Create unavailable: ${String(profile.unavailableReason || "unsupported by this VM stack")}`
         : "";
-      return `<option value="${escapeHtml(id)}"${unavailable ? " disabled" : ""}>${escapeHtml(profile.label || id)}${escapeHtml(price)} (${escapeHtml(suffix)}, ${zoneCount} zones)${escapeHtml(availability)}</option>`;
+      return `<option class="sunshine-${escapeHtml(compatibility.state)}" value="${escapeHtml(id)}">${escapeHtml(profile.label || id)}${escapeHtml(compatibilityNote)}${escapeHtml(price)} (${escapeHtml(suffix)}, ${zoneCount} zones)${escapeHtml(availability)}</option>`;
     }).join("");
     if (selectableProfiles.some((profile) => String(profile.id) === previousHardware)) {
       elements.hardwareSelect.value = previousHardware;

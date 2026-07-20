@@ -221,12 +221,28 @@ GPU_VRAM_GB: Final = {
     "nvidia-gb200": 186,
     "nvidia-rtx-pro-6000": 96,
 }
-UNSUPPORTED_SUNSHINE_ACCELERATORS: Final = {
-    "nvidia-tesla-p4",
-    "nvidia-tesla-p4-vws",
-    "nvidia-tesla-p100",
-    "nvidia-tesla-p100-vws",
+SUNSHINE_GPU_COMPATIBILITY: Final = {
+    "nvidia-tesla-t4-vws": {
+        "state": "verified",
+        "label": "Tested: works",
+        "detail": "Validated with the Steam Headless and Sunshine streaming stack.",
+    },
+    "nvidia-l4-vws": {
+        "state": "verified",
+        "label": "Tested: works",
+        "detail": "Validated with the Steam Headless and Sunshine streaming stack.",
+    },
+    "nvidia-tesla-p4": {
+        "state": "incompatible",
+        "label": "Tested: fails",
+        "detail": "Sunshine failed to find a usable display encoder on this raw P4 profile.",
+    },
 }
+INCOMPATIBLE_SUNSHINE_ACCELERATORS: Final = frozenset(
+    gpu_type
+    for gpu_type, compatibility in SUNSHINE_GPU_COMPATIBILITY.items()
+    if compatibility["state"] == "incompatible"
+)
 GPU_CREATION_PROFILE_SPECS: Final = {
     "nvidia-tesla-t4-vws": {
         "id": "nvidia-tesla-t4",
@@ -2290,6 +2306,7 @@ def hardware_profile(
     zones: list[str],
     supported: bool = True,
     unavailable_reason: str = "",
+    sunshine_compatibility: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     return {
         "id": hardware_id,
@@ -2302,6 +2319,7 @@ def hardware_profile(
         "zones": zones,
         "supported": supported,
         "unavailableReason": unavailable_reason,
+        "sunshineCompatibility": sunshine_compatibility or {},
     }
 
 
@@ -2312,7 +2330,7 @@ def lowest_profile_price_estimate(profile: dict[str, Any]) -> dict[str, Any] | N
     zone.  One representative zone per region is therefore sufficient and keeps
     building the hardware combobox local after the shared catalog cache is warm.
     """
-    if not bool(profile.get("supported", True)) or int(profile.get("gpuCount", 0) or 0) <= 0:
+    if int(profile.get("gpuCount", 0) or 0) <= 0:
         return None
 
     representative_zones: dict[str, str] = {}
@@ -2381,15 +2399,22 @@ def build_hardware_payload() -> dict[str, Any]:
         if not accelerator_name.startswith("nvidia-"):
             continue
         spec = GPU_CREATION_PROFILE_SPECS.get(accelerator_name)
-        supported = spec is not None and accelerator_name not in UNSUPPORTED_SUNSHINE_ACCELERATORS
-        if accelerator_name in UNSUPPORTED_SUNSHINE_ACCELERATORS:
-            unavailable_reason = (
-                "This accelerator is not validated for the Steam Headless and Sunshine streaming stack. "
-                "Use GPU T4 vWS or L4 vWS instead."
+        sunshine_compatibility = dict(
+            SUNSHINE_GPU_COMPATIBILITY.get(
+                accelerator_name,
+                {
+                    "state": "untested",
+                    "label": "Not tested",
+                    "detail": "This GPU has not yet been validated with the Steam Headless and Sunshine streaming stack.",
+                },
             )
+        )
+        supported = spec is not None and accelerator_name not in INCOMPATIBLE_SUNSHINE_ACCELERATORS
+        if sunshine_compatibility["state"] == "incompatible":
+            unavailable_reason = sunshine_compatibility["detail"]
         elif not supported:
             unavailable_reason = (
-                "No validated VM machine profile and Sunshine compatibility are configured for this GPU yet."
+                "No VM machine profile is configured for this GPU yet. It can be selected, but cannot be created or capacity-scanned."
             )
         else:
             unavailable_reason = ""
@@ -2406,6 +2431,7 @@ def build_hardware_payload() -> dict[str, Any]:
                 zones=sorted(accelerator_zone_list),
                 supported=supported,
                 unavailable_reason=unavailable_reason,
+                sunshine_compatibility=sunshine_compatibility,
             )
         )
 
@@ -4558,11 +4584,11 @@ def build_sunshine_status(instance: dict[str, Any] | None) -> dict[str, str]:
             "version": version,
         }
     gpu_type = metadata_value(instance, "vm-gpu-type").strip() or instance_accelerator_summary(instance)[0]
-    if gpu_type in UNSUPPORTED_SUNSHINE_ACCELERATORS:
+    if gpu_type in INCOMPATIBLE_SUNSHINE_ACCELERATORS:
         return {
             "state": "error",
-            "label": "Unsupported GPU",
-            "detail": f"{gpu_type} is not validated for the Steam Headless and Sunshine streaming stack. Create the VM with T4 vWS or L4 vWS.",
+            "label": "Incompatible GPU",
+            "detail": f"{gpu_type} is confirmed incompatible with the Steam Headless and Sunshine streaming stack.",
             "version": version,
         }
     if is_gpu_disabled_for_instance(instance):
@@ -5025,7 +5051,7 @@ def allowed_commands(instance: dict[str, Any] | None) -> list[str]:
         if active_power_action(instance):
             return ["status"]
         gpu_type = metadata_value(instance, "vm-gpu-type").strip() or instance_accelerator_summary(instance)[0]
-        if gpu_type in UNSUPPORTED_SUNSHINE_ACCELERATORS:
+        if gpu_type in INCOMPATIBLE_SUNSHINE_ACCELERATORS:
             return ["status", "stop", "delete"]
         if not hardware_matches:
             return ["status", "stop", "delete"]
@@ -5535,6 +5561,8 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
     require_no_active_power_action(current_instance, command)
 
     if command == "create":
+        if selected_gpu_count() > 0:
+            gpu_hardware_profile(selected_hardware_id())
         auto_stop_hours = parse_auto_stop_hours(payload)
         if current_instance is not None:
             if current_status != "TERMINATED" or instance_hardware_matches_selection(current_instance):
