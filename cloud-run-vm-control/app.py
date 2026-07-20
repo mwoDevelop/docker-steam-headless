@@ -197,7 +197,7 @@ GPU_PRICE_DESCRIPTION_ALIASES: Final = {
     "nvidia-a100-80gb": ("Nvidia Tesla A100 80GB GPU", "Nvidia A100 80GB GPU"),
     "nvidia-h100-80gb": ("Nvidia H100 80GB GPU",),
     "nvidia-h100-mega-80gb": ("Nvidia H100 80GB Mega GPU", "Nvidia H100 Mega 80GB GPU"),
-    "nvidia-h200-141gb": ("Nvidia H200 141GB GPU",),
+    "nvidia-h200-141gb": ("H200 141GB GPU", "Nvidia H200 141GB GPU"),
     "nvidia-b200": ("A4 Nvidia B200 (1 gpu slice)", "Nvidia B200 GPU"),
     "nvidia-gb200": ("Nvidia GB200 GPU",),
     "nvidia-rtx-pro-6000": ("Nvidia RTX PRO 6000 GPU", "Nvidia RTX Pro 6000 GPU"),
