@@ -5003,6 +5003,9 @@ def allowed_commands(instance: dict[str, Any] | None) -> list[str]:
     if status == "RUNNING":
         if active_power_action(instance):
             return ["status"]
+        gpu_type = metadata_value(instance, "vm-gpu-type").strip() or instance_accelerator_summary(instance)[0]
+        if gpu_type in UNSUPPORTED_SUNSHINE_ACCELERATORS:
+            return ["status", "stop", "delete"]
         if not hardware_matches:
             return ["status", "stop", "delete"]
         commands = ["status", "set-sunshine-password", "set-auto-stop"]
