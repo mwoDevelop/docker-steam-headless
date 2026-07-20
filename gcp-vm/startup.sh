@@ -773,7 +773,7 @@ ensure_env_key_missing PORT_NOVNC_WEB "8083"
 ensure_env_key_missing NEKO_NAT1TO1 ""
 ensure_env_key_missing ENABLE_STEAM "true"
 ensure_env_key_missing STEAM_ARGS "-silent"
-ensure_env_key_missing STEAM_HEADLESS_IMAGE "josh5/steam-headless:debian-dev-frontend-revamp"
+ensure_env_key_missing STEAM_HEADLESS_IMAGE "josh5/steam-headless:latest"
 ensure_env_key_missing ENABLE_SUNSHINE "true"
 ensure_env_key_missing SUNSHINE_USER "admin"
 ensure_env_key_missing SUNSHINE_PASS "change-me"
@@ -791,7 +791,7 @@ chmod 600 "$ENVF"
 sync_env_metadata
 
 STEAM_HEADLESS_IMAGE_VALUE="$(awk -F= '/^STEAM_HEADLESS_IMAGE=/{print substr($0,index($0,"=")+1)}' "$ENVF" | tail -n1)"
-STEAM_HEADLESS_IMAGE_VALUE="${STEAM_HEADLESS_IMAGE_VALUE:-josh5/steam-headless:debian-dev-frontend-revamp}"
+STEAM_HEADLESS_IMAGE_VALUE="${STEAM_HEADLESS_IMAGE_VALUE:-josh5/steam-headless:latest}"
 cat > "$COMPOSE_IMAGE_OVERRIDE" <<EOF
 ---
 version: "3.8"

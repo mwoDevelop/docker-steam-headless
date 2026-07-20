@@ -36,7 +36,7 @@ RUNTIME_IMAGE_STATUS_METADATA_KEY="vm-runtime-image-status"
 RUNTIME_IMAGE_DETAIL_METADATA_KEY="vm-runtime-image-detail"
 RUNTIME_IMAGE_AGENT_METADATA_KEY="vm-runtime-image-agent"
 MINECRAFT_IMAGE_METADATA_KEY="vm-minecraft-image"
-DEFAULT_STEAM_HEADLESS_IMAGE="josh5/steam-headless:debian-dev-frontend-revamp"
+DEFAULT_STEAM_HEADLESS_IMAGE="josh5/steam-headless:latest"
 DEFAULT_MINECRAFT_IMAGE="itzg/minecraft-server:latest"
 
 metadata_get() {

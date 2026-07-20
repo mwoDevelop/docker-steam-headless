@@ -365,7 +365,7 @@ MINECRAFT_VERSION_CACHE: dict[str, Any] = {
     "lastError": "",
     "loaded": False,
 }
-DEFAULT_STEAM_HEADLESS_IMAGE: Final = "josh5/steam-headless:debian-dev-frontend-revamp"
+DEFAULT_STEAM_HEADLESS_IMAGE: Final = "josh5/steam-headless:latest"
 DEFAULT_MINECRAFT_IMAGE: Final = "itzg/minecraft-server:latest"
 DOCKER_HUB_TAGS_URL: Final = "https://hub.docker.com/v2/repositories/{repository}/tags"
 RUNTIME_IMAGE_COMPONENTS: Final = {
@@ -373,7 +373,7 @@ RUNTIME_IMAGE_COMPONENTS: Final = {
         "label": "Steam Headless + Sunshine",
         "repository": "josh5/steam-headless",
         "requiresGpu": True,
-        "fallbackTags": ["debian", "latest", "debian-dev-frontend-revamp"],
+        "fallbackTags": ["latest", "debian", "debian-dev-frontend-revamp"],
     },
     "minecraft": {
         "label": "Minecraft container",
