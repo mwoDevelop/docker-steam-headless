@@ -2843,6 +2843,7 @@ def handle_unexpected_error(error: Exception):
 @app.route("/api/admin/users", methods=["GET", "POST", "OPTIONS"])
 @app.route("/api/admin/endpoints", methods=["GET", "POST", "OPTIONS"])
 @app.route("/api/admin/runtime-images", methods=["GET", "POST", "OPTIONS"])
+@app.route("/api/admin/compatibility", methods=["GET", "POST", "OPTIONS"])
 @app.route("/api/hardware", methods=["GET", "OPTIONS"])
 @app.route("/api/instances", methods=["GET", "OPTIONS"])
 @app.route("/api/price", methods=["GET", "OPTIONS"])
