@@ -220,8 +220,10 @@ GPU_VRAM_GB: Final = {
     "nvidia-gb200": 186,
     "nvidia-rtx-pro-6000": 96,
 }
-UNSUPPORTED_SUNSHINE_VWS_ACCELERATORS: Final = {
+UNSUPPORTED_SUNSHINE_ACCELERATORS: Final = {
+    "nvidia-tesla-p4",
     "nvidia-tesla-p4-vws",
+    "nvidia-tesla-p100",
     "nvidia-tesla-p100-vws",
 }
 GPU_CREATION_PROFILE_SPECS: Final = {
@@ -2358,10 +2360,11 @@ def build_hardware_payload() -> dict[str, Any]:
         if not accelerator_name.startswith("nvidia-"):
             continue
         spec = GPU_CREATION_PROFILE_SPECS.get(accelerator_name)
-        supported = spec is not None
-        if accelerator_name in UNSUPPORTED_SUNSHINE_VWS_ACCELERATORS:
+        supported = spec is not None and accelerator_name not in UNSUPPORTED_SUNSHINE_ACCELERATORS
+        if accelerator_name in UNSUPPORTED_SUNSHINE_ACCELERATORS:
             unavailable_reason = (
-                "This legacy vGPU profile does not provide the NVIDIA RTX Virtual Workstation license required by Sunshine."
+                "This accelerator is not validated for the Steam Headless and Sunshine streaming stack. "
+                "Use GPU T4 vWS or L4 vWS instead."
             )
         elif not supported:
             unavailable_reason = (
@@ -4534,11 +4537,11 @@ def build_sunshine_status(instance: dict[str, Any] | None) -> dict[str, str]:
             "version": version,
         }
     gpu_type = metadata_value(instance, "vm-gpu-type").strip() or instance_accelerator_summary(instance)[0]
-    if gpu_type in UNSUPPORTED_SUNSHINE_VWS_ACCELERATORS:
+    if gpu_type in UNSUPPORTED_SUNSHINE_ACCELERATORS:
         return {
             "state": "error",
             "label": "Unsupported GPU",
-            "detail": f"{gpu_type} uses a legacy vGPU license that does not provide NVIDIA RTX Virtual Workstation for Sunshine. Create the VM with T4 vWS or L4 vWS.",
+            "detail": f"{gpu_type} is not validated for the Steam Headless and Sunshine streaming stack. Create the VM with T4 vWS or L4 vWS.",
             "version": version,
         }
     if is_gpu_disabled_for_instance(instance):
