@@ -274,10 +274,6 @@ select {
   color: #f2c66d;
 }
 
-#hardware-select option.zone-unavailable {
-  text-decoration: line-through;
-}
-
 .auth-grid {
   display: grid;
   gap: 16px;

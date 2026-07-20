@@ -1195,10 +1195,14 @@
       );
       option.classList.toggle("zone-unavailable", zoneUnavailable);
       const baseLabel = option.dataset.baseLabel || option.textContent;
-      const unavailableLabel = [...baseLabel]
+      const hardwareLabel = option.dataset.hardwareLabel || baseLabel;
+      const unavailableLabel = [...hardwareLabel]
         .map((character) => (/\s/.test(character) ? character : `${character}\u0336`))
         .join("");
-      option.textContent = `${zoneUnavailable ? unavailableLabel : baseLabel}${zoneUnavailable ? " [Zone: unavailable]" : ""}`;
+      const unavailableBaseLabel = baseLabel.startsWith(hardwareLabel)
+        ? `${unavailableLabel}${baseLabel.slice(hardwareLabel.length)}`
+        : baseLabel;
+      option.textContent = `${zoneUnavailable ? unavailableBaseLabel : baseLabel}${zoneUnavailable ? " [Zone: unavailable]" : ""}`;
     });
   }
 
@@ -1252,8 +1256,9 @@
       const availability = unavailable
         ? ` - Create unavailable: ${String(profile.unavailableReason || "unsupported by this VM stack")}`
         : "";
-      const optionLabel = `${profile.label || id}${compatibilityNote}${price} (${suffix}, ${zoneCount} zones)${availability}`;
-      return `<option class="sunshine-${escapeHtml(compatibility.state)}" value="${escapeHtml(id)}" data-base-label="${escapeHtml(optionLabel)}">${escapeHtml(optionLabel)}</option>`;
+      const hardwareLabel = profile.label || id;
+      const optionLabel = `${hardwareLabel}${compatibilityNote}${price} (${suffix}, ${zoneCount} zones)${availability}`;
+      return `<option class="sunshine-${escapeHtml(compatibility.state)}" value="${escapeHtml(id)}" data-base-label="${escapeHtml(optionLabel)}" data-hardware-label="${escapeHtml(hardwareLabel)}">${escapeHtml(optionLabel)}</option>`;
     }).join("");
     if (selectableProfiles.some((profile) => String(profile.id) === previousHardware)) {
       elements.hardwareSelect.value = previousHardware;
