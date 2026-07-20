@@ -274,6 +274,10 @@ select {
   color: #f2c66d;
 }
 
+#hardware-select option.zone-unavailable {
+  font-style: italic;
+}
+
 .auth-grid {
   display: grid;
   gap: 16px;
