@@ -381,7 +381,7 @@ render_default_env() {
 NAME=SteamHeadless
 TZ=Europe/Warsaw
 USER_LOCALES=en_US.UTF-8 UTF-8
-DISPLAY=:5
+DISPLAY=:0
 SHM_SIZE=4GB
 HOME_DIR=/opt/container-data/steam-headless/home
 SHARED_SOCKETS_DIR=/opt/container-data/steam-headless/sockets
@@ -426,6 +426,13 @@ set_env_value() {
     mv "${ENVF}.tmp" "$ENVF"
   else
     echo "${key}=${value}" >> "$ENVF"
+  fi
+}
+
+migrate_legacy_display_default() {
+  if grep -qx 'DISPLAY=:5' "$ENVF"; then
+    set_env_value DISPLAY ":0"
+    log "Migrated legacy DISPLAY=:5 default to DISPLAY=:0"
   fi
 }
 
@@ -749,7 +756,8 @@ fi
 ensure_env_key_missing NAME "SteamHeadless"
 ensure_env_key_missing TZ "Europe/Warsaw"
 ensure_env_key_missing USER_LOCALES "en_US.UTF-8 UTF-8"
-ensure_env_key_missing DISPLAY ":5"
+ensure_env_key_missing DISPLAY ":0"
+migrate_legacy_display_default
 ensure_env_key_missing SHM_SIZE "4GB"
 ensure_env_key_missing HOME_DIR "/opt/container-data/steam-headless/home"
 ensure_env_key_missing SHARED_SOCKETS_DIR "/opt/container-data/steam-headless/sockets"
