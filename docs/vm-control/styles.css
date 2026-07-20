@@ -275,7 +275,7 @@ select {
 }
 
 #hardware-select option.zone-unavailable {
-  font-style: italic;
+  text-decoration: line-through;
 }
 
 .auth-grid {
