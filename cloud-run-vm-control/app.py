@@ -5735,12 +5735,20 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
             raise ApiError("Delete requires confirmation.", 400)
 
         if current_status == "RUNNING":
-            require_live_backup_ready(current_instance, command)
-            current_instance, _ = request_live_power_action(
-                current_instance,
-                action="delete",
-                status_detail="VM deleting without creating a backup.",
-            )
+            if is_live_backup_ready(current_instance):
+                current_instance, _ = request_live_power_action(
+                    current_instance,
+                    action="delete",
+                    status_detail="VM deleting without creating a backup.",
+                )
+            else:
+                # Delete no longer creates a backup. A VM which has not reached
+                # the guest-ready marker must still be removable, for example
+                # after a failed startup or an unsupported GPU configuration.
+                # Stop it at the Compute Engine layer before deleting it.
+                operation = compute_request("POST", f"{instance_url()}/stop")
+                if not isinstance(operation, dict):
+                    raise ApiError("Failed to stop VM instance before deletion.", 502)
             poll_instance_status("TERMINATED", timeout_seconds=900)
         elif current_status != "TERMINATED":
             poll_instance_status("TERMINATED", timeout_seconds=900)
