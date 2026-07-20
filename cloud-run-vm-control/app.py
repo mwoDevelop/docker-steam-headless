@@ -232,6 +232,11 @@ SUNSHINE_GPU_COMPATIBILITY: Final = {
         "label": "Tested: works",
         "detail": "Validated with the Steam Headless and Sunshine streaming stack.",
     },
+    "nvidia-tesla-p100": {
+        "state": "verified",
+        "label": "Tested: works",
+        "detail": "Validated with the Steam Headless and Sunshine streaming stack using H.264 and HEVC NVENC.",
+    },
     "nvidia-tesla-p4": {
         "state": "incompatible",
         "label": "Tested: fails",
