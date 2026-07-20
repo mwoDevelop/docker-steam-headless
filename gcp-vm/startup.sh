@@ -612,11 +612,16 @@ ensure_nvidia_vws_driver() {
 
 ensure_nvidia_driver() {
   local retry_file="${STATE_DIR}/nvidia-driver-bootstrapped"
+  local required_driver_major=570
+  local installed_driver_major=""
   if display_capable_gpu; then
     ensure_nvidia_vws_driver
     return $?
   fi
   if is_nvidia_ready; then
+    installed_driver_major="$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -n1 | cut -d. -f1 || true)"
+  fi
+  if [[ "$installed_driver_major" =~ ^[0-9]+$ ]] && (( installed_driver_major >= required_driver_major )); then
     rm -f "$retry_file"
     return 0
   fi
@@ -626,18 +631,20 @@ ensure_nvidia_driver() {
     return 1
   fi
 
-  log "NVIDIA stack not ready. Installing/reinstalling drivers before reboot."
+  log "NVIDIA driver ${required_driver_major}+ is required for the default Steam Headless image. Installing/reinstalling drivers before reboot."
   touch "$retry_file"
   apt-get update -y
   apt-get install -y \
     "linux-headers-$(uname -r)" \
-    dkms || true
-  ubuntu-drivers autoinstall || true
+    dkms \
+    "linux-modules-nvidia-${required_driver_major}-gcp" \
+    "nvidia-driver-${required_driver_major}"
 
   modprobe nvidia || true
   modprobe nvidia_uvm || true
 
-  if is_nvidia_ready; then
+  installed_driver_major="$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -n1 | cut -d. -f1 || true)"
+  if [[ "$installed_driver_major" =~ ^[0-9]+$ ]] && (( installed_driver_major >= required_driver_major )); then
     rm -f "$retry_file"
     return 0
   fi

@@ -261,8 +261,13 @@ case "$GPU_TYPE" in
     fi
     ;;
   *)
-    if ! command -v nvidia-smi >/dev/null 2>&1; then
-      ubuntu-drivers autoinstall || true
+    RAW_NVIDIA_DRIVER_MAJOR="$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -n1 | cut -d. -f1 || true)"
+    if [[ ! "$RAW_NVIDIA_DRIVER_MAJOR" =~ ^[0-9]+$ ]] || (( RAW_NVIDIA_DRIVER_MAJOR < 570 )); then
+      apt-get install -y \
+        "linux-headers-$(uname -r)" \
+        dkms \
+        linux-modules-nvidia-570-gcp \
+        nvidia-driver-570
       echo "Rebooting to load NVIDIA driver"
       reboot || true
       exit 0
