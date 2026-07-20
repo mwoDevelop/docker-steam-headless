@@ -1194,7 +1194,11 @@
         && !profile.zones.includes(zone)
       );
       option.classList.toggle("zone-unavailable", zoneUnavailable);
-      option.textContent = `${option.dataset.baseLabel || option.textContent}${zoneUnavailable ? " [Zone: unavailable]" : ""}`;
+      const baseLabel = option.dataset.baseLabel || option.textContent;
+      const unavailableLabel = [...baseLabel]
+        .map((character) => (/\s/.test(character) ? character : `${character}\u0336`))
+        .join("");
+      option.textContent = `${zoneUnavailable ? unavailableLabel : baseLabel}${zoneUnavailable ? " [Zone: unavailable]" : ""}`;
     });
   }
 
