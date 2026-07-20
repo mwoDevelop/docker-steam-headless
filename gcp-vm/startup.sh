@@ -316,7 +316,7 @@ mark_minecraft_management_agent_ready() {
 }
 
 sync_env_metadata() {
-  local token project zone name instance_json fingerprint items payload
+  local token project zone name instance_json fingerprint items items_file env_file payload payload_file
   token="$(metadata_token || true)"
   project="$(project_id || true)"
   zone="$(zone_name || true)"
@@ -330,18 +330,26 @@ sync_env_metadata() {
   fingerprint="$(printf '%s' "$instance_json" | jq -r '.metadata.fingerprint // empty')"
   [[ -n "$fingerprint" ]] || return 0
   items="$(printf '%s' "$instance_json" | jq '[.metadata.items // [] | .[] | select(.key != "steam-headless-env")]')"
+  items_file="$(mktemp)"
+  env_file="$(mktemp)"
+  printf '%s' "$items" > "$items_file"
+  cat "$ENVF" > "$env_file"
   payload="$(jq -n \
     --arg fingerprint "$fingerprint" \
-    --arg env_value "$(cat "$ENVF")" \
-    --argjson items "$items" \
-    '{fingerprint: $fingerprint, items: ($items + [{key: "steam-headless-env", value: $env_value}])}')"
+    --rawfile env_value "$env_file" \
+    --slurpfile items "$items_file" \
+    '{fingerprint: $fingerprint, items: ($items[0] + [{key: "steam-headless-env", value: $env_value}])}')"
+  rm -f "$items_file" "$env_file"
+  payload_file="$(mktemp)"
+  printf '%s' "$payload" > "$payload_file"
 
   curl --fail --silent --show-error \
     -X POST \
     -H "Authorization: Bearer ${token}" \
     -H "Content-Type: application/json" \
-    -d "$payload" \
+    --data-binary "@${payload_file}" \
     "https://compute.googleapis.com/compute/v1/projects/${project}/zones/${zone}/instances/${name}/setMetadata" >/dev/null || true
+  rm -f "$payload_file"
 }
 
 clear_restore_mode() {

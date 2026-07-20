@@ -51,7 +51,7 @@ wait_for_zone_operation() {
 set_metadata_value() {
   local key="$1"
   local value="$2"
-  local token project zone name instance_json fingerprint items payload operation operation_name
+  local token project zone name instance_json fingerprint items items_file payload payload_file operation operation_name
   token="$(metadata_token || true)"
   project="$(project_id || true)"
   zone="$(zone_name || true)"
@@ -64,16 +64,23 @@ set_metadata_value() {
     fingerprint="$(printf '%s' "$instance_json" | jq -r '.metadata.fingerprint // empty')"
     [[ -n "$fingerprint" ]] || return 1
     items="$(printf '%s' "$instance_json" | jq --arg key "$key" '[.metadata.items // [] | .[] | select(.key != $key)]')"
-    payload="$(jq -n --arg fingerprint "$fingerprint" --arg key "$key" --arg value "$value" --argjson items "$items" \
-      '{fingerprint: $fingerprint, items: ($items + [{key: $key, value: $value}])}')"
+    items_file="$(mktemp)"
+    printf '%s' "$items" > "$items_file"
+    payload="$(jq -n --arg fingerprint "$fingerprint" --arg key "$key" --arg value "$value" --slurpfile items "$items_file" \
+      '{fingerprint: $fingerprint, items: ($items[0] + [{key: $key, value: $value}])}')"
+    rm -f "$items_file"
+    payload_file="$(mktemp)"
+    printf '%s' "$payload" > "$payload_file"
     if operation="$(curl --fail --silent --show-error -X POST \
-      -H "Authorization: Bearer ${token}" -H "Content-Type: application/json" -d "$payload" \
+      -H "Authorization: Bearer ${token}" -H "Content-Type: application/json" --data-binary "@${payload_file}" \
       "https://compute.googleapis.com/compute/v1/projects/${project}/zones/${zone}/instances/${name}/setMetadata")"; then
+      rm -f "$payload_file"
       operation_name="$(printf '%s' "$operation" | jq -r '.name // empty')"
       if wait_for_zone_operation "$token" "$project" "$zone" "$operation_name"; then
         return 0
       fi
     fi
+    rm -f "$payload_file"
     sleep 1
   done
   return 1

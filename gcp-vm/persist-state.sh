@@ -83,7 +83,7 @@ metadata_token() {
 
 set_instance_metadata_values_json() {
   local updates_json="$1"
-  local token project zone name instance_json fingerprint items payload
+  local token project zone name instance_json fingerprint items items_file payload payload_file
   token="$(metadata_token || true)"
   project="$(project_id || true)"
   zone="$(instance_zone || true)"
@@ -96,9 +96,11 @@ set_instance_metadata_values_json() {
   fingerprint="$(printf '%s' "$instance_json" | jq -r '.metadata.fingerprint // empty')"
   [[ -n "$fingerprint" ]] || return 1
   items="$(printf '%s' "$instance_json" | jq '[.metadata.items // [] | .[]]')"
+  items_file="$(mktemp)"
+  printf '%s' "$items" > "$items_file"
   payload="$(jq -n \
     --arg fingerprint "$fingerprint" \
-    --argjson existing "$items" \
+    --slurpfile existing "$items_file" \
     --argjson updates "$updates_json" \
     '
       def update_items($existing; $updates):
@@ -109,16 +111,20 @@ set_instance_metadata_values_json() {
         );
       {
         fingerprint: $fingerprint,
-        items: update_items($existing; $updates)
+        items: update_items($existing[0]; $updates)
       }
     ')"
+  rm -f "$items_file"
+  payload_file="$(mktemp)"
+  printf '%s' "$payload" > "$payload_file"
 
   curl --fail --silent --show-error \
     -X POST \
     -H "Authorization: Bearer ${token}" \
     -H "Content-Type: application/json" \
-    -d "$payload" \
+    --data-binary "@${payload_file}" \
     "https://compute.googleapis.com/compute/v1/projects/${project}/zones/${zone}/instances/${name}/setMetadata" >/dev/null
+  rm -f "$payload_file"
 }
 
 set_metadata_values() {
