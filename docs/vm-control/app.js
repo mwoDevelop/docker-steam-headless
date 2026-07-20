@@ -1180,6 +1180,24 @@
     return query ? `?${query}` : "";
   }
 
+  function updateHardwareZoneAvailability() {
+    if (!elements.hardwareSelect) {
+      return;
+    }
+    const zone = selectedZone();
+    elements.hardwareSelect.querySelectorAll("option[data-base-label]").forEach((option) => {
+      const profile = getHardwareProfiles().find((item) => String(item.id) === String(option.value));
+      const zoneUnavailable = Boolean(
+        profile
+        && Number(profile.gpuCount || 0) > 0
+        && zone
+        && !profile.zones.includes(zone)
+      );
+      option.classList.toggle("zone-unavailable", zoneUnavailable);
+      option.textContent = `${option.dataset.baseLabel || option.textContent}${zoneUnavailable ? " [Zone: unavailable]" : ""}`;
+    });
+  }
+
   function renderHardwareOptions(payload) {
     if (!elements.hardwareSelect || !elements.zoneSelect) {
       return;
@@ -1207,7 +1225,6 @@
       ))
       : allProfiles;
     const selectableProfiles = profiles;
-    const selectedZoneContext = selectedZone();
 
     const previousHardware = elements.hardwareSelect.value
       || elements.hardwareSelect.dataset.savedValue
@@ -1227,21 +1244,12 @@
         : "";
       const compatibility = sunshineCompatibility(profile);
       const compatibilityNote = gpuCount > 0 ? ` [Sunshine: ${compatibility.label}]` : "";
-      const zoneUnavailable = Boolean(
-        gpuCount > 0
-        && selectedZoneContext
-        && !profile.zones.includes(selectedZoneContext)
-      );
-      const zoneNote = zoneUnavailable ? " [Zone: unavailable]" : "";
       const unavailable = !hardwareProfileSupported(profile);
       const availability = unavailable
         ? ` - Create unavailable: ${String(profile.unavailableReason || "unsupported by this VM stack")}`
         : "";
-      const optionClasses = [
-        `sunshine-${compatibility.state}`,
-        zoneUnavailable ? "zone-unavailable" : "",
-      ].filter(Boolean).join(" ");
-      return `<option class="${escapeHtml(optionClasses)}" value="${escapeHtml(id)}">${escapeHtml(profile.label || id)}${escapeHtml(compatibilityNote)}${escapeHtml(zoneNote)}${escapeHtml(price)} (${escapeHtml(suffix)}, ${zoneCount} zones)${escapeHtml(availability)}</option>`;
+      const optionLabel = `${profile.label || id}${compatibilityNote}${price} (${suffix}, ${zoneCount} zones)${availability}`;
+      return `<option class="sunshine-${escapeHtml(compatibility.state)}" value="${escapeHtml(id)}" data-base-label="${escapeHtml(optionLabel)}">${escapeHtml(optionLabel)}</option>`;
     }).join("");
     if (selectableProfiles.some((profile) => String(profile.id) === previousHardware)) {
       elements.hardwareSelect.value = previousHardware;
@@ -1269,6 +1277,7 @@
           : `No zones currently expose ${selectedHardwareLabel() || "selected hardware"}. Refresh later or choose CPU.`;
       }
       renderHardwarePriceEstimate(null);
+      updateHardwareZoneAvailability();
       saveConfig();
       updateGpuAvailabilityScanButton();
       updateActionAvailability();
@@ -1288,6 +1297,7 @@
     }
     elements.zoneSelect.dataset.savedValue = "";
     resetGpuCapacityProbeButton();
+    updateHardwareZoneAvailability();
     if (elements.hardwareOptionsStatus) {
       const refreshedAt = state.hardwarePayload && state.hardwarePayload.refreshedAt
         ? ` Refreshed: ${state.hardwarePayload.refreshedAt}.`
