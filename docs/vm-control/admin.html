@@ -132,8 +132,57 @@
         </label>
         <div id="runtime-images-list" class="admin-list"></div>
       </section>
+
+      <section class="panel">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Compatibility evidence</p>
+            <h2>GPU, Sunshine and image results</h2>
+          </div>
+        </div>
+        <p class="hint">
+          Keep a dated result for a concrete Steam Headless image, Sunshine version and NVIDIA driver. A failed <code>latest</code> result is an administrator warning, not a permanent block for another image or vWS profile.
+        </p>
+        <form id="compatibility-form" class="form-grid" autocomplete="off">
+          <label>
+            <span>Hardware</span>
+            <select id="compatibility-hardware"></select>
+          </label>
+          <label>
+            <span>Steam Headless image</span>
+            <input id="compatibility-image-ref" type="text" value="josh5/steam-headless:latest" required>
+          </label>
+          <label>
+            <span>Image tag</span>
+            <input id="compatibility-image-tag" type="text" value="latest" required>
+          </label>
+          <label>
+            <span>Sunshine version</span>
+            <input id="compatibility-sunshine-version" type="text" placeholder="2026.516.143833" required>
+          </label>
+          <label>
+            <span>NVIDIA driver</span>
+            <input id="compatibility-driver-version" type="text" placeholder="580.159.03" required>
+          </label>
+          <label>
+            <span>Result</span>
+            <select id="compatibility-result">
+              <option value="works">Works</option>
+              <option value="fails">Fails</option>
+              <option value="testing">Testing</option>
+              <option value="unknown">Unknown</option>
+            </select>
+          </label>
+          <label>
+            <span>Evidence / limitation</span>
+            <input id="compatibility-evidence" type="text" placeholder="Observed logs, capture path, or a reproducible limitation">
+          </label>
+          <button id="save-compatibility" class="action create" type="submit">Save Compatibility Result</button>
+        </form>
+        <div id="compatibility-list" class="admin-list"></div>
+      </section>
     </main>
 
-    <script src="./admin.js?v=runtime-images-20260714"></script>
+    <script src="./admin.js?v=compatibility-catalog-20260720"></script>
   </body>
 </html>

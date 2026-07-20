@@ -28,6 +28,16 @@
     refreshRuntimeImages: document.querySelector("#refresh-runtime-images"),
     runtimeEndpoint: document.querySelector("#runtime-endpoint"),
     runtimeImagesList: document.querySelector("#runtime-images-list"),
+    compatibilityForm: document.querySelector("#compatibility-form"),
+    compatibilityHardware: document.querySelector("#compatibility-hardware"),
+    compatibilityImageRef: document.querySelector("#compatibility-image-ref"),
+    compatibilityImageTag: document.querySelector("#compatibility-image-tag"),
+    compatibilitySunshineVersion: document.querySelector("#compatibility-sunshine-version"),
+    compatibilityDriverVersion: document.querySelector("#compatibility-driver-version"),
+    compatibilityResult: document.querySelector("#compatibility-result"),
+    compatibilityEvidence: document.querySelector("#compatibility-evidence"),
+    saveCompatibility: document.querySelector("#save-compatibility"),
+    compatibilityList: document.querySelector("#compatibility-list"),
   };
 
   const state = {
@@ -41,6 +51,7 @@
     usersPayload: null,
     endpointsPayload: null,
     runtimeImagesPayload: null,
+    compatibilityPayload: null,
     refreshRevision: 0,
     automaticRefreshInFlight: false,
   };
@@ -87,6 +98,21 @@
     document.querySelectorAll("[data-runtime-action], [data-runtime-image-select]").forEach((input) => {
       input.disabled = nextBusy || !state.user || input.dataset.runtimeDisabled === "true";
     });
+    [
+      elements.compatibilityHardware,
+      elements.compatibilityImageRef,
+      elements.compatibilityImageTag,
+      elements.compatibilitySunshineVersion,
+      elements.compatibilityDriverVersion,
+      elements.compatibilityResult,
+      elements.compatibilityEvidence,
+      elements.saveCompatibility,
+    ].forEach((input) => {
+      input.disabled = nextBusy || !state.user;
+    });
+    document.querySelectorAll("[data-compatibility-remove]").forEach((input) => {
+      input.disabled = nextBusy || !state.user;
+    });
   }
 
   function setAuthStatus(message, tone) {
@@ -113,6 +139,7 @@
     renderUsers();
     renderEndpoints();
     renderRuntimeImages();
+    renderCompatibility();
     setBusy(state.isBusy);
   }
 
@@ -297,6 +324,46 @@
     `;
   }
 
+  function renderCompatibility() {
+    const payload = state.compatibilityPayload;
+    if (!payload) {
+      elements.compatibilityHardware.innerHTML = "";
+      elements.compatibilityList.innerHTML = "";
+      return;
+    }
+    const previousHardware = String(elements.compatibilityHardware.value || "");
+    const hardwareOptions = Array.isArray(payload.hardwareOptions) ? payload.hardwareOptions : [];
+    elements.compatibilityHardware.innerHTML = hardwareOptions.map((hardware) => (
+      `<option value="${escapeHtml(hardware.id)}">${escapeHtml(`${hardware.label} (${hardware.gpuType})`)}</option>`
+    )).join("");
+    if (hardwareOptions.some((hardware) => hardware.id === previousHardware)) {
+      elements.compatibilityHardware.value = previousHardware;
+    }
+    const records = payload.catalog && Array.isArray(payload.catalog.records) ? payload.catalog.records : [];
+    if (!records.length) {
+      elements.compatibilityList.innerHTML = '<div class="admin-user-row fixed">No compatibility evidence recorded yet.</div>';
+      return;
+    }
+    const colorForResult = (result) => ({
+      works: "#178f5b",
+      fails: "#b54040",
+      testing: "#a46c00",
+      unknown: "#5b6470",
+    }[result] || "#5b6470");
+    elements.compatibilityList.innerHTML = records.map((record) => `
+      <div class="admin-user-row fixed">
+        <div>
+          <code>${escapeHtml(record.hardwareLabel || record.hardwareId)}</code><br>
+          <span>${escapeHtml(record.gpuType)} · ${escapeHtml(record.acceleratorMode)} · ${escapeHtml(record.imageRef)}</span><br>
+          <span>Sunshine ${escapeHtml(record.sunshineVersion)} · NVIDIA ${escapeHtml(record.driverVersion)} · ${escapeHtml(String(record.recordedAt || "").replace("T", " ").replace("Z", " UTC"))}</span>
+          ${record.evidence ? `<br><span>${escapeHtml(record.evidence)}</span>` : ""}
+        </div>
+        <strong style="color:${colorForResult(record.result)}">${escapeHtml(String(record.result || "unknown").toUpperCase())}</strong>
+        <button class="action delete" type="button" data-compatibility-remove="${escapeHtml(record.recordId)}">Remove</button>
+      </div>
+    `).join("");
+  }
+
   async function waitForGoogleIdentity() {
     for (let attempt = 0; attempt < 50; attempt += 1) {
       if (window.google && window.google.accounts && window.google.accounts.oauth2) {
@@ -447,10 +514,11 @@
   async function loadUsers(options) {
     const silent = Boolean(options && options.silent);
     const refreshRevision = state.refreshRevision;
-    const [payload, endpoints, runtimeImages] = await Promise.all([
+    const [payload, endpoints, runtimeImages, compatibility] = await Promise.all([
       fetchApi("/api/admin/users", { method: "GET" }),
       fetchApi("/api/admin/endpoints", { method: "GET" }),
       fetchApi("/api/admin/runtime-images", { method: "GET" }),
+      fetchApi("/api/admin/compatibility", { method: "GET" }),
     ]);
     if (refreshRevision !== state.refreshRevision) {
       return false;
@@ -459,6 +527,7 @@
     state.usersPayload = payload;
     state.endpointsPayload = endpoints;
     state.runtimeImagesPayload = runtimeImages;
+    state.compatibilityPayload = compatibility;
     if (!silent) {
       setMessage("Managed GUI users loaded.", "success");
     }
@@ -547,6 +616,16 @@
           : `Updated ${operation.component || component} image.`;
     setMessage(label, "success");
     renderRuntimeImages();
+  }
+
+  async function updateCompatibility(action, extra) {
+    const payload = await fetchApi("/api/admin/compatibility", {
+      method: "POST",
+      body: JSON.stringify({ action, ...(extra || {}) }),
+    });
+    state.compatibilityPayload = payload;
+    setMessage(action === "remove" ? "Compatibility result removed." : "Compatibility result saved.", "success");
+    renderCompatibility();
   }
 
   function handleError(error) {
@@ -739,6 +818,45 @@
     try {
       setBusy(true);
       await updateRuntimeImages(action, component, { imageRef, confirm: action !== "pull" });
+    } catch (error) {
+      handleError(error);
+    } finally {
+      setBusy(false);
+    }
+  });
+
+  elements.compatibilityForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      setBusy(true);
+      await updateCompatibility("record", {
+        hardwareId: String(elements.compatibilityHardware.value || ""),
+        imageRef: String(elements.compatibilityImageRef.value || "").trim(),
+        imageTag: String(elements.compatibilityImageTag.value || "").trim(),
+        sunshineVersion: String(elements.compatibilitySunshineVersion.value || "").trim(),
+        driverVersion: String(elements.compatibilityDriverVersion.value || "").trim(),
+        result: String(elements.compatibilityResult.value || "unknown"),
+        evidence: String(elements.compatibilityEvidence.value || "").trim(),
+      });
+      elements.compatibilityEvidence.value = "";
+    } catch (error) {
+      handleError(error);
+    } finally {
+      setBusy(false);
+    }
+  });
+
+  elements.compatibilityList.addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-compatibility-remove]");
+    if (!button || button.disabled) {
+      return;
+    }
+    if (!window.confirm("Remove this compatibility record?")) {
+      return;
+    }
+    try {
+      setBusy(true);
+      await updateCompatibility("remove", { recordId: String(button.dataset.compatibilityRemove || "") });
     } catch (error) {
       handleError(error);
     } finally {

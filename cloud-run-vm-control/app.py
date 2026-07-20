@@ -108,6 +108,7 @@ CONFIG = {
     "endpoints_secret_name": os.environ.get("ENDPOINTS_SECRET_NAME", "steam-vm-control-endpoints"),
     "minecraft_versions_secret_name": os.environ.get("MINECRAFT_VERSIONS_SECRET_NAME", ""),
     "runtime_images_secret_name": os.environ.get("RUNTIME_IMAGES_SECRET_NAME", ""),
+    "compatibility_catalog_secret_name": os.environ.get("COMPATIBILITY_CATALOG_SECRET_NAME", ""),
     "vm_minecraft_management_script_b64": os.environ.get("VM_MINECRAFT_MANAGEMENT_SCRIPT_B64", ""),
     "session_token_secret": os.environ.get("VM_CONTROL_SESSION_SECRET", ""),
     "capacity_cleanup_token": os.environ.get("CAPACITY_RESERVATION_CLEANUP_TOKEN", ""),
@@ -233,9 +234,9 @@ SUNSHINE_GPU_COMPATIBILITY: Final = {
         "detail": "Validated with the Steam Headless and Sunshine streaming stack.",
     },
     "nvidia-tesla-p100": {
-        "state": "verified",
-        "label": "Tested: works",
-        "detail": "Validated with the Steam Headless and Sunshine streaming stack using H.264 and HEVC NVENC.",
+        "state": "untested",
+        "label": "Latest image requires validation",
+        "detail": "The raw P100 profile must be revalidated after switching the default Steam Headless image to latest.",
     },
     "nvidia-tesla-p4": {
         "state": "incompatible",
@@ -869,6 +870,205 @@ def save_persisted_runtime_image_catalog(catalog: dict[str, Any]) -> None:
     )
     if response.status_code >= 400:
         raise ApiError(f"Unable to save runtime image catalog: {response.text}", 502)
+
+
+COMPATIBILITY_CATALOG_CACHE: dict[str, Any] = {
+    "loaded": False,
+    "schemaVersion": 1,
+    "records": [],
+    "updatedAt": "",
+    "lastError": "",
+}
+COMPATIBILITY_RESULTS: Final = frozenset({"works", "fails", "unknown", "testing"})
+
+
+def compatibility_timestamp() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def compatibility_catalog_template() -> dict[str, Any]:
+    return {"schemaVersion": 1, "records": [], "updatedAt": "", "lastError": ""}
+
+
+def compatibility_text(raw_value: Any, field: str, limit: int, *, required: bool = False) -> str:
+    value = str(raw_value or "").strip()
+    if "\n" in value or "\r" in value or len(value) > limit:
+        raise ApiError(f"Invalid compatibility field: {field}.", 400)
+    if required and not value:
+        raise ApiError(f"Compatibility field is required: {field}.", 400)
+    return value
+
+
+def compatibility_hardware_options() -> list[dict[str, str]]:
+    return [
+        {
+            "id": str(spec["id"]),
+            "label": str(spec["label"]),
+            "gpuType": gpu_type,
+            "acceleratorMode": str(spec["acceleratorMode"]),
+        }
+        for gpu_type, spec in GPU_CREATION_PROFILE_SPECS.items()
+    ]
+
+
+def compatibility_hardware_option(hardware_id: str) -> dict[str, str]:
+    return next((option for option in compatibility_hardware_options() if option["id"] == hardware_id), {})
+
+
+def normalize_compatibility_record(raw_value: Any, *, recorded_by: str = "") -> dict[str, str] | None:
+    if not isinstance(raw_value, dict):
+        return None
+    hardware_id = compatibility_text(raw_value.get("hardwareId"), "hardwareId", 80, required=True)
+    hardware = compatibility_hardware_option(hardware_id)
+    if not hardware:
+        raise ApiError("Unsupported hardware profile for compatibility record.", 400)
+    result = compatibility_text(raw_value.get("result"), "result", 20, required=True).lower()
+    if result not in COMPATIBILITY_RESULTS:
+        raise ApiError("Unsupported compatibility result.", 400)
+    image_ref = compatibility_text(raw_value.get("imageRef"), "imageRef", 256, required=True)
+    if not image_ref.startswith("josh5/steam-headless:") and not image_ref.startswith("josh5/steam-headless@sha256:"):
+        raise ApiError("Compatibility records currently support Steam Headless images only.", 400)
+    image_tag = compatibility_text(raw_value.get("imageTag"), "imageTag", 80, required=True).lower()
+    record_id = compatibility_text(raw_value.get("recordId"), "recordId", 80)
+    if record_id and not re.fullmatch(r"[a-z0-9-]+", record_id):
+        raise ApiError("Invalid compatibility record ID.", 400)
+    return {
+        "recordId": record_id,
+        "hardwareId": hardware_id,
+        "hardwareLabel": hardware["label"],
+        "gpuType": hardware["gpuType"],
+        "acceleratorMode": hardware["acceleratorMode"],
+        "imageRef": image_ref,
+        "imageTag": image_tag,
+        "sunshineVersion": compatibility_text(raw_value.get("sunshineVersion"), "sunshineVersion", 120, required=True),
+        "driverVersion": compatibility_text(raw_value.get("driverVersion"), "driverVersion", 120, required=True),
+        "result": result,
+        "evidence": compatibility_text(raw_value.get("evidence"), "evidence", 1200),
+        "recordedAt": compatibility_text(raw_value.get("recordedAt"), "recordedAt", 40) or compatibility_timestamp(),
+        "recordedBy": compatibility_text(recorded_by or raw_value.get("recordedBy"), "recordedBy", 320),
+    }
+
+
+def normalize_compatibility_catalog(raw_value: Any) -> dict[str, Any]:
+    result = compatibility_catalog_template()
+    if not isinstance(raw_value, dict):
+        return result
+    records = raw_value.get("records")
+    if isinstance(records, list):
+        for raw_record in records:
+            try:
+                record = normalize_compatibility_record(raw_record)
+            except ApiError:
+                continue
+            if record:
+                result["records"].append(record)
+    result["records"].sort(key=lambda record: str(record.get("recordedAt") or ""), reverse=True)
+    result["updatedAt"] = compatibility_text(raw_value.get("updatedAt"), "updatedAt", 40)
+    result["lastError"] = compatibility_text(raw_value.get("lastError"), "lastError", 500)
+    return result
+
+
+def load_persisted_compatibility_catalog() -> None:
+    if COMPATIBILITY_CATALOG_CACHE.get("loaded"):
+        return
+    COMPATIBILITY_CATALOG_CACHE["loaded"] = True
+    secret_name = str(CONFIG["compatibility_catalog_secret_name"] or "").strip()
+    if not secret_name:
+        return
+    try:
+        response = compute_session().get(
+            f"{SECRET_MANAGER_BASE_URL}/{secret_path(secret_name)}/versions/latest:access",
+            timeout=30,
+        )
+        if response.status_code == 404:
+            return
+        if response.status_code >= 400:
+            raise ApiError(f"Unable to read compatibility catalog: {response.text}", 502)
+        encoded = str(((response.json() or {}).get("payload") or {}).get("data") or "")
+        COMPATIBILITY_CATALOG_CACHE.update(normalize_compatibility_catalog(json.loads(base64.b64decode(encoded).decode("utf-8"))))
+    except Exception as error:
+        logging.warning("Unable to load compatibility catalog: %s", error)
+        COMPATIBILITY_CATALOG_CACHE["lastError"] = str(error)
+
+
+def compatibility_catalog() -> dict[str, Any]:
+    load_persisted_compatibility_catalog()
+    return json.loads(json.dumps({
+        "schemaVersion": COMPATIBILITY_CATALOG_CACHE.get("schemaVersion", 1),
+        "records": COMPATIBILITY_CATALOG_CACHE.get("records", []),
+        "updatedAt": COMPATIBILITY_CATALOG_CACHE.get("updatedAt", ""),
+        "lastError": COMPATIBILITY_CATALOG_CACHE.get("lastError", ""),
+    }))
+
+
+def save_persisted_compatibility_catalog(catalog: dict[str, Any]) -> None:
+    secret_name = str(CONFIG["compatibility_catalog_secret_name"] or "").strip()
+    if not secret_name:
+        raise ApiError("Compatibility catalog secret is not configured.", 500)
+    normalized = normalize_compatibility_catalog(catalog)
+    payload = json.dumps(normalized, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    response = compute_session().post(
+        f"{SECRET_MANAGER_BASE_URL}/{secret_path(secret_name)}:addVersion",
+        json={"payload": {"data": base64.b64encode(payload).decode("ascii")}},
+        timeout=30,
+    )
+    if response.status_code >= 400:
+        raise ApiError(f"Unable to save compatibility catalog: {response.text}", 502)
+    COMPATIBILITY_CATALOG_CACHE.clear()
+    COMPATIBILITY_CATALOG_CACHE.update({"loaded": True, **normalized})
+
+
+def latest_sunshine_compatibility(gpu_type: str, fallback: dict[str, str]) -> dict[str, str]:
+    if fallback.get("state") == "incompatible":
+        return fallback
+    records = [
+        record for record in compatibility_catalog().get("records", [])
+        if record.get("gpuType") == gpu_type and record.get("imageTag") == "latest"
+    ]
+    if not records:
+        return fallback
+    record = records[0]
+    result = str(record.get("result") or "unknown")
+    state = {"works": "verified", "fails": "warning", "testing": "testing", "unknown": "untested"}[result]
+    label = {"works": "Latest: tested works", "fails": "Latest: tested fails", "testing": "Latest: test in progress", "unknown": "Latest: result unknown"}[result]
+    evidence = str(record.get("evidence") or "No diagnostic evidence recorded.")
+    return {
+        "state": state,
+        "label": label,
+        "detail": f"Sunshine {record.get('sunshineVersion')} with driver {record.get('driverVersion')}: {evidence}",
+    }
+
+
+def build_admin_compatibility_payload(admin_user: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "user": admin_user,
+        "catalog": compatibility_catalog(),
+        "hardwareOptions": compatibility_hardware_options(),
+    }
+
+
+def execute_admin_compatibility_action(admin_user: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    action = str(payload.get("action") or "").strip().lower()
+    catalog = compatibility_catalog()
+    records = list(catalog.get("records") or [])
+    if action == "record":
+        record = normalize_compatibility_record(payload, recorded_by=normalize_email(str(admin_user.get("email") or "")))
+        if record is None:
+            raise ApiError("Invalid compatibility record.", 400)
+        record["recordId"] = f"compat-{int(time.time() * 1000)}-{len(records) + 1}"
+        records.append(record)
+    elif action == "remove":
+        record_id = compatibility_text(payload.get("recordId"), "recordId", 80, required=True)
+        if not re.fullmatch(r"[a-z0-9-]+", record_id):
+            raise ApiError("Invalid compatibility record ID.", 400)
+        if not any(record.get("recordId") == record_id for record in records):
+            raise ApiError("Compatibility record does not exist.", 404)
+        records = [record for record in records if record.get("recordId") != record_id]
+    else:
+        raise ApiError("Unsupported compatibility action.", 400)
+    catalog.update({"schemaVersion": 1, "records": records, "updatedAt": compatibility_timestamp(), "lastError": ""})
+    save_persisted_compatibility_catalog(catalog)
+    return build_admin_compatibility_payload(admin_user)
 
 
 def fetch_runtime_image_component_catalog(component: str) -> dict[str, Any]:
@@ -2404,7 +2604,7 @@ def build_hardware_payload() -> dict[str, Any]:
         if not accelerator_name.startswith("nvidia-"):
             continue
         spec = GPU_CREATION_PROFILE_SPECS.get(accelerator_name)
-        sunshine_compatibility = dict(
+        sunshine_compatibility = latest_sunshine_compatibility(accelerator_name, dict(
             SUNSHINE_GPU_COMPATIBILITY.get(
                 accelerator_name,
                 {
@@ -2413,7 +2613,7 @@ def build_hardware_payload() -> dict[str, Any]:
                     "detail": "This GPU has not yet been validated with the Steam Headless and Sunshine streaming stack.",
                 },
             )
-        )
+        ))
         supported = spec is not None and accelerator_name not in INCOMPATIBLE_SUNSHINE_ACCELERATORS
         if sunshine_compatibility["state"] == "incompatible":
             unavailable_reason = sunshine_compatibility["detail"]
@@ -2735,6 +2935,13 @@ def options_passthrough():
             return jsonify(build_admin_runtime_images_payload(admin_user))
         payload = request.get_json(silent=True) or {}
         return jsonify(execute_admin_runtime_image_action(admin_user, payload))
+
+    if request.path == "/api/admin/compatibility":
+        admin_user = require_admin_user()
+        if request.method == "GET":
+            return jsonify(build_admin_compatibility_payload(admin_user))
+        payload = request.get_json(silent=True) or {}
+        return jsonify(execute_admin_compatibility_action(admin_user, payload))
 
     if request.path == "/api/admin/endpoints":
         admin_user = require_admin_user()
