@@ -207,6 +207,7 @@
     instancesPayload: null,
     priceEstimates: {},
     isBusy: false,
+    pendingMinecraftServerType: "",
     commandStatusRefreshTimer: null,
     history: [],
     isPageLoading: true,
@@ -2546,6 +2547,9 @@
     if (command === "install-minecraft" && !requestedMinecraftServerType) {
       throw new Error("Select a Minecraft server runtime first.");
     }
+    if (command === "install-minecraft") {
+      state.pendingMinecraftServerType = requestedMinecraftServerType;
+    }
 
     if (command === "delete") {
       const confirmed = window.confirm("Delete will stop and remove the VM without creating a backup. Continue?");
@@ -2706,6 +2710,9 @@
         }
       }
     } finally {
+      if (command === "install-minecraft") {
+        state.pendingMinecraftServerType = "";
+      }
       setBusy(false);
       markPageReady("Ready.", loadingToken);
     }
@@ -3019,13 +3026,15 @@
       const types = getMinecraftServerTypes(payload);
       const installed = Boolean(payload && payload.minecraftStatus && payload.minecraftStatus.state && !["not_installed", "removed", "not_created"].includes(payload.minecraftStatus.state));
       const currentType = String(payload && payload.minecraft && payload.minecraft.serverType || "paper");
-      const previousType = elements.minecraftServerTypeSelect.value
+      const pendingType = String(state.pendingMinecraftServerType || "");
+      const previousType = pendingType
+        || elements.minecraftServerTypeSelect.value
         || elements.minecraftServerTypeSelect.dataset.savedValue
         || currentType;
       elements.minecraftServerTypeSelect.innerHTML = types.length
         ? types.map((type) => `<option value="${escapeHtml(type.id)}">${escapeHtml(`${type.label} (${type.contentLabel || `${type.contentKind}s`})`)}</option>`).join("")
         : '<option value="paper">Paper (plugins)</option>';
-      elements.minecraftServerTypeSelect.value = installed && types.some((type) => type.id === currentType)
+      elements.minecraftServerTypeSelect.value = installed && !pendingType && types.some((type) => type.id === currentType)
         ? currentType
         : types.some((type) => type.id === previousType) ? previousType : "paper";
       elements.minecraftServerTypeSelect.dataset.savedValue = "";
