@@ -37,7 +37,7 @@ body.is-page-loading {
   overflow: hidden;
 }
 
-body.is-page-loading .shell {
+body.is-page-loading:not(.is-page-ready) .shell {
   opacity: 0;
   pointer-events: none;
 }
@@ -71,6 +71,19 @@ body::before {
 
 .page-loader[hidden] {
   display: none;
+}
+
+body.is-page-ready.is-page-loading .page-loader {
+  inset: auto 20px 20px auto;
+  width: min(440px, calc(100vw - 40px));
+  padding: 0;
+  background: transparent;
+  backdrop-filter: none;
+  pointer-events: none;
+}
+
+body.is-page-ready.is-page-loading .page-loader-card {
+  pointer-events: none;
 }
 
 body:not(.is-page-loading) .page-loader {

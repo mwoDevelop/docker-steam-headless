@@ -237,6 +237,7 @@
       return;
     }
     state.isPageLoading = false;
+    document.body.classList.add("is-page-ready");
     if (elements.pageLoaderMessage && message) {
       elements.pageLoaderMessage.textContent = message;
     }
