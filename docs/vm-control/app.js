@@ -3058,7 +3058,9 @@
       const versionText = installedVersion
         ? `Installed version: ${installedVersion}.`
         : `Selected version: ${selectedVersion}.`;
-      const runtimeText = `Runtime: ${minecraftServerTypeLabel(payload && payload.minecraft && payload.minecraft.serverType, payload)}.`;
+      const runtimeType = state.pendingMinecraftServerType
+        || (payload && payload.minecraft && payload.minecraft.serverType);
+      const runtimeText = `Runtime: ${minecraftServerTypeLabel(runtimeType, payload)}.`;
       elements.minecraftOptionsStatus.textContent = `Minecraft status: ${label}. Server address: ${address}. ${runtimeText} ${versionText}${versionSource}${versionUpdatedAt}`;
     }
     updateActionAvailability();
