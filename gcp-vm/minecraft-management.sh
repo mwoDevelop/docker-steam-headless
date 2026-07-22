@@ -128,7 +128,7 @@ wait_for_rcon() {
 }
 
 sync_modrinth_content() {
-  local raw="$1" entries entry removed_file temporary_file container output
+  local raw="$1" entries entry removed_file expected_file temporary_file container output missing_files
   entries="$(printf '%s' "$raw" | jq -r '.entries // [] | .[]' 2>/dev/null || true)"
   mkdir -p "${MINECRAFT_ROOT}/data"
   temporary_file="$(mktemp)"
@@ -157,9 +157,29 @@ sync_modrinth_content() {
     printf '%s\n' "$output"
     return 1
   fi
+  container="$(minecraft_container || true)"
+  if [[ -z "$container" ]]; then
+    printf '%s\n' "Minecraft container was not created while applying the Modrinth manifest."
+    return 1
+  fi
+  if ! output="$(docker restart "$container" 2>&1)"; then
+    printf '%s\n' "$output"
+    return 1
+  fi
   for _ in $(seq 1 90); do
     container="$(minecraft_container || true)"
     if [[ -n "$container" ]] && wait_for_rcon "$container"; then
+      missing_files=""
+      while IFS= read -r expected_file; do
+        [[ "$expected_file" =~ ^[A-Za-z0-9._+-]{1,240}\.jar$ ]] || continue
+        if [[ ! -f "${MINECRAFT_ROOT}/data/plugins/${expected_file}" && ! -f "${MINECRAFT_ROOT}/data/mods/${expected_file}" ]]; then
+          missing_files+=" ${expected_file}"
+        fi
+      done < <(printf '%s' "$raw" | jq -r '.expectedFiles // [] | .[]' 2>/dev/null || true)
+      if [[ -n "$missing_files" ]]; then
+        printf 'Minecraft restarted, but Modrinth files are missing:%s\n' "$missing_files"
+        return 1
+      fi
       printf 'Applied %s Modrinth project(s) and restarted Minecraft.\n' "$(wc -l < "$MINECRAFT_CONTENT_FILE" | tr -d ' ')"
       return 0
     fi

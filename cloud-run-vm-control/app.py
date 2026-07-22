@@ -5981,6 +5981,14 @@ def minecraft_content_sync_request(entries: list[dict[str, Any]], removed_files:
         "id": secrets.token_urlsafe(18),
         "action": "content-sync",
         "entries": [f"{entry['projectId']}:{entry['versionId']}" for entry in entries],
+        "expectedFiles": sorted(
+            {
+                filename
+                for entry in entries
+                for filename in entry.get("files", [])
+                if isinstance(filename, str) and re.fullmatch(r"[A-Za-z0-9._+-]{1,240}\.jar", filename)
+            }
+        ),
         "removeFiles": [filename for filename in (removed_files or []) if re.fullmatch(r"[A-Za-z0-9._+-]{1,240}\.jar", filename)],
     }
 
