@@ -279,6 +279,9 @@
     if (elements.minecraftVersionSelect && saved.minecraftVersion) {
       elements.minecraftVersionSelect.dataset.savedValue = String(saved.minecraftVersion);
     }
+    if (elements.minecraftServerTypeSelect && saved.minecraftServerType) {
+      elements.minecraftServerTypeSelect.dataset.savedValue = String(saved.minecraftServerType);
+    }
     renderHistory();
     renderTargetSummary();
     renderBackupOptions(null);
@@ -301,6 +304,7 @@
         hardwareId: String(elements.hardwareSelect && elements.hardwareSelect.value || "").trim(),
         zone: String(elements.zoneSelect && elements.zoneSelect.value || "").trim(),
         minecraftVersion: String(elements.minecraftVersionSelect && elements.minecraftVersionSelect.value || "").trim(),
+        minecraftServerType: String(elements.minecraftServerTypeSelect && elements.minecraftServerTypeSelect.value || "").trim(),
       }),
     );
   }
@@ -2532,6 +2536,17 @@
       throw new Error("Selected hardware or zone is no longer available. Refresh hardware availability and select the target again.");
     }
 
+    // Preserve the explicit Minecraft selection before the optimistic command
+    // transition re-renders the form with the previous server metadata.
+    const requestedMinecraftVersion = command === "install-minecraft" ? selectedMinecraftVersion() : "";
+    const requestedMinecraftServerType = command === "install-minecraft" ? selectedMinecraftServerType() : "";
+    if (command === "install-minecraft" && !requestedMinecraftVersion) {
+      throw new Error("Select a Minecraft server version first.");
+    }
+    if (command === "install-minecraft" && !requestedMinecraftServerType) {
+      throw new Error("Select a Minecraft server runtime first.");
+    }
+
     if (command === "delete") {
       const confirmed = window.confirm("Delete will stop and remove the VM without creating a backup. Continue?");
       if (!confirmed) {
@@ -2608,16 +2623,8 @@
         body.applicationId = applicationId;
       }
       if (command === "install-minecraft") {
-        const minecraftVersion = selectedMinecraftVersion();
-        const minecraftServerType = selectedMinecraftServerType();
-        if (!minecraftVersion) {
-          throw new Error("Select a Minecraft server version first.");
-        }
-        if (!minecraftServerType) {
-          throw new Error("Select a Minecraft server runtime first.");
-        }
-        body.minecraftVersion = minecraftVersion;
-        body.minecraftServerType = minecraftServerType;
+        body.minecraftVersion = requestedMinecraftVersion;
+        body.minecraftServerType = requestedMinecraftServerType;
       }
       const autoStopHours = readAutoStopHours(command);
       if (autoStopHours) {
@@ -3012,13 +3019,16 @@
       const types = getMinecraftServerTypes(payload);
       const installed = Boolean(payload && payload.minecraftStatus && payload.minecraftStatus.state && !["not_installed", "removed", "not_created"].includes(payload.minecraftStatus.state));
       const currentType = String(payload && payload.minecraft && payload.minecraft.serverType || "paper");
-      const previousType = elements.minecraftServerTypeSelect.value || currentType;
+      const previousType = elements.minecraftServerTypeSelect.value
+        || elements.minecraftServerTypeSelect.dataset.savedValue
+        || currentType;
       elements.minecraftServerTypeSelect.innerHTML = types.length
         ? types.map((type) => `<option value="${escapeHtml(type.id)}">${escapeHtml(`${type.label} (${type.contentLabel || `${type.contentKind}s`})`)}</option>`).join("")
         : '<option value="paper">Paper (plugins)</option>';
       elements.minecraftServerTypeSelect.value = installed && types.some((type) => type.id === currentType)
         ? currentType
         : types.some((type) => type.id === previousType) ? previousType : "paper";
+      elements.minecraftServerTypeSelect.dataset.savedValue = "";
       elements.minecraftServerTypeSelect.disabled = installed;
     }
     if (elements.minecraftOptionsStatus) {
