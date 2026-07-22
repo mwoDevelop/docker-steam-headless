@@ -5,6 +5,9 @@ METADATA_HDR=( -H "Metadata-Flavor: Google" --fail --silent --show-error )
 REQUEST_KEY="vm-minecraft-management-request"
 RESULT_KEY="vm-minecraft-management-result"
 AGENT_KEY="vm-minecraft-management-agent"
+MINECRAFT_ROOT=/mnt/games/minecraft-server
+MINECRAFT_COMPOSE_FILE="${MINECRAFT_ROOT}/docker-compose.yml"
+MINECRAFT_CONTENT_FILE="${MINECRAFT_ROOT}/data/modrinth-projects.txt"
 
 metadata_get() {
   local key="$1"
@@ -124,6 +127,48 @@ wait_for_rcon() {
   return 1
 }
 
+sync_modrinth_content() {
+  local raw="$1" entries entry removed_file temporary_file container output
+  entries="$(printf '%s' "$raw" | jq -r '.entries // [] | .[]' 2>/dev/null || true)"
+  mkdir -p "${MINECRAFT_ROOT}/data"
+  temporary_file="$(mktemp)"
+  while IFS= read -r entry; do
+    [[ -z "$entry" ]] && continue
+    if [[ "$entry" =~ ^[A-Za-z0-9_-]{3,80}:[A-Za-z0-9_-]{3,80}$ ]]; then
+      printf '%s\n' "$entry" >> "$temporary_file"
+    else
+      rm -f "$temporary_file"
+      printf '%s\n' "Invalid Modrinth manifest entry."
+      return 1
+    fi
+  done <<< "$entries"
+  sort -u "$temporary_file" > "${temporary_file}.sorted"
+  install -m 0644 "${temporary_file}.sorted" "$MINECRAFT_CONTENT_FILE"
+  rm -f "$temporary_file" "${temporary_file}.sorted"
+  while IFS= read -r removed_file; do
+    [[ "$removed_file" =~ ^[A-Za-z0-9._+-]{1,240}\.jar$ ]] || continue
+    rm -f "${MINECRAFT_ROOT}/data/plugins/${removed_file}" "${MINECRAFT_ROOT}/data/mods/${removed_file}"
+  done < <(printf '%s' "$raw" | jq -r '.removeFiles // [] | .[]' 2>/dev/null || true)
+  if [[ ! -f "$MINECRAFT_COMPOSE_FILE" ]]; then
+    printf '%s\n' "Minecraft compose file is missing."
+    return 1
+  fi
+  if ! output="$(/usr/local/bin/vm-power-action reconcile-minecraft 2>&1)"; then
+    printf '%s\n' "$output"
+    return 1
+  fi
+  for _ in $(seq 1 90); do
+    container="$(minecraft_container || true)"
+    if [[ -n "$container" ]] && wait_for_rcon "$container"; then
+      printf 'Applied %s Modrinth project(s) and restarted Minecraft.\n' "$(wc -l < "$MINECRAFT_CONTENT_FILE" | tr -d ' ')"
+      return 0
+    fi
+    sleep 2
+  done
+  printf '%s\n' "Minecraft did not become RCON-ready after applying the Modrinth manifest."
+  return 1
+}
+
 process_request() {
   local raw request_id action command player container result_id result_state output state
   raw="$(metadata_get "$REQUEST_KEY")"
@@ -135,6 +180,15 @@ process_request() {
   result_id="$(metadata_get "$RESULT_KEY" | jq -r '.id // empty' 2>/dev/null || true)"
   result_state="$(metadata_get "$RESULT_KEY" | jq -r '.state // empty' 2>/dev/null || true)"
   if [[ "$result_id" == "$request_id" && ( "$result_state" == "done" || "$result_state" == "failed" ) ]]; then
+    return 0
+  fi
+
+  if [[ "$action" == "content-sync" ]]; then
+    if output="$(sync_modrinth_content "$raw")"; then
+      publish_result "$request_id" "$action" "done" "$output"
+    else
+      publish_result "$request_id" "$action" "failed" "$output"
+    fi
     return 0
   fi
 

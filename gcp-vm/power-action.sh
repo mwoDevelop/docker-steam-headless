@@ -18,6 +18,7 @@ SUNSHINE_STATUS_DETAIL_METADATA_KEY="vm-sunshine-status-detail"
 MINECRAFT_STATUS_METADATA_KEY="vm-minecraft-status"
 MINECRAFT_STATUS_DETAIL_METADATA_KEY="vm-minecraft-status-detail"
 MINECRAFT_VERSION_METADATA_KEY="vm-minecraft-version"
+MINECRAFT_SERVER_TYPE_METADATA_KEY="vm-minecraft-server-type"
 STEAM_ENV_METADATA_KEY="steam-headless-env"
 SELECTED_APPLICATION_METADATA_KEY="vm-selected-application-id"
 ENVF=/opt/container-services/steam-headless/.env
@@ -28,6 +29,7 @@ COMPOSE_IMAGE_OVERRIDE="${COMPOSE_DIR}/docker-compose.image.override.yml"
 MINECRAFT_ROOT=/mnt/games/minecraft-server
 MINECRAFT_COMPOSE_FILE="${MINECRAFT_ROOT}/docker-compose.yml"
 MINECRAFT_SERVICE=minecraft
+MINECRAFT_MODRINTH_PROJECTS_FILE="${MINECRAFT_ROOT}/data/modrinth-projects.txt"
 RUNTIME_IMAGE_COMPONENT_METADATA_KEY="vm-runtime-image-component"
 RUNTIME_IMAGE_OPERATION_METADATA_KEY="vm-runtime-image-operation"
 RUNTIME_IMAGE_TARGET_REF_METADATA_KEY="vm-runtime-image-target-ref"
@@ -294,6 +296,23 @@ validated_minecraft_version() {
   printf '%s\n' "LATEST"
 }
 
+validated_minecraft_server_type() {
+  local server_type
+  server_type="$(metadata_get "$MINECRAFT_SERVER_TYPE_METADATA_KEY" | tr '[:upper:]' '[:lower:]' | tr -d '\r' | head -n 1 || true)"
+  server_type="${server_type:-paper}"
+  case "$server_type" in
+    paper) printf '%s\n' 'PAPER' ;;
+    purpur) printf '%s\n' 'PURPUR' ;;
+    fabric) printf '%s\n' 'FABRIC' ;;
+    forge) printf '%s\n' 'FORGE' ;;
+    neoforge) printf '%s\n' 'NEOFORGE' ;;
+    *)
+      log "Invalid Minecraft server type metadata '${server_type}', falling back to PAPER."
+      printf '%s\n' 'PAPER'
+      ;;
+  esac
+}
+
 runtime_image_state_key() {
   local component="$1"
   local field="$2"
@@ -459,10 +478,17 @@ runtime_image_commit() {
 ensure_minecraft_compose() {
   local version="${1:-LATEST}"
   local image_ref="${2:-$(runtime_image_current_ref minecraft)}"
+  local server_type
+  local modrinth_environment=""
   if ! runtime_image_ref_is_valid minecraft "$image_ref"; then
     image_ref="$DEFAULT_MINECRAFT_IMAGE"
   fi
+  server_type="$(validated_minecraft_server_type)"
   mkdir -p "${MINECRAFT_ROOT}/data"
+  touch "$MINECRAFT_MODRINTH_PROJECTS_FILE"
+  if [[ -s "$MINECRAFT_MODRINTH_PROJECTS_FILE" ]]; then
+    modrinth_environment=$'      MODRINTH_PROJECTS: "@/data/modrinth-projects.txt"\n      MODRINTH_DOWNLOAD_DEPENDENCIES: "required"'
+  fi
   cat > "$MINECRAFT_COMPOSE_FILE" <<EOF
 services:
   minecraft:
@@ -473,11 +499,12 @@ services:
       - "25565:25565"
     environment:
       EULA: "TRUE"
-      TYPE: "PAPER"
+      TYPE: "${server_type}"
       VERSION: "${version}"
       MEMORY: "4G"
       MOTD: "Steam GPU Minecraft"
       ENABLE_AUTOPAUSE: "FALSE"
+${modrinth_environment}
     volumes:
       - ./data:/data
 EOF
@@ -500,7 +527,7 @@ reconcile_minecraft_after_boot() {
   state="$(minecraft_state)"
 
   case "$state" in
-    running|starting)
+    running|starting|installing)
       version="$(validated_minecraft_version)"
       log "Restoring Minecraft server ${version} after VM startup"
       set_minecraft_status "starting" "Restoring Minecraft server after VM startup."

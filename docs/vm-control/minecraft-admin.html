@@ -74,6 +74,27 @@
         </article>
       </section>
 
+      <section class="panel modrinth-panel">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Modrinth catalog</p>
+            <h2 id="content-heading">Loading compatible content...</h2>
+          </div>
+        </div>
+        <p id="content-runtime" class="section-meta">The selected server runtime determines whether this panel manages plugins or mods.</p>
+        <div class="content-search">
+          <input id="content-search-query" type="search" maxlength="100" placeholder="Search Modrinth">
+          <button id="content-search" class="action create" type="button">Search catalog</button>
+        </div>
+        <div id="content-results" class="content-list empty">Search Modrinth to find compatible content.</div>
+      </section>
+
+      <section class="panel">
+        <p class="eyebrow">Installed content</p>
+        <h2 id="installed-content-heading">Managed additions</h2>
+        <div id="installed-content" class="content-list empty">No Modrinth content is managed for this server.</div>
+      </section>
+
       <section class="panel">
         <p class="eyebrow">Result</p>
         <h2>Last server response</h2>

@@ -175,6 +175,7 @@
     applicationOptionsStatus: document.querySelector("#application-options-status"),
     minecraftAddress: document.querySelector("#minecraft-address"),
     minecraftVersionSelect: document.querySelector("#minecraft-version-select"),
+    minecraftServerTypeSelect: document.querySelector("#minecraft-server-type-select"),
     refreshMinecraftVersions: document.querySelector("#refresh-minecraft-versions"),
     minecraftOptionsStatus: document.querySelector("#minecraft-options-status"),
     checkGpuCapacity: document.querySelector("#check-gpu-capacity"),
@@ -2607,10 +2608,15 @@
       }
       if (command === "install-minecraft") {
         const minecraftVersion = selectedMinecraftVersion();
+        const minecraftServerType = selectedMinecraftServerType();
         if (!minecraftVersion) {
           throw new Error("Select a Minecraft server version first.");
         }
+        if (!minecraftServerType) {
+          throw new Error("Select a Minecraft server runtime first.");
+        }
         body.minecraftVersion = minecraftVersion;
+        body.minecraftServerType = minecraftServerType;
       }
       const autoStopHours = readAutoStopHours(command);
       if (autoStopHours) {
@@ -2896,6 +2902,27 @@
       || defaultMinecraftVersion(state.lastStatus);
   }
 
+  function getMinecraftServerTypes(payload) {
+    const fromPayload = payload && payload.minecraft && Array.isArray(payload.minecraft.serverTypes)
+      ? payload.minecraft.serverTypes
+      : [];
+    const fromConfig = state.backendConfig && state.backendConfig.minecraftServer && Array.isArray(state.backendConfig.minecraftServer.serverTypes)
+      ? state.backendConfig.minecraftServer.serverTypes
+      : [];
+    return (fromPayload.length ? fromPayload : fromConfig).filter((type) => type && type.id);
+  }
+
+  function selectedMinecraftServerType() {
+    return String(elements.minecraftServerTypeSelect && elements.minecraftServerTypeSelect.value || "").trim()
+      || String(state.lastStatus && state.lastStatus.minecraft && state.lastStatus.minecraft.serverType || "paper");
+  }
+
+  function minecraftServerTypeLabel(serverType, payload) {
+    const match = getMinecraftServerTypes(payload).find((type) => String(type.id) === String(serverType));
+    if (!match) return String(serverType || "Paper");
+    return `${match.label} (${match.contentLabel || `${match.contentKind}s`})`;
+  }
+
   function applyMinecraftVersionPayload(payload) {
     if (!payload || !Array.isArray(payload.versions) || !payload.versions.length) {
       return false;
@@ -2980,6 +3007,19 @@
       }
       elements.minecraftVersionSelect.dataset.savedValue = "";
     }
+    if (elements.minecraftServerTypeSelect) {
+      const types = getMinecraftServerTypes(payload);
+      const installed = Boolean(payload && payload.minecraftStatus && payload.minecraftStatus.state && !["not_installed", "removed", "not_created"].includes(payload.minecraftStatus.state));
+      const currentType = String(payload && payload.minecraft && payload.minecraft.serverType || "paper");
+      const previousType = elements.minecraftServerTypeSelect.value || currentType;
+      elements.minecraftServerTypeSelect.innerHTML = types.length
+        ? types.map((type) => `<option value="${escapeHtml(type.id)}">${escapeHtml(`${type.label} (${type.contentLabel || `${type.contentKind}s`})`)}</option>`).join("")
+        : '<option value="paper">Paper (plugins)</option>';
+      elements.minecraftServerTypeSelect.value = installed && types.some((type) => type.id === currentType)
+        ? currentType
+        : types.some((type) => type.id === previousType) ? previousType : "paper";
+      elements.minecraftServerTypeSelect.disabled = installed;
+    }
     if (elements.minecraftOptionsStatus) {
       const mismatch = selectedHardwareMismatchMessage(payload);
       if (mismatch) {
@@ -2998,7 +3038,8 @@
       const versionText = installedVersion
         ? `Installed version: ${installedVersion}.`
         : `Selected version: ${selectedVersion}.`;
-      elements.minecraftOptionsStatus.textContent = `Minecraft status: ${label}. Server address: ${address}. ${versionText}${versionSource}${versionUpdatedAt}`;
+      const runtimeText = `Runtime: ${minecraftServerTypeLabel(payload && payload.minecraft && payload.minecraft.serverType, payload)}.`;
+      elements.minecraftOptionsStatus.textContent = `Minecraft status: ${label}. Server address: ${address}. ${runtimeText} ${versionText}${versionSource}${versionUpdatedAt}`;
     }
     updateActionAvailability();
   }
@@ -3540,6 +3581,13 @@
 
   if (elements.minecraftVersionSelect) {
     elements.minecraftVersionSelect.addEventListener("change", () => {
+      saveConfig();
+      renderMinecraftOptions(state.lastStatus);
+    });
+  }
+
+  if (elements.minecraftServerTypeSelect) {
+    elements.minecraftServerTypeSelect.addEventListener("change", () => {
       saveConfig();
       renderMinecraftOptions(state.lastStatus);
     });

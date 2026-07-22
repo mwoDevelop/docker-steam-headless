@@ -498,7 +498,7 @@ gpu_enabled() {
 
 display_capable_gpu() {
   case "$(metadata_get vm-gpu-type)" in
-    nvidia-tesla-t4-vws|nvidia-l4-vws)
+    *-vws)
       return 0
       ;;
   esac
@@ -512,7 +512,7 @@ is_nvidia_vws_driver_ready() {
 
 legacy_vws_driver_url() {
   case "$(metadata_get vm-gpu-type)" in
-    nvidia-tesla-p4-vws|nvidia-tesla-p100-vws)
+    nvidia-tesla-p4-vws)
       printf '%s\n' 'https://storage.googleapis.com/nvidia-drivers-us-public/GRID/vGPU16.14/nvidia-linux-grid-535_535.309.01_amd64.deb'
       ;;
   esac
@@ -523,7 +523,7 @@ remove_generic_nvidia_driver() {
   while IFS= read -r package; do
     [[ -n "$package" ]] && packages+=("$package")
   done < <(dpkg-query -W -f='${db:Status-Status} ${binary:Package}\n' \
-    'nvidia-driver-*' 'nvidia-dkms-*' 'nvidia-utils-*' 'nvidia-compute-utils-*' \
+    'nvidia-driver-*' 'nvidia-dkms-*' 'nvidia-linux-grid-*' 'nvidia-utils-*' 'nvidia-compute-utils-*' \
     'nvidia-kernel-common-*' 'nvidia-kernel-source-*' 'nvidia-firmware-*' 2>/dev/null | \
     awk '$1 == "installed" {print $2}')
   [[ ${#packages[@]} -eq 0 ]] || apt-get purge -y "${packages[@]}"
@@ -534,7 +534,23 @@ ensure_nvidia_vws_driver() {
   local installer_dir="/opt/google/cuda-installer"
   local installer_file="${installer_dir}/cuda_installer.pyz"
   local legacy_driver_url=""
-  local legacy_driver_deb=""
+  local legacy_driver_file=""
+
+  # A binary GRID installer can leave the kernel modules loaded while the
+  # device node and NVML are still coming up after reboot.  Re-running the
+  # installer at that point fails because it refuses to replace a loaded
+  # module, so wait for the already-installed driver first.
+  if [[ -r /proc/driver/nvidia/version ]] || lsmod | awk '$1 == "nvidia" {found=1} END {exit !found}'; then
+    for _ in $(seq 1 30); do
+      modprobe nvidia 2>/dev/null || true
+      modprobe nvidia_uvm 2>/dev/null || true
+      if is_nvidia_vws_driver_ready; then
+        rm -f "$retry_file"
+        return 0
+      fi
+      sleep 2
+    done
+  fi
 
   if [[ -f "$retry_file" ]]; then
     for _ in $(seq 1 30); do
@@ -572,15 +588,21 @@ ensure_nvidia_vws_driver() {
     fi
   fi
   if [[ -n "$legacy_driver_url" ]]; then
-    legacy_driver_deb="${installer_dir}/$(basename "$legacy_driver_url")"
-    apt-get install -y build-essential libvulkan1 gcc-12 "linux-headers-$(uname -r)"
+    legacy_driver_file="${installer_dir}/$(basename "$legacy_driver_url")"
+    apt_with_retry install -y build-essential dkms libvulkan1 gcc-12 "linux-headers-$(uname -r)"
     update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 12 || true
-    if ! curl -fsSL "$legacy_driver_url" -o "$legacy_driver_deb"; then
+    if ! curl -fsSL "$legacy_driver_url" -o "$legacy_driver_file"; then
       rm -f "$retry_file"
       set_sunshine_status "error" "Could not download the legacy NVIDIA RTX vWS driver."
       return 1
     fi
-    if ! dpkg -i "$legacy_driver_deb" && ! apt-get install -f -y; then
+    if [[ "$legacy_driver_file" == *.run ]]; then
+      if ! sh "$legacy_driver_file" -s; then
+        rm -f "$retry_file"
+        set_sunshine_status "error" "Legacy NVIDIA RTX vWS driver installation failed."
+        return 1
+      fi
+    elif ! dpkg -i "$legacy_driver_file" && ! apt_with_retry install -f -y; then
       rm -f "$retry_file"
       set_sunshine_status "error" "Legacy NVIDIA RTX vWS driver installation failed."
       return 1
@@ -633,8 +655,8 @@ ensure_nvidia_driver() {
 
   log "NVIDIA driver ${required_driver_major}+ is required for the default Steam Headless image. Installing/reinstalling drivers before reboot."
   touch "$retry_file"
-  apt-get update -y
-  apt-get install -y \
+  apt_with_retry update -y
+  apt_with_retry install -y \
     "linux-headers-$(uname -r)" \
     dkms \
     "linux-modules-nvidia-${required_driver_major}-gcp" \
@@ -654,11 +676,29 @@ ensure_nvidia_driver() {
   exit 0
 }
 
+apt_with_retry() {
+  local attempt
+  for attempt in 1 2 3 4 5; do
+    if apt-get \
+      -o Acquire::Retries=2 \
+      -o Acquire::http::Timeout=30 \
+      -o Acquire::https::Timeout=30 \
+      "$@"; then
+      return 0
+    fi
+    if [[ "$attempt" -lt 5 ]]; then
+      log "APT command failed (attempt ${attempt}/5); retrying in $((attempt * 5)) seconds."
+      sleep "$((attempt * 5))"
+    fi
+  done
+  return 1
+}
+
 log "Installing base packages"
 clear_backup_ready_marker
 set_sunshine_status "starting" "VM startup in progress."
-apt-get update -y
-apt-get install -y ca-certificates curl gnupg lsb-release python3 ubuntu-drivers-common jq zstd rclone
+apt_with_retry update -y
+apt_with_retry install -y ca-certificates curl gnupg lsb-release python3 ubuntu-drivers-common jq zstd rclone
 if gpu_enabled; then
   ensure_nvidia_driver
   is_nvidia_ready || log "NVIDIA stack check warning: proceeding with best-effort startup."
@@ -675,8 +715,8 @@ fi
 codename=$(. /etc/os-release && echo "$VERSION_CODENAME")
 echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu ${codename} stable" \
   > /etc/apt/sources.list.d/docker.list
-apt-get update -y
-apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+apt_with_retry update -y
+apt_with_retry install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 systemctl enable docker
 reconcile_docker_service
 
@@ -688,8 +728,8 @@ if gpu_enabled; then
   curl -fsSL https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
     sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#' \
     > /etc/apt/sources.list.d/nvidia-container-toolkit.list
-  apt-get update -y
-  apt-get install -y nvidia-container-toolkit
+  apt_with_retry update -y
+  apt_with_retry install -y nvidia-container-toolkit
   nvidia-ctk runtime configure --runtime=docker || true
   reconcile_docker_service
 else
@@ -724,6 +764,9 @@ COMPOSE_BASE=/opt/container-services/steam-headless/docker-compose.nvidia.privil
 COMPOSE_GCE=/opt/container-services/steam-headless/docker-compose.nvidia.privileged.gce.yml
 COMPOSE_OVERRIDE=/opt/container-services/steam-headless/docker-compose.nvidia.privileged.override.yml
 COMPOSE_IMAGE_OVERRIDE=/opt/container-services/steam-headless/docker-compose.image.override.yml
+COMPOSE_SUNSHINE_DIRECT_OVERRIDE=/opt/container-services/steam-headless/docker-compose.sunshine-direct.override.yml
+SUNSHINE_DIRECT_WRAPPER=/opt/container-services/steam-headless/vm-sunshine
+SUNSHINE_DIRECT_CONFIG=/opt/container-services/steam-headless/vm-sunshine.ini
 curl -fsSL \
   https://raw.githubusercontent.com/Steam-Headless/docker-steam-headless/master/docs/compose-files/docker-compose.nvidia.privileged.yml \
   -o "$COMPOSE_BASE"
@@ -809,6 +852,77 @@ services:
 EOF
 COMPOSE_FILES+=(-f "$COMPOSE_IMAGE_OVERRIDE")
 
+# Sunshine 2026 in the latest Steam Headless image can repeatedly restart its
+# bundled start-sunshine wrapper on raw GCE GPUs.  Running Sunshine directly
+# after the X server is reachable avoids that loop while preserving the image's
+# desktop and noVNC services.  Keep the image's own wrapper for vWS profiles
+# and for administrator-selected non-latest image tags.
+if [[ "$STEAM_HEADLESS_IMAGE_VALUE" == *":latest" && "$(metadata_get vm-gpu-type)" != *-vws ]]; then
+  cat > "$SUNSHINE_DIRECT_WRAPPER" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+runtime_user="${USER:-default}"
+export XAUTHORITY="${XAUTHORITY:-/home/${runtime_user}/.Xauthority}"
+
+for _ in $(seq 1 60); do
+  if xset -display "${DISPLAY:-:0}" q >/dev/null 2>&1; then
+    break
+  fi
+  sleep 1
+done
+
+for _ in $(seq 1 60); do
+  [ -f /tmp/.dbus-desktop-session.env ] && break
+  sleep 1
+done
+if [ -f /tmp/.dbus-desktop-session.env ]; then
+  export $(cat /tmp/.dbus-desktop-session.env)
+else
+  export $(dbus-launch)
+fi
+
+for _ in $(seq 1 60); do
+  [ -f /tmp/.started-desktop ] && break
+  sleep 1
+done
+
+exec /usr/bin/dumb-init /usr/bin/sunshine "/home/${runtime_user}/.config/sunshine/sunshine.conf"
+EOF
+  chmod 0755 "$SUNSHINE_DIRECT_WRAPPER"
+
+  cat > "$SUNSHINE_DIRECT_CONFIG" <<'CONFIG'
+[program:sunshine]
+priority=50
+autostart=false
+autorestart=true
+startretries=10
+user=%(ENV_USER)s
+directory=/home/%(ENV_USER)s
+command=/usr/local/bin/vm-sunshine
+environment=HOME="/home/%(ENV_USER)s",USER="%(ENV_USER)s",DISPLAY="%(ENV_DISPLAY)s",XDG_RUNTIME_DIR="%(ENV_XDG_RUNTIME_DIR)s",XAUTHORITY="/home/%(ENV_USER)s/.Xauthority"
+stopsignal=INT
+stdout_logfile=/home/%(ENV_USER)s/.cache/log/sunshine.log
+stdout_logfile_maxbytes=10MB
+stdout_logfile_backups=7
+stderr_logfile=/home/%(ENV_USER)s/.cache/log/sunshine.err.log
+stderr_logfile_maxbytes=10MB
+stderr_logfile_backups=7
+CONFIG
+
+  cat > "$COMPOSE_SUNSHINE_DIRECT_OVERRIDE" <<EOF
+---
+version: "3.8"
+
+services:
+  steam-headless:
+    volumes:
+      - ${SUNSHINE_DIRECT_WRAPPER}:/usr/local/bin/vm-sunshine:ro
+      - ${SUNSHINE_DIRECT_CONFIG}:/usr/local/share/vm-sunshine.ini:ro
+EOF
+  COMPOSE_FILES+=(-f "$COMPOSE_SUNSHINE_DIRECT_OVERRIDE")
+fi
+
 if [ -x /usr/local/bin/vm-persist-state ]; then
   if ! /usr/local/bin/vm-persist-state restore-create; then
     set_sunshine_status "starting" "Persisted state restore failed. Continuing with fresh state."
@@ -867,11 +981,17 @@ sed -i -E \
   -e '/origin_web_ui_allowed\s*=.*/d' \
   -e '/origin_pin_allowed\s*=.*/d' \
   -e '/external_ip\s*=.*/d' \
+  -e '/capture\s*=.*/d' \
+  -e '/system_tray\s*=.*/d' \
   "$CFG_HOST" || true
 {
   echo
   echo "origin_web_ui_allowed = wan"
   echo "origin_pin_allowed = wan"
+  if [[ "$(metadata_get vm-gpu-type)" != *-vws ]]; then
+    echo "capture = x11"
+    echo "system_tray = disabled"
+  fi
   if [ -n "$EXT_IP" ]; then
     echo "external_ip = $EXT_IP"
   fi
@@ -880,6 +1000,23 @@ sed -i -E \
 apply_sunshine_state_credentials
 
 docker compose "${COMPOSE_FILES[@]}" restart || true
+
+if [ -f "$SUNSHINE_DIRECT_CONFIG" ]; then
+  for _ in $(seq 1 60); do
+    container_id="$(docker compose "${COMPOSE_FILES[@]}" ps -q | head -n 1 || true)"
+    if [ -n "$container_id" ] && docker exec --user root "$container_id" supervisorctl pid >/dev/null 2>&1; then
+      if docker exec --user root "$container_id" cp /usr/local/share/vm-sunshine.ini /etc/supervisor.d/sunshine.ini; then
+        docker exec --user root "$container_id" supervisorctl reread || true
+        docker exec --user root "$container_id" supervisorctl update || true
+        docker exec --user root "$container_id" supervisorctl restart sunshine || \
+          docker exec --user root "$container_id" supervisorctl start sunshine || true
+        log "Applied direct Sunshine supervisor override for raw GPU."
+        break
+      fi
+    fi
+    sleep 2
+  done
+fi
 mark_backup_ready
 log "Backup readiness marker created"
 

@@ -251,6 +251,12 @@
               <option value="">Connect backend to load versions</option>
             </select>
           </label>
+          <label>
+            <span>Server runtime</span>
+            <select id="minecraft-server-type-select" name="minecraft-server-type-select">
+              <option value="paper">Paper (plugins)</option>
+            </select>
+          </label>
           <button id="refresh-minecraft-versions" class="ghost" type="button">Refresh Versions</button>
           <div class="inline-action-group minecraft-action-group">
             <button class="action backup" type="button" data-command="install-minecraft">Install</button>
@@ -259,7 +265,7 @@
             <button class="action restart" type="button" data-command="restart-minecraft">Restart</button>
             <button class="action delete" type="button" data-command="remove-minecraft">Remove</button>
           </div>
-          <p id="minecraft-options-status">Install a Paper Minecraft server exposed on TCP 25565. World data is stored under /mnt/games/minecraft-server.</p>
+          <p id="minecraft-options-status">Choose Paper/Purpur for plugins or Fabric/Forge/NeoForge for mods. World data is stored under /mnt/games/minecraft-server.</p>
         </div>
 
       </section>

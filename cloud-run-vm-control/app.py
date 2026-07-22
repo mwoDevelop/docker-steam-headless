@@ -64,6 +64,51 @@ DEFAULT_MINECRAFT_SERVER_VERSIONS: Final = [
     "1.20.6",
     "1.20.4",
 ]
+MINECRAFT_SERVER_TYPES: Final = {
+    "paper": {
+        "id": "paper",
+        "label": "Paper",
+        "dockerType": "PAPER",
+        "contentKind": "plugin",
+        "contentLabel": "plugins",
+        "modrinthLoaders": ["paper", "purpur", "spigot", "bukkit"],
+    },
+    "purpur": {
+        "id": "purpur",
+        "label": "Purpur",
+        "dockerType": "PURPUR",
+        "contentKind": "plugin",
+        "contentLabel": "plugins",
+        "modrinthLoaders": ["purpur", "paper", "spigot", "bukkit"],
+    },
+    "fabric": {
+        "id": "fabric",
+        "label": "Fabric",
+        "dockerType": "FABRIC",
+        "contentKind": "mod",
+        "contentLabel": "mods",
+        "modrinthLoaders": ["fabric"],
+    },
+    "forge": {
+        "id": "forge",
+        "label": "Forge",
+        "dockerType": "FORGE",
+        "contentKind": "mod",
+        "contentLabel": "mods",
+        "modrinthLoaders": ["forge"],
+    },
+    "neoforge": {
+        "id": "neoforge",
+        "label": "NeoForge",
+        "dockerType": "NEOFORGE",
+        "contentKind": "mod",
+        "contentLabel": "mods",
+        "modrinthLoaders": ["neoforge"],
+    },
+}
+DEFAULT_MINECRAFT_SERVER_TYPE: Final = "paper"
+MODRINTH_API_BASE_URL: Final = "https://api.modrinth.com/v2"
+MODRINTH_USER_AGENT: Final = "docker-steam-headless-vm-control/1.0 (mwodevelop@gmail.com)"
 
 
 CONFIG = {
@@ -133,6 +178,8 @@ GPU_COUNT_METADATA_KEY = "vm-gpu-count"
 MINECRAFT_STATUS_METADATA_KEY = "vm-minecraft-status"
 MINECRAFT_STATUS_DETAIL_METADATA_KEY = "vm-minecraft-status-detail"
 MINECRAFT_VERSION_METADATA_KEY = "vm-minecraft-version"
+MINECRAFT_SERVER_TYPE_METADATA_KEY = "vm-minecraft-server-type"
+MINECRAFT_MODRINTH_CONTENT_METADATA_KEY = "vm-minecraft-modrinth-content"
 MINECRAFT_MANAGEMENT_REQUEST_METADATA_KEY = "vm-minecraft-management-request"
 MINECRAFT_MANAGEMENT_RESULT_METADATA_KEY = "vm-minecraft-management-result"
 MINECRAFT_MANAGEMENT_AGENT_METADATA_KEY = "vm-minecraft-management-agent"
@@ -224,14 +271,14 @@ GPU_VRAM_GB: Final = {
 }
 SUNSHINE_GPU_COMPATIBILITY: Final = {
     "nvidia-tesla-t4-vws": {
-        "state": "verified",
-        "label": "Tested: works",
-        "detail": "Validated with the Steam Headless and Sunshine streaming stack.",
+        "state": "untested",
+        "label": "Latest image requires validation",
+        "detail": "The prior vWS result must be revalidated with the current Steam Headless latest image.",
     },
     "nvidia-l4-vws": {
-        "state": "verified",
-        "label": "Tested: works",
-        "detail": "Validated with the Steam Headless and Sunshine streaming stack.",
+        "state": "untested",
+        "label": "Latest image requires validation",
+        "detail": "The prior vWS result must be revalidated with the current Steam Headless latest image.",
     },
     "nvidia-tesla-p100": {
         "state": "untested",
@@ -250,14 +297,26 @@ INCOMPATIBLE_SUNSHINE_ACCELERATORS: Final = frozenset(
     if compatibility["state"] == "incompatible"
 )
 GPU_CREATION_PROFILE_SPECS: Final = {
-    "nvidia-tesla-t4-vws": {
+    "nvidia-tesla-t4": {
         "id": "nvidia-tesla-t4",
+        "label": "GPU T4",
+        "machineType": DEFAULT_T4_MACHINE_TYPE,
+        "acceleratorMode": "attached",
+    },
+    "nvidia-tesla-t4-vws": {
+        "id": "nvidia-tesla-t4-vws",
         "label": "GPU T4 vWS",
         "machineType": DEFAULT_T4_MACHINE_TYPE,
         "acceleratorMode": "attached",
     },
-    "nvidia-l4-vws": {
+    "nvidia-l4": {
         "id": "nvidia-l4",
+        "label": "GPU L4",
+        "machineType": DEFAULT_L4_MACHINE_TYPE,
+        "acceleratorMode": "builtin",
+    },
+    "nvidia-l4-vws": {
+        "id": "nvidia-l4-vws",
         "label": "GPU L4 vWS",
         "machineType": DEFAULT_L4_MACHINE_TYPE,
         "acceleratorMode": "attached",
@@ -404,6 +463,34 @@ def normalize_minecraft_version(raw_version: Any) -> str:
     return version
 
 
+def minecraft_server_type_options() -> list[dict[str, Any]]:
+    return [
+        {
+            "id": str(spec["id"]),
+            "label": str(spec["label"]),
+            "contentKind": str(spec["contentKind"]),
+            "contentLabel": str(spec["contentLabel"]),
+        }
+        for spec in MINECRAFT_SERVER_TYPES.values()
+    ]
+
+
+def normalize_minecraft_server_type(raw_server_type: Any) -> str:
+    server_type = str(raw_server_type or "").strip().lower() or DEFAULT_MINECRAFT_SERVER_TYPE
+    if server_type not in MINECRAFT_SERVER_TYPES:
+        raise ApiError("Minecraft server type must be Paper, Purpur, Fabric, Forge, or NeoForge.", 400)
+    return server_type
+
+
+def minecraft_server_type_spec(server_type: Any) -> dict[str, Any]:
+    return dict(MINECRAFT_SERVER_TYPES[normalize_minecraft_server_type(server_type)])
+
+
+def parse_minecraft_server_type(payload: Any) -> str:
+    raw_server_type = payload.get("minecraftServerType") if hasattr(payload, "get") else ""
+    return normalize_minecraft_server_type(raw_server_type)
+
+
 def configured_minecraft_version_options() -> list[str]:
     versions: list[str] = []
     for raw_version in CONFIG["minecraft_versions"]:
@@ -448,6 +535,8 @@ def minecraft_version_payload(*, refreshed: bool = False, error: str = "") -> di
     return {
         "versions": minecraft_version_options(),
         "defaultVersion": default_minecraft_version(),
+        "serverTypes": minecraft_server_type_options(),
+        "defaultServerType": DEFAULT_MINECRAFT_SERVER_TYPE,
         "source": MINECRAFT_VERSION_CACHE.get("source") or "static",
         "updatedAt": MINECRAFT_VERSION_CACHE.get("updatedAt") or "",
         "refreshed": refreshed,
@@ -2692,9 +2781,10 @@ def instance_hardware_selection(instance: dict[str, Any]) -> dict[str, Any]:
             "acceleratorMode": "none",
         }
 
-    hardware_id = gpu_type.removesuffix("-vws")
+    hardware_id = gpu_type
+    base_gpu_type = gpu_type.removesuffix("-vws")
     accelerator_mode = "builtin" if machine_type.startswith("g2-") and not gpu_type.endswith("-vws") else "attached"
-    label = "GPU L4" if hardware_id == "nvidia-l4" else "GPU T4" if hardware_id == "nvidia-tesla-t4" else hardware_id
+    label = "GPU L4" if base_gpu_type == "nvidia-l4" else "GPU T4" if base_gpu_type == "nvidia-tesla-t4" else base_gpu_type
     if gpu_type.endswith("-vws"):
         label += " vWS"
     return {
@@ -3372,7 +3462,25 @@ def google_userinfo(token: str) -> dict[str, Any]:
 
 
 def compute_request(method: str, url: str, *, allow_404: bool = False, **kwargs) -> dict[str, Any] | None:
-    response = compute_session().request(method=method, url=url, timeout=30, **kwargs)
+    response = None
+    last_error: requests.RequestException | None = None
+    for attempt in range(1, 4):
+        try:
+            candidate = compute_session().request(method=method, url=url, timeout=30, **kwargs)
+        except requests.RequestException as error:
+            last_error = error
+            if attempt < 3:
+                time.sleep(attempt)
+                continue
+            break
+        if candidate.status_code in {429, 500, 502, 503, 504} and attempt < 3:
+            time.sleep(attempt)
+            continue
+        response = candidate
+        break
+    if response is None:
+        detail = str(last_error) if last_error else "transient Compute API failure"
+        raise ApiError(f"Compute API request failed after retry: {detail}", 502)
     if response.status_code == 404:
         if allow_404:
             return None
@@ -4855,6 +4963,163 @@ def minecraft_version_from_instance(instance: dict[str, Any] | None) -> str:
         return ""
 
 
+def minecraft_server_type_from_instance(instance: dict[str, Any] | None) -> str:
+    raw_server_type = metadata_value(instance, MINECRAFT_SERVER_TYPE_METADATA_KEY).strip() if instance else ""
+    try:
+        return normalize_minecraft_server_type(raw_server_type)
+    except ApiError:
+        return DEFAULT_MINECRAFT_SERVER_TYPE
+
+
+def minecraft_modrinth_content(instance: dict[str, Any] | None) -> list[dict[str, str]]:
+    raw_content = metadata_value(instance, MINECRAFT_MODRINTH_CONTENT_METADATA_KEY) if instance else ""
+    try:
+        values = json.loads(raw_content) if raw_content else []
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(values, list):
+        return []
+
+    result: list[dict[str, str]] = []
+    for value in values:
+        if not isinstance(value, dict):
+            continue
+        project_id = str(value.get("projectId") or "").strip()
+        version_id = str(value.get("versionId") or "").strip()
+        kind = str(value.get("kind") or "").strip().lower()
+        if not re.fullmatch(r"[A-Za-z0-9_-]{3,80}", project_id):
+            continue
+        if not re.fullmatch(r"[A-Za-z0-9_-]{3,80}", version_id) or kind not in {"plugin", "mod"}:
+            continue
+        result.append(
+            {
+                "projectId": project_id,
+                "versionId": version_id,
+                "kind": kind,
+                "title": str(value.get("title") or project_id).strip()[:160] or project_id,
+                "version": str(value.get("version") or version_id).strip()[:120] or version_id,
+                "files": [
+                    str(filename).strip()
+                    for filename in (value.get("files") or [])
+                    if isinstance(filename, str) and re.fullmatch(r"[A-Za-z0-9._+-]{1,240}\.jar", filename.strip())
+                ],
+            }
+        )
+    return result
+
+
+def modrinth_get(path: str, *, params: dict[str, Any]) -> Any:
+    try:
+        response = requests.get(
+            f"{MODRINTH_API_BASE_URL}{path}",
+            params=params,
+            headers={"User-Agent": MODRINTH_USER_AGENT, "Accept": "application/json"},
+            timeout=20,
+        )
+    except requests.RequestException as error:
+        raise ApiError(f"Modrinth request failed: {error}", 502) from error
+    if response.status_code >= 400:
+        raise ApiError(f"Modrinth returned {response.status_code}.", 502)
+    try:
+        return response.json()
+    except ValueError as error:
+        raise ApiError("Modrinth returned invalid JSON.", 502) from error
+
+
+def minecraft_modrinth_catalog_search(instance: dict[str, Any], payload: dict[str, Any]) -> list[dict[str, Any]]:
+    query = str(payload.get("query") or "").strip()
+    if not (2 <= len(query) <= 100) or any(ord(character) < 32 for character in query):
+        raise ApiError("Modrinth search query must contain 2-100 printable characters.", 400)
+    version = minecraft_version_from_instance(instance)
+    if not version:
+        raise ApiError("Install a concrete Minecraft version before searching for content.", 409)
+    runtime = minecraft_server_type_spec(minecraft_server_type_from_instance(instance))
+    kind = str(runtime["contentKind"])
+    requested_kind = str(payload.get("kind") or kind).strip().lower()
+    if requested_kind != kind:
+        raise ApiError(f"The selected {runtime['label']} server supports {runtime['contentLabel']}, not {requested_kind}s.", 409)
+    data = modrinth_get(
+        "/search",
+        params={
+            "query": query,
+            "limit": 20,
+            "index": "relevance",
+            "facets": json.dumps([[f"project_type:{kind}"], [f"versions:{version}"]]),
+        },
+    )
+    hits = data.get("hits") if isinstance(data, dict) else []
+    if not isinstance(hits, list):
+        return []
+    results: list[dict[str, Any]] = []
+    for hit in hits:
+        if not isinstance(hit, dict):
+            continue
+        project_id = str(hit.get("project_id") or hit.get("projectId") or "").strip()
+        if not re.fullmatch(r"[A-Za-z0-9_-]{3,80}", project_id):
+            continue
+        results.append(
+            {
+                "projectId": project_id,
+                "title": str(hit.get("title") or project_id).strip()[:160] or project_id,
+                "description": str(hit.get("description") or "").strip()[:500],
+                "author": str(hit.get("author") or "").strip()[:160],
+                "downloads": int(hit.get("downloads") or 0) if str(hit.get("downloads") or "").isdigit() else 0,
+                "iconUrl": str(hit.get("icon_url") or "").strip()[:500],
+            }
+        )
+    return results
+
+
+def minecraft_modrinth_content_entry(instance: dict[str, Any], payload: dict[str, Any]) -> dict[str, str]:
+    project_id = str(payload.get("projectId") or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_-]{3,80}", project_id):
+        raise ApiError("Invalid Modrinth project ID.", 400)
+    version = minecraft_version_from_instance(instance)
+    if not version:
+        raise ApiError("Install a concrete Minecraft version before adding content.", 409)
+    runtime = minecraft_server_type_spec(minecraft_server_type_from_instance(instance))
+    requested_kind = str(payload.get("kind") or runtime["contentKind"]).strip().lower()
+    if requested_kind != runtime["contentKind"]:
+        raise ApiError(f"The selected {runtime['label']} server supports {runtime['contentLabel']} only.", 409)
+    versions = modrinth_get(
+        f"/project/{project_id}/version",
+        params={
+            "game_versions": json.dumps([version]),
+            "loaders": json.dumps(runtime["modrinthLoaders"]),
+        },
+    )
+    if not isinstance(versions, list):
+        raise ApiError("Modrinth returned an invalid version catalog.", 502)
+    requested_version_id = str(payload.get("versionId") or "").strip()
+    selected = next(
+        (
+            candidate
+            for candidate in versions
+            if isinstance(candidate, dict)
+            and (not requested_version_id or str(candidate.get("id") or "") == requested_version_id)
+            and any(loader in set(runtime["modrinthLoaders"]) for loader in (candidate.get("loaders") or []))
+        ),
+        None,
+    )
+    if not selected:
+        raise ApiError(f"No compatible Modrinth {runtime['contentKind']} version was found for Minecraft {version} and {runtime['label']}.", 409)
+    version_id = str(selected.get("id") or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_-]{3,80}", version_id):
+        raise ApiError("Modrinth returned an invalid version ID.", 502)
+    return {
+        "projectId": project_id,
+        "versionId": version_id,
+        "kind": str(runtime["contentKind"]),
+        "title": str(payload.get("title") or project_id).strip()[:160] or project_id,
+        "version": str(selected.get("version_number") or version_id).strip()[:120] or version_id,
+        "files": [
+            str(file.get("filename") or "").strip()
+            for file in (selected.get("files") or [])
+            if isinstance(file, dict) and re.fullmatch(r"[A-Za-z0-9._+-]{1,240}\.jar", str(file.get("filename") or "").strip())
+        ],
+    }
+
+
 def minecraft_management_request_result(instance: dict[str, Any] | None) -> dict[str, Any]:
     if instance is None:
         return {}
@@ -4883,9 +5148,11 @@ def build_minecraft_management_payload(
     *,
     result: dict[str, Any] | None = None,
     message: str = "",
+    catalog_results: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     minecraft_status = build_minecraft_status(instance)
     agent_ready = minecraft_management_agent_ready(instance)
+    runtime = minecraft_server_type_spec(minecraft_server_type_from_instance(instance))
     agent_prepared = bool(
         instance and metadata_value(instance, "vm-minecraft-management-script").strip()
     )
@@ -4900,6 +5167,14 @@ def build_minecraft_management_payload(
         "instanceExists": instance is not None,
         "instanceState": str((instance or {}).get("status", "NOT_FOUND")),
         "minecraftStatus": minecraft_status,
+        "serverRuntime": {
+            "id": runtime["id"],
+            "label": runtime["label"],
+            "contentKind": runtime["contentKind"],
+            "contentLabel": runtime["contentLabel"],
+        },
+        "content": minecraft_modrinth_content(instance),
+        "catalogResults": catalog_results or [],
         "agentReady": agent_ready,
         "agentPrepared": agent_prepared,
         "restartRequired": agent_prepared and not agent_ready,
@@ -4913,6 +5188,9 @@ def build_minecraft_management_payload(
             "op-add",
             "op-remove",
             "restart",
+            "catalog-search",
+            "content-install",
+            "content-remove",
         ],
         "lastResult": result or minecraft_management_request_result(instance),
         "message": message,
@@ -5386,6 +5664,7 @@ def build_status_payload(
               "minecraftManagement": build_minecraft_management_payload(None, user),
             "minecraft": {
                 **minecraft_version_payload(),
+                "serverType": minecraft_server_type_from_instance(None),
             },
             "persistence": build_persistence_status(None),
             "powerAction": build_power_action_status(None),
@@ -5435,6 +5714,7 @@ def build_status_payload(
           "minecraftManagement": build_minecraft_management_payload(instance, user),
         "minecraft": {
             **minecraft_version_payload(),
+            "serverType": minecraft_server_type_from_instance(instance),
         },
         "persistence": build_persistence_status(instance),
         "powerAction": build_power_action_status(instance),
@@ -5696,6 +5976,15 @@ def minecraft_management_request_payload(payload: dict[str, Any]) -> dict[str, s
     return request_payload
 
 
+def minecraft_content_sync_request(entries: list[dict[str, Any]], removed_files: list[str] | None = None) -> dict[str, Any]:
+    return {
+        "id": secrets.token_urlsafe(18),
+        "action": "content-sync",
+        "entries": [f"{entry['projectId']}:{entry['versionId']}" for entry in entries],
+        "removeFiles": [filename for filename in (removed_files or []) if re.fullmatch(r"[A-Za-z0-9._+-]{1,240}\.jar", filename)],
+    }
+
+
 def wait_for_minecraft_management_result(request_id: str, timeout_seconds: int = 75) -> tuple[dict[str, Any], dict[str, Any]]:
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
@@ -5728,14 +6017,41 @@ def execute_minecraft_management_action(
 
     minecraft_status = build_minecraft_status(instance)
     if str(instance.get("status", "")).upper() != "RUNNING" or minecraft_status.get("state") != "running":
-        raise ApiError("Minecraft server must be running before sending management commands.", 409)
+        raise ApiError("Minecraft server must be running before using management controls.", 409)
+    if action == "catalog-search":
+        results = minecraft_modrinth_catalog_search(instance, payload)
+        return build_minecraft_management_payload(
+            instance,
+            user,
+            message=f"Found {len(results)} compatible Modrinth result(s).",
+            catalog_results=results,
+        )
     if not minecraft_management_agent_ready(instance):
         raise ApiError(
             "Minecraft management agent is not active yet. Prepare it and restart the VM from the main GUI.",
             409,
         )
 
-    request_payload = minecraft_management_request_payload(payload)
+    updated_content: list[dict[str, str]] | None = None
+    if action == "content-install":
+        entry = minecraft_modrinth_content_entry(instance, payload)
+        current_content = minecraft_modrinth_content(instance)
+        if any(item["projectId"] == entry["projectId"] for item in current_content):
+            raise ApiError("This Modrinth project is already installed. Remove it before selecting another version.", 409)
+        updated_content = [*current_content, entry]
+        request_payload = minecraft_content_sync_request(updated_content)
+    elif action == "content-remove":
+        project_id = str(payload.get("projectId") or "").strip()
+        if not re.fullmatch(r"[A-Za-z0-9_-]{3,80}", project_id):
+            raise ApiError("Invalid Modrinth project ID.", 400)
+        current_content = minecraft_modrinth_content(instance)
+        updated_content = [item for item in current_content if item["projectId"] != project_id]
+        if len(updated_content) == len(current_content):
+            raise ApiError("The selected Modrinth project is not installed.", 404)
+        removed_files = [filename for item in current_content if item["projectId"] == project_id for filename in item.get("files", [])]
+        request_payload = minecraft_content_sync_request(updated_content, removed_files)
+    else:
+        request_payload = minecraft_management_request_payload(payload)
     set_instance_metadata_values(
         instance,
         {
@@ -5752,7 +6068,17 @@ def execute_minecraft_management_action(
             ),
         },
     )
-    refreshed, result = wait_for_minecraft_management_result(request_payload["id"])
+    refreshed, result = wait_for_minecraft_management_result(
+        request_payload["id"],
+        timeout_seconds=300 if updated_content is not None else 75,
+    )
+    if updated_content is not None and result.get("state") == "done":
+        set_instance_metadata_value(
+            refreshed,
+            MINECRAFT_MODRINTH_CONTENT_METADATA_KEY,
+            json.dumps(updated_content, separators=(",", ":")),
+        )
+        refreshed = get_instance()
     message = "Minecraft management action completed." if result.get("state") == "done" else "Minecraft management action failed on the VM."
     return build_minecraft_management_payload(refreshed, user, result=result, message=message)
 
@@ -6164,6 +6490,11 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
             if command == "install-minecraft"
             else minecraft_version_from_instance(current_instance)
         )
+        minecraft_server_type = (
+            parse_minecraft_server_type(payload)
+            if command == "install-minecraft"
+            else minecraft_server_type_from_instance(current_instance)
+        )
         target_phase = {
             "install-minecraft": "installed",
             "start-minecraft": "started",
@@ -6178,11 +6509,12 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
             sunshine_state=None,
             extra_metadata={
                 MINECRAFT_STATUS_DETAIL_METADATA_KEY: (
-                    f"Installing Minecraft server {minecraft_version}."
+                    f"Installing {minecraft_server_type_spec(minecraft_server_type)['label']} Minecraft server {minecraft_version}."
                     if command == "install-minecraft"
                     else f"Running {command}."
                 ),
                 MINECRAFT_VERSION_METADATA_KEY: minecraft_version,
+                MINECRAFT_SERVER_TYPE_METADATA_KEY: minecraft_server_type,
             },
         )
         final_instance = wait_for_power_action_phase(

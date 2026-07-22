@@ -16,6 +16,58 @@
   gap: 10px;
 }
 
+.modrinth-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.content-search {
+  display: flex;
+  gap: 10px;
+}
+
+.content-search input {
+  flex: 1;
+  min-width: 0;
+}
+
+.content-list {
+  display: grid;
+  gap: 10px;
+}
+
+.content-list.empty {
+  padding: 14px;
+  border: 1px dashed var(--line);
+  border-radius: 12px;
+  color: var(--muted);
+}
+
+.content-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #f7fbf6;
+}
+
+.content-item h3,
+.content-item p {
+  margin: 0;
+}
+
+.content-item p + p {
+  margin-top: 7px;
+}
+
+.content-meta {
+  color: var(--muted);
+  font: 0.78rem/1.4 "IBM Plex Mono", monospace;
+}
+
 .management-output {
   min-height: 120px;
   max-height: 420px;
@@ -42,5 +94,11 @@
 @media (max-width: 760px) {
   .management-grid {
     grid-template-columns: 1fr;
+  }
+
+  .content-search,
+  .content-item {
+    align-items: stretch;
+    flex-direction: column;
   }
 }
