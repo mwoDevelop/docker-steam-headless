@@ -6,6 +6,8 @@ REQUEST_KEY="vm-minecraft-management-request"
 RESULT_KEY="vm-minecraft-management-result"
 AGENT_KEY="vm-minecraft-management-agent"
 PROPERTIES_KEY="vm-minecraft-server-properties"
+MINECRAFT_STATUS_KEY="vm-minecraft-status"
+MINECRAFT_STATUS_DETAIL_KEY="vm-minecraft-status-detail"
 MINECRAFT_ROOT=/mnt/games/minecraft-server
 MINECRAFT_COMPOSE_FILE="${MINECRAFT_ROOT}/docker-compose.yml"
 MINECRAFT_CONTENT_FILE="${MINECRAFT_ROOT}/data/modrinth-projects.txt"
@@ -243,6 +245,20 @@ wait_for_rcon() {
   return 1
 }
 
+reconcile_minecraft_status() {
+  local container output
+  for _ in $(seq 1 90); do
+    container="$(minecraft_container || true)"
+    if [[ -n "$container" ]] && output="$(run_rcon "$container" "list" 2>&1)"; then
+      set_metadata_value "$MINECRAFT_STATUS_KEY" "running" || true
+      set_metadata_value "$MINECRAFT_STATUS_DETAIL_KEY" "Minecraft RCON is ready after VM startup." || true
+      return 0
+    fi
+    sleep 2
+  done
+  return 1
+}
+
 sync_modrinth_content() {
   local raw="$1" entries entry removed_file expected_file temporary_file container output missing_files
   entries="$(printf '%s' "$raw" | jq -r '.entries // [] | .[]' 2>/dev/null || true)"
@@ -367,6 +383,7 @@ process_request() {
 }
 
 main() {
+  reconcile_minecraft_status || true
   while true; do
     process_request || true
     sleep 2
