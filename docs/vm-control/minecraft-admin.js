@@ -135,11 +135,17 @@
       return;
     }
     elements.installedContent.className = "content-list";
-    elements.installedContent.innerHTML = content.map((item) => `
+    elements.installedContent.innerHTML = content.map((item) => {
+      const projectUrl = modrinthProjectUrl(item);
+      const projectLink = projectUrl
+        ? `<a class="content-project-link" href="${escapeHtml(projectUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(projectUrl)}</a>`
+        : "";
+      return `
       <article class="content-item">
-        <div><h3>${escapeHtml(item.title)}</h3><p class="content-meta">${escapeHtml(item.projectId)} · ${escapeHtml(item.version)}</p></div>
+        <div><h3>${escapeHtml(item.title)}</h3><p class="content-meta">${escapeHtml(item.projectId)} · ${escapeHtml(item.version)}</p>${projectLink}</div>
         <button class="action delete" type="button" data-content-action="remove" data-project-id="${escapeHtml(item.projectId)}">Remove</button>
-      </article>`).join("");
+      </article>`;
+    }).join("");
     elements.installedContent.querySelectorAll("[data-content-action='remove']").forEach((button) => button.addEventListener("click", () => runContentAction("content-remove", button.dataset.projectId, "")));
   }
 

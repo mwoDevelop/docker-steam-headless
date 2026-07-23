@@ -5076,6 +5076,7 @@ def minecraft_modrinth_content(instance: dict[str, Any] | None) -> list[dict[str
                 "projectId": project_id,
                 "versionId": version_id,
                 "kind": kind,
+                "projectUrl": f"https://modrinth.com/{kind}/{project_id}",
                 "title": str(value.get("title") or project_id).strip()[:160] or project_id,
                 "version": str(value.get("version") or version_id).strip()[:120] or version_id,
                 "files": [

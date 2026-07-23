@@ -49,9 +49,10 @@
   justify-content: space-between;
   gap: 16px;
   padding: 14px;
-  border: 1px solid var(--line);
+  border: 1px solid #24544d;
   border-radius: 12px;
-  background: #f7fbf6;
+  background: #102a27;
+  color: #e9f7ec;
 }
 
 .content-item h3,
@@ -59,23 +60,36 @@
   margin: 0;
 }
 
+.content-item h3 {
+  color: #f4fffb;
+}
+
+.content-item p {
+  color: #cce5de;
+}
+
 .content-item p + p {
   margin-top: 7px;
 }
 
 .content-meta {
-  color: var(--muted);
+  color: #a9cbc4;
   font: 0.78rem/1.4 "IBM Plex Mono", monospace;
 }
 
 .content-project-link {
   display: inline-block;
   margin-top: 8px;
-  color: #0a6f4e;
+  color: #8ee8cf;
   font: 0.74rem/1.45 "IBM Plex Mono", monospace;
   overflow-wrap: anywhere;
   text-decoration-thickness: 1px;
   text-underline-offset: 3px;
+}
+
+.content-project-link:hover,
+.content-project-link:focus-visible {
+  color: #d8fff1;
 }
 
 .management-output {
