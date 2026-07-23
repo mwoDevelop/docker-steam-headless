@@ -65,8 +65,26 @@
     elements.status.dataset.tone = tone || "neutral";
   }
 
+  function cleanCommandOutput(value) {
+    const cleaned = String(value || "")
+      .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "")
+      .replace(/\r/g, "")
+      .trim();
+    return cleaned || "No output returned by the server.";
+  }
+
   function setOutput(value) {
-    elements.output.textContent = String(value || "No output returned by the server.");
+    elements.output.textContent = cleanCommandOutput(value);
+  }
+
+  function resultSummary(result, fallback) {
+    if (!result || !result.id) return fallback || "Minecraft action completed.";
+    const labels = {
+      players: "Online players",
+      "whitelist-list": "Whitelist",
+      "op-list": "Server operators",
+    };
+    return `${labels[result.action] || result.action || "Minecraft action"}: ${cleanCommandOutput(result.output)}`;
   }
 
   function escapeHtml(value) {
@@ -201,7 +219,7 @@
     try {
       const data = await api("/api/minecraft/management", { method: "POST", body: JSON.stringify(body) });
       render(data);
-      setStatus(data.message || "Minecraft action completed.", data.lastResult && data.lastResult.state === "failed" ? "error" : "success");
+      setStatus(resultSummary(data.lastResult, data.message || "Minecraft action completed."), data.lastResult && data.lastResult.state === "failed" ? "error" : "success");
     } catch (error) {
       setStatus(error.message || "Minecraft action failed.", "error");
     } finally {
@@ -218,7 +236,7 @@
     try {
       const data = await api("/api/minecraft/management", { method: "POST", body: JSON.stringify(body) });
       render(data);
-      setStatus(data.message || "Minecraft content action completed.", data.lastResult && data.lastResult.state === "failed" ? "error" : "success");
+      setStatus(resultSummary(data.lastResult, data.message || "Minecraft content action completed."), data.lastResult && data.lastResult.state === "failed" ? "error" : "success");
     } catch (error) {
       setStatus(error.message || "Minecraft content action failed.", "error");
     } finally {

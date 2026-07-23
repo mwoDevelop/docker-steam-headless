@@ -109,6 +109,23 @@ run_rcon() {
   docker exec "$container" rcon-cli "$command" 2>&1
 }
 
+list_operators() {
+  local container="$1" raw operators
+  if ! raw="$(docker exec "$container" sh -c 'if [ -f /data/ops.json ]; then cat /data/ops.json; else printf "[]"; fi' 2>&1)"; then
+    return 1
+  fi
+  if ! jq -e 'type == "array"' >/dev/null 2>&1 <<<"$raw"; then
+    printf '%s' "$raw"
+    return 1
+  fi
+  operators="$(jq -r '.[] | .name // empty' <<<"$raw")"
+  if [[ -z "$operators" ]]; then
+    printf 'There are no server operators'
+  else
+    printf 'Server operators:\n%s' "$operators"
+  fi
+}
+
 RCON_READY_ERROR=""
 
 wait_for_rcon() {
@@ -232,7 +249,7 @@ process_request() {
     whitelist-list) if ! output="$(run_rcon "$container" "whitelist list")"; then state="failed"; fi ;;
     whitelist-add) if ! output="$(run_rcon "$container" "whitelist add ${player}")"; then state="failed"; fi ;;
     whitelist-remove) if ! output="$(run_rcon "$container" "whitelist remove ${player}")"; then state="failed"; fi ;;
-    op-list) if ! output="$(run_rcon "$container" "op list")"; then state="failed"; fi ;;
+    op-list) if ! output="$(list_operators "$container")"; then state="failed"; fi ;;
     op-add) if ! output="$(run_rcon "$container" "op ${player}")"; then state="failed"; fi ;;
     op-remove) if ! output="$(run_rcon "$container" "deop ${player}")"; then state="failed"; fi ;;
     restart) if ! output="$(docker restart "$container" 2>&1)"; then state="failed"; fi ;;
