@@ -4161,6 +4161,13 @@ def start_metadata_updates(
         "vm-power-action-script": decode_config_b64("vm_power_action_script_b64"),
         "vm-data-disk-device-name": data_disk_device_name(),
         "vm-data-disk-mount-root": CONFIG["data_disk_mount_root"],
+        "vm-sunshine-csrf-allowed-origins": (
+            ",".join(
+                f"https://{domain}:{CONFIG['sunshine_port']}"
+                for domain in selected_endpoint_domains()
+            )
+            or None
+        ),
         GPU_COUNT_METADATA_KEY: str(selected_gpu_count()),
         "vm-gpu-type": selected_gpu_type(),
         STEAM_ENV_METADATA_KEY: build_steam_env_value(
@@ -4978,11 +4985,16 @@ def build_sunshine_status(instance: dict[str, Any] | None) -> dict[str, str]:
             "detail": detail or metadata_value(instance, RUNTIME_IMAGE_DETAIL_METADATA_KEY) or "Updating Steam Headless and Sunshine image.",
             "version": version,
         }
-    if power_action in {"delete", "stop"} and phase in {"requested", "running", "backed-up", "stopping"}:
+    if power_action in {"delete", "stop", "auto-stop"} and phase in {"requested", "running", "backed-up", "stopping"}:
+        stopping_detail = (
+            "Steam Headless and Sunshine are stopping for the scheduled auto-stop."
+            if power_action == "auto-stop"
+            else "Steam Headless and Sunshine are stopping for the requested VM action."
+        )
         return {
             "state": "stopping",
             "label": "Stopping",
-            "detail": detail or "Steam Headless and Sunshine are stopping for the requested VM action.",
+            "detail": detail or stopping_detail,
             "version": version,
         }
     gpu_type = metadata_value(instance, "vm-gpu-type").strip() or instance_accelerator_summary(instance)[0]
@@ -5263,7 +5275,7 @@ def minecraft_server_properties(instance: dict[str, Any] | None) -> dict[str, An
 
 
 def minecraft_rcon_suggestions(instance: dict[str, Any] | None) -> dict[str, Any]:
-    raw = metadata_value(instance, MINECRAFT_COMMAND_SUGGESTIONS_METADATA_KEY)
+    raw = metadata_value(instance, MINECRAFT_COMMAND_SUGGESTIONS_METADATA_KEY) if instance else ""
     players: list[str] = []
     refreshed_at = ""
     if raw:

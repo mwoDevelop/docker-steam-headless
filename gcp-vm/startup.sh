@@ -975,11 +975,13 @@ if [ -n "$container_id" ]; then
 fi
 
 CFG_HOST="/opt/container-data/steam-headless/home/.config/sunshine/sunshine.conf"
+SUNSHINE_CSRF_ALLOWED_ORIGINS="$(metadata_get vm-sunshine-csrf-allowed-origins || true)"
 mkdir -p "$(dirname "$CFG_HOST")"
 touch "$CFG_HOST"
 sed -i -E \
   -e '/origin_web_ui_allowed\s*=.*/d' \
   -e '/origin_pin_allowed\s*=.*/d' \
+  -e '/csrf_allowed_origins\s*=.*/d' \
   -e '/external_ip\s*=.*/d' \
   -e '/capture\s*=.*/d' \
   -e '/system_tray\s*=.*/d' \
@@ -988,6 +990,9 @@ sed -i -E \
   echo
   echo "origin_web_ui_allowed = wan"
   echo "origin_pin_allowed = wan"
+  if [[ -n "$SUNSHINE_CSRF_ALLOWED_ORIGINS" ]]; then
+    echo "csrf_allowed_origins = $SUNSHINE_CSRF_ALLOWED_ORIGINS"
+  fi
   if [[ "$(metadata_get vm-gpu-type)" != *-vws ]]; then
     echo "capture = x11"
     echo "system_tray = disabled"

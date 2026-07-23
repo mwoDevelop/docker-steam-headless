@@ -975,6 +975,15 @@ perform_action() {
   set_power_action_status "$action" "$token" "running"
 
   case "$action" in
+    auto-stop)
+      set_sunshine_status "stopping" "Sunshine is stopping for the scheduled auto-stop."
+      ;;
+    stop|delete)
+      set_sunshine_status "stopping" "Sunshine is stopping for the requested VM action."
+      ;;
+  esac
+
+  case "$action" in
     delete)
       backup_mode="backup-delete"
       ;;
