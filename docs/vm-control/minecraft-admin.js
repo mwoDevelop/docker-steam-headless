@@ -84,7 +84,9 @@
       "whitelist-list": "Whitelist",
       "op-list": "Server operators",
     };
-    return `${labels[result.action] || result.action || "Minecraft action"}: ${cleanCommandOutput(result.output)}`;
+    const label = labels[result.action] || result.action || "Minecraft action";
+    const output = cleanCommandOutput(result.output);
+    return output.toLowerCase().startsWith(`${label.toLowerCase()}:`) ? output : `${label}: ${output}`;
   }
 
   function escapeHtml(value) {
