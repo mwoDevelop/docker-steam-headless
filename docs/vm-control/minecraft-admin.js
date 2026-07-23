@@ -14,6 +14,9 @@
     notice: document.querySelector("#agent-notice"),
     refresh: document.querySelector("#refresh"),
     console: document.querySelector("#console-command"),
+    consoleSuggestions: document.querySelector("#console-suggestions"),
+    consolePlayerHints: document.querySelector("#console-player-hints"),
+    consoleHintDescription: document.querySelector("#console-hint-description"),
     output: document.querySelector("#command-output"),
     actionButtons: [...document.querySelectorAll("[data-action]")],
     propertiesLoad: document.querySelector("#properties-load"),
@@ -64,6 +67,8 @@
     state.busy = busy;
     elements.refresh.disabled = busy;
     elements.actionButtons.forEach((button) => { button.disabled = busy || !state.data || !state.data.agentReady; });
+    if (elements.console) elements.console.disabled = busy || !state.data || !state.data.agentReady;
+    document.querySelectorAll(".console-suggestion, .console-player-hint").forEach((button) => { button.disabled = busy || !state.data || !state.data.agentReady; });
     const propertiesLoaded = Boolean(state.data && state.data.serverProperties && state.data.serverProperties.loaded);
     if (elements.propertiesLoad) elements.propertiesLoad.disabled = busy || !state.data || !state.data.agentReady;
     if (elements.propertyName) elements.propertyName.disabled = busy || !propertiesLoaded;
@@ -251,6 +256,64 @@
     renderPropertyEditor(true);
   }
 
+  function rconSuggestions() {
+    const suggestions = state.data && state.data.rconSuggestions;
+    return suggestions && typeof suggestions === "object" ? suggestions : { commands: [], onlinePlayers: [] };
+  }
+
+  function matchingConsoleCommands() {
+    const typed = String(elements.console && elements.console.value || "").trim().toLowerCase();
+    const commands = Array.isArray(rconSuggestions().commands) ? rconSuggestions().commands : [];
+    if (!typed) return commands.slice(0, 8);
+    const root = typed.replace(/^\/+/, "").split(/\s+/, 1)[0];
+    return commands.filter((command) => String(command.command || "").startsWith(root) || String(command.template || "").startsWith(typed)).slice(0, 8);
+  }
+
+  function applyConsoleTemplate(template) {
+    const value = String(template || "");
+    elements.console.value = value;
+    elements.console.focus();
+    const placeholder = value.search(/[<[]/);
+    elements.console.setSelectionRange(placeholder >= 0 ? placeholder : value.length, value.length);
+    renderConsoleAssistant();
+  }
+
+  function applyPlayerHint(player) {
+    const current = String(elements.console.value || "").trim();
+    elements.console.value = current.includes("<player>")
+      ? current.replace("<player>", player)
+      : `${current}${current ? " " : ""}${player}`;
+    elements.console.focus();
+    renderConsoleAssistant();
+  }
+
+  function renderConsoleAssistant() {
+    if (!elements.consoleSuggestions || !elements.consolePlayerHints) return;
+    const suggestions = rconSuggestions();
+    const commands = matchingConsoleCommands();
+    elements.consoleSuggestions.innerHTML = commands.length
+      ? commands.map((command) => `<button class="console-suggestion" type="button" data-template="${escapeHtml(command.template)}" data-description="${escapeHtml(command.description)}" data-risk="${command.dangerous ? "dangerous" : "safe"}">${escapeHtml(command.template)}</button>`).join("")
+      : '<span class="section-meta">No matching managed command. You can still send a raw RCON command.</span>';
+    elements.consoleSuggestions.querySelectorAll(".console-suggestion").forEach((button) => button.addEventListener("click", () => applyConsoleTemplate(button.dataset.template)));
+    const players = Array.isArray(suggestions.onlinePlayers) ? suggestions.onlinePlayers : [];
+    elements.consolePlayerHints.classList.toggle("hidden", players.length === 0);
+    elements.consolePlayerHints.innerHTML = players.length
+      ? `<span class="section-meta">Online players:</span>${players.map((player) => `<button class="console-player-hint" type="button" data-player="${escapeHtml(player)}">${escapeHtml(player)}</button>`).join("")}`
+      : "";
+    elements.consolePlayerHints.querySelectorAll(".console-player-hint").forEach((button) => button.addEventListener("click", () => applyPlayerHint(button.dataset.player)));
+    const selected = commands[0];
+    const version = String(state.data && state.data.minecraftStatus && state.data.minecraftStatus.version || "current server");
+    elements.consoleHintDescription.textContent = selected
+      ? `${selected.description}${selected.dangerous ? " Confirmation is required before sending." : ""}`
+      : `Managed hints for ${version}. Refresh player hints to read online players through RCON.`;
+    setBusy(state.busy);
+  }
+
+  function consoleCommandNeedsConfirmation(command) {
+    const root = String(command || "").trim().toLowerCase().replace(/^\/+/, "");
+    return /^(stop|op\s|deop\s|ban(?:-ip)?\s|pardon(?:-ip)?\s|kick\s|whitelist\s+(?:add|remove|on|off|reload)\b|save-off\b|reload\b)/.test(root);
+  }
+
   function render(data) {
     state.data = data;
     elements.identity.textContent = `Management account: ${data.user && data.user.email || "unknown"}`;
@@ -279,6 +342,7 @@
       elements.notice.classList.add("hidden");
       elements.notice.textContent = "";
     }
+    renderConsoleAssistant();
     setBusy(state.busy);
   }
 
@@ -297,7 +361,13 @@
 
   async function runAction(action, playerInputId) {
     const body = { action, endpointId: state.endpointId, hardwareId: state.hardwareId, zone: state.zone };
-    if (action === "console") body.command = String(elements.console.value || "").trim();
+    if (action === "console") {
+      body.command = String(elements.console.value || "").trim();
+      if (consoleCommandNeedsConfirmation(body.command)) {
+        if (!window.confirm(`Send the potentially disruptive RCON command?\n\n${body.command}`)) return;
+        body.confirmDangerous = true;
+      }
+    }
     if (playerInputId) body.player = String(document.querySelector(`#${playerInputId}`).value || "").trim();
     setBusy(true);
     setStatus(`Running Minecraft action: ${action}...`, "warning");
@@ -359,6 +429,7 @@
   elements.propertiesSave.addEventListener("click", () => runPropertyAction("properties-update"));
   elements.propertyName.addEventListener("change", () => { renderPropertyEditor(true); setBusy(state.busy); });
   elements.propertyValue.addEventListener("input", () => { validatePropertyValue(true); setBusy(state.busy); });
+  elements.console.addEventListener("input", renderConsoleAssistant);
   if (!state.token && window.opener) {
     window.opener.postMessage({ type: minecraftManagementSessionRequest }, window.location.origin);
     window.setTimeout(refresh, 250);

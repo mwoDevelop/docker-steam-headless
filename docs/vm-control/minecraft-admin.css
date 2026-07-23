@@ -10,6 +10,68 @@
   margin: 12px 0;
 }
 
+.console-assistant {
+  display: grid;
+  gap: 10px;
+  margin: 0 0 12px;
+  padding: 12px;
+  border: 1px solid #2e7563;
+  border-radius: 12px;
+  background: #0e2d27;
+}
+
+.console-assistant-head {
+  align-items: start;
+  gap: 12px;
+}
+
+.console-assistant h3 {
+  margin: 0;
+  color: #dcfff3;
+  font-size: 1rem;
+}
+
+.console-assistant .section-meta {
+  margin: 4px 0 0;
+  color: #b8ddd2;
+}
+
+.console-suggestions,
+.console-player-hints {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.console-suggestion,
+.console-player-hint {
+  border: 1px solid #4b9d88;
+  border-radius: 999px;
+  background: #143f36;
+  color: #e3fff7;
+  cursor: pointer;
+  font: 500 0.78rem/1.2 "IBM Plex Mono", monospace;
+  padding: 7px 9px;
+}
+
+.console-suggestion:hover,
+.console-suggestion:focus-visible,
+.console-player-hint:hover,
+.console-player-hint:focus-visible {
+  border-color: #9bf2d7;
+  background: #1a5648;
+  outline: none;
+}
+
+.console-suggestion[data-risk="dangerous"] {
+  border-color: #d89145;
+  color: #ffe3bd;
+}
+
+.console-player-hints.hidden {
+  display: none;
+}
+
 .management-actions {
   display: flex;
   flex-wrap: wrap;

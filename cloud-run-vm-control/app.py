@@ -5262,6 +5262,28 @@ def minecraft_server_properties(instance: dict[str, Any] | None) -> dict[str, An
     return {"loaded": True, "properties": sorted(properties, key=lambda item: item["key"])}
 
 
+def minecraft_rcon_suggestions(instance: dict[str, Any] | None) -> dict[str, Any]:
+    raw = metadata_value(instance, MINECRAFT_COMMAND_SUGGESTIONS_METADATA_KEY)
+    players: list[str] = []
+    refreshed_at = ""
+    if raw:
+        try:
+            payload = json.loads(raw)
+        except (TypeError, ValueError):
+            payload = {}
+        if isinstance(payload, dict):
+            players = [
+                value for value in payload.get("players", [])
+                if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_]{3,16}", value)
+            ][:100]
+            refreshed_at = str(payload.get("refreshedAt", ""))
+    return {
+        "commands": MINECRAFT_RCON_COMMAND_CATALOG,
+        "onlinePlayers": players,
+        "refreshedAt": refreshed_at,
+    }
+
+
 def build_minecraft_management_payload(
     instance: dict[str, Any] | None,
     user: dict[str, Any],
@@ -5294,6 +5316,7 @@ def build_minecraft_management_payload(
             "contentLabel": runtime["contentLabel"],
         },
         "serverProperties": minecraft_server_properties(instance),
+        "rconSuggestions": minecraft_rcon_suggestions(instance),
         "content": minecraft_modrinth_content(instance),
         "catalogResults": catalog_results or [],
         "agentReady": agent_ready,
@@ -6097,6 +6120,20 @@ def minecraft_management_property_update(payload: dict[str, Any]) -> dict[str, s
     return {"property": property_name, "value": value}
 
 
+def minecraft_management_console_command(payload: dict[str, Any]) -> str:
+    command = str(payload.get("command", "") or "").strip()
+    if not command or len(command) > 300 or any(ord(char) < 32 for char in command):
+        raise ApiError("Console command must be 1-300 printable characters.", 400)
+    normalized = command.lower().lstrip("/").strip()
+    dangerous = re.match(
+        r"^(stop|op\s|deop\s|ban(?:-ip)?\s|pardon(?:-ip)?\s|kick\s|whitelist\s+(?:add|remove|on|off|reload)\b|save-off\b|reload\b)",
+        normalized,
+    )
+    if dangerous and payload.get("confirmDangerous") is not True:
+        raise ApiError("This RCON command requires explicit confirmation in the management panel.", 400)
+    return command
+
+
 def minecraft_management_request_payload(payload: dict[str, Any]) -> dict[str, str]:
     action = str(payload.get("action", "") or "").strip().lower()
     allowed_actions = {
@@ -6111,16 +6148,14 @@ def minecraft_management_request_payload(payload: dict[str, Any]) -> dict[str, s
         "restart",
         "properties-read",
         "properties-update",
+        "command-suggestions",
     }
     if action not in allowed_actions:
         raise ApiError("Unsupported Minecraft management action.", 400)
 
     request_payload = {"id": secrets.token_urlsafe(18), "action": action}
     if action == "console":
-        command = str(payload.get("command", "") or "").strip()
-        if not command or len(command) > 300 or any(ord(char) < 32 for char in command):
-            raise ApiError("Console command must be 1-300 printable characters.", 400)
-        request_payload["command"] = command
+        request_payload["command"] = minecraft_management_console_command(payload)
     elif action.endswith("-add") or action.endswith("-remove"):
         request_payload["player"] = minecraft_management_player_name(payload)
     elif action == "properties-update":
@@ -6734,3 +6769,21 @@ MINECRAFT_SERVER_PROPERTY_BLOCKED = {
     "server-ip",
     "server-port",
 }
+
+MINECRAFT_COMMAND_SUGGESTIONS_METADATA_KEY = "vm-minecraft-rcon-suggestions"
+MINECRAFT_RCON_COMMAND_CATALOG = [
+    {"command": "help", "template": "help [command]", "description": "Show commands available on this server.", "dangerous": False},
+    {"command": "list", "template": "list", "description": "Show online players.", "dangerous": False},
+    {"command": "say", "template": "say <message>", "description": "Broadcast a message to every online player.", "dangerous": False},
+    {"command": "time", "template": "time set day", "description": "Set the world time. Replace day with night, noon, midnight, or a tick value.", "dangerous": False},
+    {"command": "weather", "template": "weather clear", "description": "Set weather to clear, rain, or thunder.", "dangerous": False},
+    {"command": "difficulty", "template": "difficulty normal", "description": "Set peaceful, easy, normal, or hard difficulty.", "dangerous": False},
+    {"command": "gamemode", "template": "gamemode survival <player>", "description": "Set a player's game mode. Online player hints can fill the placeholder.", "dangerous": False},
+    {"command": "gamerule", "template": "gamerule keepInventory true", "description": "Change a world game rule.", "dangerous": False},
+    {"command": "whitelist", "template": "whitelist list", "description": "Show the whitelist. Add, remove, on, off, and reload require confirmation.", "dangerous": False},
+    {"command": "save-all", "template": "save-all", "description": "Save loaded chunks immediately.", "dangerous": False},
+    {"command": "kick", "template": "kick <player> [reason]", "description": "Disconnect a player from the server.", "dangerous": True},
+    {"command": "op", "template": "op <player>", "description": "Grant a player operator access.", "dangerous": True},
+    {"command": "deop", "template": "deop <player>", "description": "Remove a player's operator access.", "dangerous": True},
+    {"command": "stop", "template": "stop", "description": "Stop the Minecraft server process.", "dangerous": True},
+]

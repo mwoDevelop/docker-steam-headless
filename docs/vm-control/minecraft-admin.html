@@ -41,6 +41,17 @@
           <p class="eyebrow">Console</p>
           <h2>RCON command</h2>
           <textarea id="console-command" rows="5" maxlength="300" placeholder="say Server maintenance starts in 5 minutes"></textarea>
+          <div class="console-assistant" aria-label="RCON command assistant">
+            <div class="section-head console-assistant-head">
+              <div>
+                <h3>Command hints</h3>
+                <p id="console-hint-description" class="section-meta">Type a command or select a compatible template.</p>
+              </div>
+              <button id="console-hints-refresh" class="ghost" type="button" data-action="command-suggestions">Refresh player hints</button>
+            </div>
+            <div id="console-suggestions" class="console-suggestions" aria-live="polite"></div>
+            <div id="console-player-hints" class="console-player-hints hidden"></div>
+          </div>
           <button class="action create" type="button" data-action="console">Send command</button>
         </article>
 

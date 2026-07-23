@@ -6,6 +6,7 @@ REQUEST_KEY="vm-minecraft-management-request"
 RESULT_KEY="vm-minecraft-management-result"
 AGENT_KEY="vm-minecraft-management-agent"
 PROPERTIES_KEY="vm-minecraft-server-properties"
+COMMAND_SUGGESTIONS_KEY="vm-minecraft-rcon-suggestions"
 MINECRAFT_STATUS_KEY="vm-minecraft-status"
 MINECRAFT_STATUS_DETAIL_KEY="vm-minecraft-status-detail"
 POWER_ACTION_STATUS_KEY="vm-power-action-status"
@@ -111,6 +112,17 @@ publish_result() {
 run_rcon() {
   local container="$1" command="$2"
   docker exec "$container" rcon-cli "$command" 2>&1
+}
+
+publish_command_suggestions() {
+  local container="$1" output player_tail players payload
+  if ! output="$(run_rcon "$container" "list")"; then
+    return 1
+  fi
+  player_tail="${output##*:}"
+  players="$(printf '%s\n' "$player_tail" | tr ',' '\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | grep -E '^[A-Za-z0-9_]{3,16}$' || true)"
+  payload="$(printf '%s\n' "$players" | jq -Rsc --arg refreshedAt "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" '{players: (split("\n") | map(select(length > 0))), refreshedAt: $refreshedAt}')"
+  set_metadata_value "$COMMAND_SUGGESTIONS_KEY" "$payload"
 }
 
 list_operators() {
@@ -382,6 +394,7 @@ process_request() {
     op-add) if ! output="$(run_rcon "$container" "op ${player}")"; then state="failed"; fi ;;
     op-remove) if ! output="$(run_rcon "$container" "deop ${player}")"; then state="failed"; fi ;;
     restart) if ! output="$(docker restart "$container" 2>&1)"; then state="failed"; fi ;;
+    command-suggestions) if ! output="$(publish_command_suggestions "$container")"; then state="failed"; else output="Refreshed online player hints from RCON."; fi ;;
     properties-read) if ! output="$(publish_server_properties "$container")"; then state="failed"; else output="Loaded current server.properties options."; fi ;;
     properties-update)
       if ! output="$(validate_server_property_value "$property" "$value")"; then
