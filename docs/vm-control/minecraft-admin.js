@@ -16,6 +16,14 @@
     console: document.querySelector("#console-command"),
     output: document.querySelector("#command-output"),
     actionButtons: [...document.querySelectorAll("[data-action]")],
+    propertiesLoad: document.querySelector("#properties-load"),
+    propertiesSave: document.querySelector("#properties-save"),
+    propertyName: document.querySelector("#property-name"),
+    propertyValue: document.querySelector("#property-value"),
+    propertySuggestions: document.querySelector("#property-suggestions"),
+    propertyDescription: document.querySelector("#property-description"),
+    propertyValidation: document.querySelector("#property-validation"),
+    propertyHelp: document.querySelector(".property-help"),
     contentHeading: document.querySelector("#content-heading"),
     contentRuntime: document.querySelector("#content-runtime"),
     contentSearchQuery: document.querySelector("#content-search-query"),
@@ -56,6 +64,11 @@
     state.busy = busy;
     elements.refresh.disabled = busy;
     elements.actionButtons.forEach((button) => { button.disabled = busy || !state.data || !state.data.agentReady; });
+    const propertiesLoaded = Boolean(state.data && state.data.serverProperties && state.data.serverProperties.loaded);
+    if (elements.propertiesLoad) elements.propertiesLoad.disabled = busy || !state.data || !state.data.agentReady;
+    if (elements.propertyName) elements.propertyName.disabled = busy || !propertiesLoaded;
+    if (elements.propertyValue) elements.propertyValue.disabled = busy || !propertiesLoaded || !selectedServerProperty()?.editable;
+    if (elements.propertiesSave) elements.propertiesSave.disabled = busy || !propertiesLoaded || !selectedServerProperty()?.editable || !validatePropertyValue(false);
     if (elements.contentSearch) elements.contentSearch.disabled = busy || !state.data || !state.data.agentReady;
     document.querySelectorAll("[data-content-action]").forEach((button) => { button.disabled = busy || !state.data || !state.data.agentReady; });
   }
@@ -83,6 +96,8 @@
       players: "Online players",
       "whitelist-list": "Whitelist",
       "op-list": "Server operators",
+      "properties-read": "Server properties",
+      "properties-update": "Server properties",
     };
     const label = labels[result.action] || result.action || "Minecraft action";
     const output = cleanCommandOutput(result.output);
@@ -169,6 +184,73 @@
     elements.installedContent.querySelectorAll("[data-content-action='remove']").forEach((button) => button.addEventListener("click", () => runContentAction("content-remove", button.dataset.projectId, "")));
   }
 
+  function serverProperties() {
+    return Array.isArray(state.data && state.data.serverProperties && state.data.serverProperties.properties)
+      ? state.data.serverProperties.properties
+      : [];
+  }
+
+  function selectedServerProperty() {
+    return serverProperties().find((property) => property.key === elements.propertyName?.value) || null;
+  }
+
+  function validatePropertyValue(showMessage = true) {
+    const property = selectedServerProperty();
+    if (!property || !property.editable) return false;
+    const value = String(elements.propertyValue.value || "");
+    let message = "";
+    if (/\r|\n/.test(value) || value.length > 512) message = "Use one line up to 512 characters.";
+    else if (property.kind === "boolean" && !["true", "false"].includes(value)) message = "Choose true or false.";
+    else if (property.kind === "enum" && !(property.suggestions || []).includes(value)) message = `Choose one of: ${(property.suggestions || []).join(", ")}.`;
+    else if (property.kind === "integer") {
+      const numericValue = Number(value);
+      if (!/^-?\d+$/.test(value) || !Number.isInteger(numericValue)) message = "Enter an integer.";
+      else if (numericValue < property.minimum || numericValue > property.maximum) message = `Enter a value from ${property.minimum} to ${property.maximum}.`;
+    }
+    elements.propertyValue.setCustomValidity(message);
+    if (showMessage) {
+      elements.propertyValidation.textContent = message || (property.editable ? "Validation passed. Saving restarts Minecraft." : "Managed by the VM deployment; editing is disabled.");
+      elements.propertyHelp.dataset.invalid = message ? "true" : "false";
+    }
+    return !message;
+  }
+
+  function renderPropertyEditor(resetValue = false) {
+    const property = selectedServerProperty();
+    if (!property) {
+      elements.propertyValue.value = "";
+      elements.propertySuggestions.innerHTML = "";
+      elements.propertyDescription.textContent = "Options are read from the active server version.";
+      elements.propertyValidation.textContent = "Load settings to edit an option.";
+      elements.propertyHelp.dataset.invalid = "false";
+      return;
+    }
+    if (resetValue) elements.propertyValue.value = property.value;
+    elements.propertySuggestions.innerHTML = (property.suggestions || []).map((value) => `<option value="${escapeHtml(value)}"></option>`).join("");
+    const limits = property.kind === "integer" ? ` Allowed range: ${property.minimum}-${property.maximum}.` : "";
+    elements.propertyDescription.textContent = property.description;
+    elements.propertyValidation.textContent = property.editable ? `Current value: ${property.value}.${limits} Saving restarts Minecraft.` : "Managed by the VM deployment; editing is disabled.";
+    elements.propertyHelp.dataset.invalid = "false";
+    elements.propertyValue.disabled = state.busy || !property.editable;
+    validatePropertyValue(false);
+  }
+
+  function renderServerProperties(serverProperties) {
+    const config = serverProperties || {};
+    const properties = Array.isArray(config.properties) ? config.properties : [];
+    const previous = elements.propertyName.value;
+    if (!config.loaded || !properties.length) {
+      elements.propertyName.innerHTML = '<option value="">Load settings first</option>';
+      elements.propertyName.disabled = true;
+      renderPropertyEditor(true);
+      return;
+    }
+    elements.propertyName.innerHTML = properties.map((property) => `<option value="${escapeHtml(property.key)}">${escapeHtml(property.key)}${property.editable ? "" : " (managed)"}</option>`).join("");
+    elements.propertyName.value = properties.some((property) => property.key === previous) ? previous : properties[0].key;
+    elements.propertyName.disabled = state.busy;
+    renderPropertyEditor(true);
+  }
+
   function render(data) {
     state.data = data;
     elements.identity.textContent = `Management account: ${data.user && data.user.email || "unknown"}`;
@@ -181,6 +263,7 @@
     setStatus(`Minecraft: ${minecraft.label || "Unknown"}. Runtime: ${runtime.label || "Paper"} (${kindLabel}). VM: ${data.instanceState || "unknown"}.`, data.agentReady ? "success" : "warning");
     elements.contentHeading.textContent = `Compatible Modrinth ${kindLabel}`;
     elements.contentRuntime.textContent = `${runtime.label || "Paper"} accepts ${kindLabel}; the backend filters results by the installed Minecraft version and runtime.`;
+    renderServerProperties(data.serverProperties);
     renderCatalog(data.catalogResults || []);
     renderInstalledContent(data.content || [], runtime);
     const result = data.lastResult || {};
@@ -246,11 +329,36 @@
     }
   }
 
+  async function runPropertyAction(action) {
+    const body = { action, endpointId: state.endpointId, hardwareId: state.hardwareId, zone: state.zone };
+    if (action === "properties-update") {
+      if (!validatePropertyValue(true)) return;
+      body.property = elements.propertyName.value;
+      body.value = elements.propertyValue.value;
+      if (!window.confirm(`Save ${body.property}=${body.value} and restart Minecraft?`)) return;
+    }
+    setBusy(true);
+    setStatus(action === "properties-read" ? "Loading server.properties from Minecraft..." : "Saving server.properties and restarting Minecraft...", "warning");
+    try {
+      const data = await api("/api/minecraft/management", { method: "POST", body: JSON.stringify(body) });
+      render(data);
+      setStatus(resultSummary(data.lastResult, data.message || "Minecraft configuration action completed."), data.lastResult && data.lastResult.state === "failed" ? "error" : "success");
+    } catch (error) {
+      setStatus(error.message || "Minecraft configuration action failed.", "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   elements.back.href = `./index.html${window.location.search}`;
   elements.refresh.addEventListener("click", refresh);
   elements.actionButtons.forEach((button) => button.addEventListener("click", () => runAction(button.dataset.action, button.dataset.playerInput)));
   elements.contentSearch.addEventListener("click", () => runContentAction("catalog-search", "", ""));
   elements.contentSearchQuery.addEventListener("keydown", (event) => { if (event.key === "Enter") { event.preventDefault(); runContentAction("catalog-search", "", ""); } });
+  elements.propertiesLoad.addEventListener("click", () => runPropertyAction("properties-read"));
+  elements.propertiesSave.addEventListener("click", () => runPropertyAction("properties-update"));
+  elements.propertyName.addEventListener("change", () => { renderPropertyEditor(true); setBusy(state.busy); });
+  elements.propertyValue.addEventListener("input", () => { validatePropertyValue(true); setBusy(state.busy); });
   if (!state.token && window.opener) {
     window.opener.postMessage({ type: minecraftManagementSessionRequest }, window.location.origin);
     window.setTimeout(refresh, 250);

@@ -5,6 +5,7 @@ METADATA_HDR=( -H "Metadata-Flavor: Google" --fail --silent --show-error )
 REQUEST_KEY="vm-minecraft-management-request"
 RESULT_KEY="vm-minecraft-management-result"
 AGENT_KEY="vm-minecraft-management-agent"
+PROPERTIES_KEY="vm-minecraft-server-properties"
 MINECRAFT_ROOT=/mnt/games/minecraft-server
 MINECRAFT_COMPOSE_FILE="${MINECRAFT_ROOT}/docker-compose.yml"
 MINECRAFT_CONTENT_FILE="${MINECRAFT_ROOT}/data/modrinth-projects.txt"
@@ -126,6 +127,104 @@ list_operators() {
   fi
 }
 
+server_properties_json() {
+  local properties_file="$1"
+  awk '
+    /^[A-Za-z0-9.-]+=/ {
+      separator = index($0, "=")
+      printf "%s\\t%s\\n", substr($0, 1, separator - 1), substr($0, separator + 1)
+    }
+  ' "$properties_file" | jq -Rn '[inputs | split("\\t") | {key: .[0], value: (.[1:] | join("\\t"))}] | from_entries'
+}
+
+load_server_properties() {
+  local container="$1" properties_file="$2"
+  docker cp "${container}:/data/server.properties" "$properties_file" 2>&1
+}
+
+publish_server_properties() {
+  local container="$1" properties_file properties_json
+  properties_file="$(mktemp)"
+  if ! load_server_properties "$container" "$properties_file"; then
+    rm -f "$properties_file"
+    return 1
+  fi
+  if ! properties_json="$(server_properties_json "$properties_file")"; then
+    rm -f "$properties_file"
+    return 1
+  fi
+  rm -f "$properties_file"
+  set_metadata_value "$PROPERTIES_KEY" "$properties_json"
+}
+
+validate_server_property_value() {
+  local property="$1" value="$2" numeric
+  [[ "$property" =~ ^[A-Za-z0-9.-]{1,80}$ ]] || { printf 'Invalid server.properties option.'; return 1; }
+  [[ ${#value} -le 512 && "$value" != *$'\n'* && "$value" != *$'\r'* ]] || { printf 'A server.properties value must be a single line up to 512 characters.'; return 1; }
+  case "$property" in
+    enable-rcon|rcon.password|rcon.port|enable-query|query.port|server-ip|server-port)
+      printf '%s is managed by the VM deployment and cannot be changed here.' "$property"; return 1 ;;
+    online-mode|white-list|enforce-whitelist|pvp|allow-flight|allow-nether|hardcore|spawn-animals|spawn-monsters|spawn-npcs|force-gamemode)
+      [[ "$value" == "true" || "$value" == "false" ]] || { printf '%s must be true or false.' "$property"; return 1; } ;;
+    difficulty)
+      [[ "$value" =~ ^(peaceful|easy|normal|hard)$ ]] || { printf 'difficulty must be peaceful, easy, normal, or hard.'; return 1; } ;;
+    gamemode)
+      [[ "$value" =~ ^(survival|creative|adventure|spectator)$ ]] || { printf 'gamemode must be survival, creative, adventure, or spectator.'; return 1; } ;;
+    level-type)
+      [[ "$value" =~ ^(minecraft:normal|minecraft:flat|minecraft:large_biomes|minecraft:amplified|minecraft:single_biome_surface)$ ]] || { printf 'level-type is not a supported value.'; return 1; } ;;
+    max-players|view-distance|simulation-distance|spawn-protection|player-idle-timeout|op-permission-level|entity-broadcast-range-percentage|network-compression-threshold)
+      [[ "$value" =~ ^-?[0-9]+$ ]] || { printf '%s must be an integer.' "$property"; return 1; }
+      numeric=$((10#${value#-}))
+      case "$property" in
+        max-players) (( numeric >= 1 && numeric <= 1000 )) || { printf 'max-players must be between 1 and 1000.'; return 1; } ;;
+        view-distance|simulation-distance) (( numeric >= 3 && numeric <= 32 )) || { printf '%s must be between 3 and 32.' "$property"; return 1; } ;;
+        spawn-protection) (( numeric >= 0 && numeric <= 64 )) || { printf 'spawn-protection must be between 0 and 64.'; return 1; } ;;
+        player-idle-timeout) (( numeric >= 0 && numeric <= 2147483647 )) || { printf 'player-idle-timeout must be between 0 and 2147483647.'; return 1; } ;;
+        op-permission-level) (( numeric >= 1 && numeric <= 4 )) || { printf 'op-permission-level must be between 1 and 4.'; return 1; } ;;
+        entity-broadcast-range-percentage) (( numeric >= 10 && numeric <= 1000 )) || { printf 'entity-broadcast-range-percentage must be between 10 and 1000.'; return 1; } ;;
+        network-compression-threshold) (( value == -1 || (numeric >= 0 && numeric <= 2147483647) )) || { printf 'network-compression-threshold must be -1 or a non-negative integer.'; return 1; } ;;
+      esac ;;
+  esac
+}
+
+update_server_property() {
+  local container="$1" property="$2" value="$3" properties_file updated_file output
+  properties_file="$(mktemp)"
+  updated_file="$(mktemp)"
+  if ! load_server_properties "$container" "$properties_file"; then
+    rm -f "$properties_file" "$updated_file"
+    return 1
+  fi
+  if ! PROPERTY_NAME="$property" PROPERTY_VALUE="$value" awk '
+    BEGIN { property = ENVIRON["PROPERTY_NAME"]; value = ENVIRON["PROPERTY_VALUE"]; found = 0 }
+    index($0, property "=") == 1 { print property "=" value; found = 1; next }
+    { print }
+    END { if (!found) exit 3 }
+  ' "$properties_file" > "$updated_file"; then
+    rm -f "$properties_file" "$updated_file"
+    printf 'The selected option is not present in the current server.properties file.'
+    return 1
+  fi
+  if ! docker cp "$updated_file" "${container}:/data/server.properties" 2>&1; then
+    rm -f "$properties_file" "$updated_file"
+    return 1
+  fi
+  rm -f "$properties_file" "$updated_file"
+  if ! output="$(docker restart "$container" 2>&1)"; then
+    printf '%s' "$output"
+    return 1
+  fi
+  if ! wait_for_rcon "$container"; then
+    printf 'Minecraft restarted after changing %s, but RCON did not become ready: %s' "$property" "$RCON_READY_ERROR"
+    return 1
+  fi
+  if ! publish_server_properties "$container"; then
+    printf 'Updated %s, but the refreshed server.properties could not be read.' "$property"
+    return 1
+  fi
+  printf 'Updated %s=%s and restarted Minecraft.' "$property" "$value"
+}
+
 RCON_READY_ERROR=""
 
 wait_for_rcon() {
@@ -207,7 +306,7 @@ sync_modrinth_content() {
 }
 
 process_request() {
-  local raw request_id action command player container result_id result_state output state
+  local raw request_id action command player property value container result_id result_state output state
   raw="$(metadata_get "$REQUEST_KEY")"
   [[ -n "$raw" ]] || return 0
   request_id="$(printf '%s' "$raw" | jq -r '.id // empty' 2>/dev/null || true)"
@@ -242,6 +341,8 @@ process_request() {
 
   command="$(printf '%s' "$raw" | jq -r '.command // empty' 2>/dev/null || true)"
   player="$(printf '%s' "$raw" | jq -r '.player // empty' 2>/dev/null || true)"
+  property="$(printf '%s' "$raw" | jq -r '.property // empty' 2>/dev/null || true)"
+  value="$(printf '%s' "$raw" | jq -r '.value // empty' 2>/dev/null || true)"
   state="done"
   case "$action" in
     console) if ! output="$(run_rcon "$container" "$command")"; then state="failed"; fi ;;
@@ -253,6 +354,13 @@ process_request() {
     op-add) if ! output="$(run_rcon "$container" "op ${player}")"; then state="failed"; fi ;;
     op-remove) if ! output="$(run_rcon "$container" "deop ${player}")"; then state="failed"; fi ;;
     restart) if ! output="$(docker restart "$container" 2>&1)"; then state="failed"; fi ;;
+    properties-read) if ! output="$(publish_server_properties "$container")"; then state="failed"; else output="Loaded current server.properties options."; fi ;;
+    properties-update)
+      if ! output="$(validate_server_property_value "$property" "$value")"; then
+        state="failed"
+      elif ! output="$(update_server_property "$container" "$property" "$value")"; then
+        state="failed"
+      fi ;;
     *) state="failed"; output="Unsupported management action." ;;
   esac
   publish_result "$request_id" "$action" "$state" "$output"

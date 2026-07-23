@@ -183,6 +183,7 @@ MINECRAFT_MODRINTH_CONTENT_METADATA_KEY = "vm-minecraft-modrinth-content"
 MINECRAFT_MANAGEMENT_REQUEST_METADATA_KEY = "vm-minecraft-management-request"
 MINECRAFT_MANAGEMENT_RESULT_METADATA_KEY = "vm-minecraft-management-result"
 MINECRAFT_MANAGEMENT_AGENT_METADATA_KEY = "vm-minecraft-management-agent"
+MINECRAFT_SERVER_PROPERTIES_METADATA_KEY = "vm-minecraft-server-properties"
 RUNTIME_IMAGE_COMPONENT_METADATA_KEY = "vm-runtime-image-component"
 RUNTIME_IMAGE_OPERATION_METADATA_KEY = "vm-runtime-image-operation"
 RUNTIME_IMAGE_TARGET_REF_METADATA_KEY = "vm-runtime-image-target-ref"
@@ -5226,6 +5227,41 @@ def minecraft_management_request_result(instance: dict[str, Any] | None) -> dict
     }
 
 
+def minecraft_server_properties(instance: dict[str, Any] | None) -> dict[str, Any]:
+    if instance is None:
+        return {"loaded": False, "properties": []}
+    raw = metadata_value(instance, MINECRAFT_SERVER_PROPERTIES_METADATA_KEY)
+    if not raw:
+        return {"loaded": False, "properties": []}
+    try:
+        values = json.loads(raw)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {"loaded": False, "properties": []}
+    if not isinstance(values, dict):
+        return {"loaded": False, "properties": []}
+
+    properties: list[dict[str, Any]] = []
+    for key, value in values.items():
+        if not isinstance(key, str) or not re.fullmatch(r"[A-Za-z0-9.-]{1,80}", key):
+            continue
+        if key == "rcon.password":
+            continue
+        rule = MINECRAFT_SERVER_PROPERTY_RULES.get(key, {})
+        properties.append(
+            {
+                "key": key,
+                "value": str(value)[:512],
+                "kind": str(rule.get("kind", "text")),
+                "minimum": rule.get("minimum"),
+                "maximum": rule.get("maximum"),
+                "suggestions": list(rule.get("suggestions", [])),
+                "description": str(rule.get("description", "Option provided by the currently installed server version.")),
+                "editable": key not in MINECRAFT_SERVER_PROPERTY_BLOCKED,
+            }
+        )
+    return {"loaded": True, "properties": sorted(properties, key=lambda item: item["key"])}
+
+
 def build_minecraft_management_payload(
     instance: dict[str, Any] | None,
     user: dict[str, Any],
@@ -5257,6 +5293,7 @@ def build_minecraft_management_payload(
             "contentKind": runtime["contentKind"],
             "contentLabel": runtime["contentLabel"],
         },
+        "serverProperties": minecraft_server_properties(instance),
         "content": minecraft_modrinth_content(instance),
         "catalogResults": catalog_results or [],
         "agentReady": agent_ready,
@@ -5272,6 +5309,8 @@ def build_minecraft_management_payload(
             "op-add",
             "op-remove",
             "restart",
+            "properties-read",
+            "properties-update",
             "catalog-search",
             "content-install",
             "content-remove",
@@ -6033,6 +6072,31 @@ def minecraft_management_player_name(payload: dict[str, Any]) -> str:
     return player
 
 
+def minecraft_management_property_update(payload: dict[str, Any]) -> dict[str, str]:
+    property_name = str(payload.get("property", "") or "").strip()
+    value = str(payload.get("value", ""))
+    if not re.fullmatch(r"[A-Za-z0-9.-]{1,80}", property_name):
+        raise ApiError("Invalid server.properties option.", 400)
+    if property_name in MINECRAFT_SERVER_PROPERTY_BLOCKED:
+        raise ApiError(f"{property_name} is managed by the VM deployment and cannot be changed here.", 400)
+    if len(value) > 512 or "\r" in value or "\n" in value:
+        raise ApiError("A server.properties value must be a single line up to 512 characters.", 400)
+
+    rule = MINECRAFT_SERVER_PROPERTY_RULES.get(property_name, {})
+    kind = rule.get("kind")
+    if kind == "boolean" and value not in {"true", "false"}:
+        raise ApiError(f"{property_name} must be true or false.", 400)
+    if kind == "enum" and value not in set(rule.get("suggestions", [])):
+        raise ApiError(f"{property_name} must be one of: {', '.join(rule['suggestions'])}.", 400)
+    if kind == "integer":
+        if not re.fullmatch(r"-?[0-9]+", value):
+            raise ApiError(f"{property_name} must be an integer.", 400)
+        numeric_value = int(value)
+        if numeric_value < int(rule["minimum"]) or numeric_value > int(rule["maximum"]):
+            raise ApiError(f"{property_name} must be between {rule['minimum']} and {rule['maximum']}.", 400)
+    return {"property": property_name, "value": value}
+
+
 def minecraft_management_request_payload(payload: dict[str, Any]) -> dict[str, str]:
     action = str(payload.get("action", "") or "").strip().lower()
     allowed_actions = {
@@ -6045,6 +6109,8 @@ def minecraft_management_request_payload(payload: dict[str, Any]) -> dict[str, s
         "op-add",
         "op-remove",
         "restart",
+        "properties-read",
+        "properties-update",
     }
     if action not in allowed_actions:
         raise ApiError("Unsupported Minecraft management action.", 400)
@@ -6057,6 +6123,8 @@ def minecraft_management_request_payload(payload: dict[str, Any]) -> dict[str, s
         request_payload["command"] = command
     elif action.endswith("-add") or action.endswith("-remove"):
         request_payload["player"] = minecraft_management_player_name(payload)
+    elif action == "properties-update":
+        request_payload.update(minecraft_management_property_update(payload))
     return request_payload
 
 
@@ -6630,3 +6698,39 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", "8080")))
+MINECRAFT_SERVER_PROPERTY_RULES = {
+    "max-players": {"kind": "integer", "minimum": 1, "maximum": 1000, "description": "Maximum number of simultaneous players."},
+    "view-distance": {"kind": "integer", "minimum": 3, "maximum": 32, "description": "Server-side chunk view distance."},
+    "simulation-distance": {"kind": "integer", "minimum": 3, "maximum": 32, "description": "Chunk distance in which game logic is simulated."},
+    "difficulty": {"kind": "enum", "suggestions": ["peaceful", "easy", "normal", "hard"], "description": "Default world difficulty."},
+    "gamemode": {"kind": "enum", "suggestions": ["survival", "creative", "adventure", "spectator"], "description": "Default game mode for new players."},
+    "level-type": {"kind": "enum", "suggestions": ["minecraft:normal", "minecraft:flat", "minecraft:large_biomes", "minecraft:amplified", "minecraft:single_biome_surface"], "description": "World generator type; applies when a world is created."},
+    "motd": {"kind": "text", "description": "Server description shown in the multiplayer list."},
+    "level-name": {"kind": "text", "description": "World directory name; changing it loads or creates another world."},
+    "level-seed": {"kind": "text", "description": "Seed used only when a new world is created."},
+    "online-mode": {"kind": "boolean", "suggestions": ["true", "false"], "description": "Require Mojang account authentication. Keep enabled for public servers."},
+    "white-list": {"kind": "boolean", "suggestions": ["true", "false"], "description": "Enable the whitelist enforced by the access-control panel."},
+    "enforce-whitelist": {"kind": "boolean", "suggestions": ["true", "false"], "description": "Disconnect non-whitelisted players immediately when the whitelist changes."},
+    "pvp": {"kind": "boolean", "suggestions": ["true", "false"], "description": "Allow player-versus-player damage."},
+    "allow-flight": {"kind": "boolean", "suggestions": ["true", "false"], "description": "Allow clients to fly without being kicked."},
+    "allow-nether": {"kind": "boolean", "suggestions": ["true", "false"], "description": "Allow travel to the Nether."},
+    "hardcore": {"kind": "boolean", "suggestions": ["true", "false"], "description": "Enable hardcore mode for the world."},
+    "spawn-animals": {"kind": "boolean", "suggestions": ["true", "false"], "description": "Allow passive animal spawning."},
+    "spawn-monsters": {"kind": "boolean", "suggestions": ["true", "false"], "description": "Allow hostile monster spawning."},
+    "spawn-npcs": {"kind": "boolean", "suggestions": ["true", "false"], "description": "Allow NPC spawning."},
+    "force-gamemode": {"kind": "boolean", "suggestions": ["true", "false"], "description": "Apply the default game mode when players join."},
+    "spawn-protection": {"kind": "integer", "minimum": 0, "maximum": 64, "description": "Protected radius around world spawn for non-operators."},
+    "player-idle-timeout": {"kind": "integer", "minimum": 0, "maximum": 2147483647, "description": "Minutes before idle players are kicked; 0 disables the timeout."},
+    "op-permission-level": {"kind": "integer", "minimum": 1, "maximum": 4, "description": "Permission level granted to server operators."},
+    "entity-broadcast-range-percentage": {"kind": "integer", "minimum": 10, "maximum": 1000, "description": "Entity tracking range as a percentage."},
+    "network-compression-threshold": {"kind": "integer", "minimum": -1, "maximum": 2147483647, "description": "Packet size threshold for network compression; -1 disables it."},
+}
+MINECRAFT_SERVER_PROPERTY_BLOCKED = {
+    "enable-rcon",
+    "rcon.password",
+    "rcon.port",
+    "enable-query",
+    "query.port",
+    "server-ip",
+    "server-port",
+}

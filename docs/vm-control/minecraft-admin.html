@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="./styles.css?v=minecraft-management-20260714">
-    <link rel="stylesheet" href="./minecraft-admin.css?v=modrinth-content-contrast-20260723">
+    <link rel="stylesheet" href="./minecraft-admin.css?v=server-properties-20260723">
   </head>
   <body>
     <main class="shell">
@@ -74,6 +74,31 @@
         </article>
       </section>
 
+      <section class="panel properties-panel">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Server configuration</p>
+            <h2>server.properties</h2>
+          </div>
+          <button id="properties-load" class="action" type="button">Load settings</button>
+        </div>
+        <p id="properties-intro" class="section-meta">Load the options from the running server. Changing a value restarts only the Minecraft container and briefly disconnects players.</p>
+        <div class="properties-editor">
+          <label>Option
+            <select id="property-name" disabled><option>Load settings first</option></select>
+          </label>
+          <label>Value
+            <input id="property-value" type="text" maxlength="512" list="property-suggestions" disabled>
+            <datalist id="property-suggestions"></datalist>
+          </label>
+          <div class="property-help">
+            <strong id="property-description">Options are read from the active server version.</strong>
+            <span id="property-validation" aria-live="polite"></span>
+          </div>
+          <button id="properties-save" class="action create" type="button" disabled>Save and restart Minecraft</button>
+        </div>
+      </section>
+
       <section class="panel modrinth-panel">
         <div class="section-head">
           <div>
@@ -102,6 +127,6 @@
         <pre id="command-output" class="management-output">No command has been sent from this panel.</pre>
       </section>
     </main>
-    <script src="./minecraft-admin.js?v=minecraft-list-results-2-20260723"></script>
+    <script src="./minecraft-admin.js?v=server-properties-20260723"></script>
   </body>
 </html>
