@@ -427,8 +427,15 @@
     }
     if (elements.applicationSelect) {
       const hasApplications = getApplicationCatalog(state.lastStatus).length > 0;
+      // The catalog remains useful even when the selected VM cannot execute
+      // application changes, such as a CPU-only profile without Sunshine.
+      // Keep selection available and let the command buttons reflect action
+      // availability separately.
+      elements.applicationSelect.disabled = state.isBusy || !state.user || !hasApplications;
       const canChangeApps = allowed.has("install-app") || allowed.has("uninstall-app");
-      elements.applicationSelect.disabled = state.isBusy || !state.user || !canChangeApps || !hasApplications;
+      elements.applicationSelect.title = canChangeApps
+        ? "Select an application to install or uninstall."
+        : "Application installation and Sunshine integration require a GPU-enabled VM.";
     }
     if (elements.minecraftAddress) {
       elements.minecraftAddress.disabled = true;
@@ -1953,7 +1960,14 @@
     }
     if (elements.applicationOptionsStatus) {
       const labels = applications.map((app) => String(app.label || app.id)).join(", ");
-      elements.applicationOptionsStatus.textContent = `Supported applications: ${labels}.`;
+      const allowed = new Set(payload && Array.isArray(payload.allowedCommands) ? payload.allowedCommands : []);
+      const canChangeApps = allowed.has("install-app") || allowed.has("uninstall-app");
+      const cpuOnly = payload && payload.sunshineStatus && payload.sunshineStatus.state === "disabled";
+      elements.applicationOptionsStatus.textContent = !payload || canChangeApps
+        ? `Supported applications: ${labels}.`
+        : cpuOnly
+          ? `Supported applications: ${labels}. Application installation and Sunshine integration require a GPU-enabled VM.`
+          : `Supported applications: ${labels}. Application changes are not available while the VM is in its current state.`;
     }
     updateActionAvailability();
   }
