@@ -555,7 +555,8 @@ select {
 }
 
 .minecraft-action-group {
-  grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
+  grid-column: 1 / -1;
+  grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
 }
 
 .start-options {
