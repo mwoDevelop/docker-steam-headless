@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;700&display=swap"
       rel="stylesheet"
     >
-    <link rel="stylesheet" href="./styles.css?v=admin-ip-lifecycle-20260714">
+    <link rel="stylesheet" href="./styles.css?v=admin-sunshine-password-20260723">
     <script src="https://accounts.google.com/gsi/client" async defer></script>
   </head>
   <body>
@@ -20,7 +20,7 @@
           <p class="eyebrow">Administrator</p>
           <h1>GUI Access</h1>
           <p class="hero-copy">
-            Manage Google accounts that can access the main VM Control GUI and grant selected accounts Minecraft management access.
+            Manage Google accounts, privileged Minecraft access, and Sunshine credentials for individual VM endpoints.
             Only administrator Google accounts can use this page.
           </p>
         </div>
@@ -117,6 +117,41 @@
       <section class="panel">
         <div class="section-head">
           <div>
+            <p class="eyebrow">Sunshine security</p>
+            <h2>Sunshine Web UI credentials</h2>
+          </div>
+        </div>
+        <p class="hint">
+          Passwords are stored with the selected VM and are visible only to authenticated administrators. Updating a running GPU VM applies the password and waits for Sunshine to become ready.
+        </p>
+        <div class="form-grid" autocomplete="off">
+          <label>
+            <span>Endpoint</span>
+            <select id="sunshine-endpoint"></select>
+          </label>
+          <label>
+            <span>Current Sunshine password</span>
+            <div class="access-inline-form-row">
+              <input id="sunshine-current-password" type="password" readonly value="" autocomplete="off">
+              <button id="sunshine-password-toggle" class="ghost" type="button">Show</button>
+            </div>
+          </label>
+        </div>
+        <div id="sunshine-credentials-summary" class="command-status" data-tone="neutral">
+          Sign in to load Sunshine credential status.
+        </div>
+        <form id="sunshine-password-form" class="form-grid" autocomplete="off">
+          <label>
+            <span>New Sunshine password</span>
+            <input id="sunshine-password-input" type="password" minlength="8" maxlength="128" placeholder="Minimum 8 characters" autocomplete="new-password" spellcheck="false">
+          </label>
+          <button id="sunshine-password-submit" class="action status" type="submit">Update Sunshine password</button>
+        </form>
+      </section>
+
+      <section class="panel">
+        <div class="section-head">
+          <div>
             <p class="eyebrow">Runtime images</p>
             <h2>Steam, Sunshine and Minecraft updates</h2>
           </div>
@@ -183,6 +218,6 @@
       </section>
     </main>
 
-    <script src="./admin.js?v=compatibility-catalog-20260720"></script>
+    <script src="./admin.js?v=sunshine-password-admin-20260723"></script>
   </body>
 </html>

@@ -2931,6 +2931,7 @@ def handle_unexpected_error(error: Exception):
 @app.route("/healthz", methods=["GET", "OPTIONS"])
 @app.route("/api/config", methods=["GET", "OPTIONS"])
 @app.route("/api/admin/users", methods=["GET", "POST", "OPTIONS"])
+@app.route("/api/admin/sunshine-credentials", methods=["GET", "POST", "OPTIONS"])
 @app.route("/api/admin/endpoints", methods=["GET", "POST", "OPTIONS"])
 @app.route("/api/admin/runtime-images", methods=["GET", "POST", "OPTIONS"])
 @app.route("/api/admin/compatibility", methods=["GET", "POST", "OPTIONS"])
@@ -3019,6 +3020,52 @@ def options_passthrough():
             raise ApiError("Unsupported admin action.", 400)
         write_access_user_profiles(profiles)
         return jsonify(build_admin_users_payload(admin_user))
+
+    if request.path == "/api/admin/sunshine-credentials":
+        admin_user = require_admin_user()
+        source = request.args if request.method == "GET" else (request.get_json(silent=True) or {})
+        apply_target_overrides(source)
+        current_instance = get_instance_or_none()
+        if request.method == "GET":
+            reveal = str(source.get("reveal", "")).strip().lower() in {"1", "true", "yes"}
+            return jsonify(
+                build_admin_sunshine_credentials_payload(
+                    admin_user=admin_user,
+                    instance=current_instance,
+                    include_password=reveal,
+                )
+            )
+
+        if current_instance is None:
+            raise ApiError("Instance does not exist. Create it before setting Sunshine credentials.", 400)
+        password = parse_sunshine_password(source)
+        current_instance, _ = set_sunshine_password(current_instance, password)
+        operation = {"state": "stored", "detail": "Password saved in VM metadata."}
+        if str(current_instance.get("status", "")).upper() == "RUNNING" and not is_gpu_disabled_for_instance(current_instance):
+            current_instance, action_token = request_live_power_action(
+                current_instance,
+                action="apply-sunshine-password",
+                status_detail="Applying Sunshine password change.",
+            )
+            current_instance = wait_for_power_action_phase(
+                action="apply-sunshine-password",
+                token=action_token,
+                target_phase="applied",
+                timeout_seconds=300,
+            )
+            current_instance = wait_for_external_ip(timeout_seconds=180)
+            current_instance = wait_for_sunshine_status("ready", timeout_seconds=240)
+            update_duckdns(extract_external_ip(current_instance))
+            operation = {"state": "applied", "detail": "Password applied and Sunshine is ready."}
+        elif str(current_instance.get("status", "")).upper() == "RUNNING":
+            operation = {"state": "stored", "detail": "Password saved. CPU-only VMs do not run Sunshine."}
+        return jsonify(
+            build_admin_sunshine_credentials_payload(
+                admin_user=admin_user,
+                instance=current_instance,
+                operation=operation,
+            )
+        )
 
     if request.path == "/api/admin/runtime-images":
         admin_user = require_admin_user()
@@ -3175,6 +3222,8 @@ def options_passthrough():
         payload = request.get_json(silent=True) or {}
         apply_target_overrides(payload)
         command = str(payload.get("command", "")).strip().lower()
+        if command == "set-sunshine-password":
+            raise ApiError("Manage Sunshine passwords from the administrator panel.", 403)
         if command not in {
             "status",
             "start",
@@ -3186,7 +3235,6 @@ def options_passthrough():
             "restore-backup",
             "remove-backup",
             "set-auto-stop",
-            "set-sunshine-password",
             "install-app",
             "uninstall-app",
             "install-minecraft",
@@ -4348,6 +4396,38 @@ def normalize_sunshine_credentials_for_response(raw: dict[str, str]) -> dict[str
         "username": raw.get("username") or SUNSHINE_USERNAME,
         "password": "",
     }
+
+
+def build_admin_sunshine_credentials_payload(
+    *,
+    admin_user: dict[str, Any],
+    instance: dict[str, Any] | None,
+    include_password: bool = False,
+    operation: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    credentials = sunshine_credentials_from_instance(instance) if instance else {
+        "username": SUNSHINE_USERNAME,
+        "password": "",
+    }
+    password = str(credentials.get("password", "")).strip()
+    password_available = bool(password and password != "change-me")
+    response = {
+        "user": admin_user,
+        "endpoint": endpoint_public_payload(selected_endpoint()),
+        "instanceExists": instance is not None,
+        "instanceState": str(instance.get("status", "NOT_FOUND")).upper() if instance else "NOT_FOUND",
+        "sunshineStatus": build_sunshine_status(instance),
+        "credentials": {
+            "username": credentials.get("username") or SUNSHINE_USERNAME,
+            "password": password if include_password and password_available else "",
+        },
+        "passwordAvailable": password_available,
+        "passwordRevealed": bool(include_password and password_available),
+        "canUpdate": instance is not None,
+    }
+    if operation:
+        response["operation"] = operation
+    return response
 
 
 def ensure_sunshine_credentials(instance: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:
@@ -5546,7 +5626,7 @@ def allowed_commands(instance: dict[str, Any] | None) -> list[str]:
             return ["status", "stop", "delete"]
         if not hardware_matches:
             return ["status", "stop", "delete"]
-        commands = ["status", "set-sunshine-password", "set-auto-stop"]
+        commands = ["status", "set-auto-stop"]
         if is_live_backup_ready(instance):
             commands.extend([
                 "restart",
@@ -5561,9 +5641,9 @@ def allowed_commands(instance: dict[str, Any] | None) -> list[str]:
             commands.extend(allowed_minecraft_commands(instance))
         return commands
     if status == "TERMINATED" and not hardware_matches:
-        return ["status", "create", "delete", "set-sunshine-password"]
+        return ["status", "create", "delete"]
     if status == "TERMINATED":
-        return ["status", "start", "delete", "set-sunshine-password"]
+        return ["status", "start", "delete"]
     return ["status", "delete"]
 
 
@@ -6540,39 +6620,6 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
             command=command,
             duckdns_updated=updated,
         )
-
-    if command == "set-sunshine-password":
-        if "set-sunshine-password" not in allowed_commands(current_instance):
-            raise ApiError("This action is not available for the current instance state.", 400)
-
-        if current_instance is None:
-            raise ApiError("Instance does not exist. Create it first.", 400)
-
-        password = parse_sunshine_password(payload)
-        current_instance, sunshine_credentials = set_sunshine_password(current_instance, password)
-        if str(current_instance.get("status", "")).upper() == "RUNNING":
-            current_instance, action_token = request_live_power_action(
-                current_instance,
-                action="apply-sunshine-password",
-                status_detail="Applying Sunshine password change.",
-            )
-            current_instance = wait_for_power_action_phase(
-                action="apply-sunshine-password",
-                token=action_token,
-                target_phase="applied",
-                timeout_seconds=300,
-            )
-            current_instance = wait_for_external_ip(timeout_seconds=180)
-            current_instance = wait_for_sunshine_status("ready", timeout_seconds=240)
-            updated = update_duckdns(extract_external_ip(current_instance))
-            return build_status_payload(
-                current_instance,
-                user=user,
-                command=command,
-                duckdns_updated=updated,
-                sunshine_credentials=sunshine_credentials,
-            )
-        return build_status_payload(current_instance, user=user, command=command, sunshine_credentials=sunshine_credentials)
 
     raise ApiError("Unsupported command.", 400)
 

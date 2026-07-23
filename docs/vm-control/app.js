@@ -334,30 +334,6 @@
     updateActionAvailability();
     updateGpuAvailabilityScanButton();
 
-    const canSetSunshine = canSetSunshinePassword(state.lastStatus);
-    const sunshineSubmit = document.querySelector("#sunshine-password-submit");
-    if (sunshineSubmit) {
-      sunshineSubmit.disabled = !canSetSunshine;
-      sunshineSubmit.title = canSetSunshine
-        ? "Update Sunshine password"
-        : "Sign in and wait until the VM is reachable";
-    }
-
-    const sunshineInput = document.querySelector("#sunshine-password-input");
-    if (sunshineInput) {
-      sunshineInput.disabled = !canSetSunshine;
-      sunshineInput.placeholder = canSetSunshine ? "Minimum 8 characters" : "Set to update";
-    }
-  }
-
-  function canSetSunshinePassword(payload) {
-    if (!state.user || state.isBusy || !payload) {
-      return false;
-    }
-    const hasInstance = Boolean(payload.instanceExists);
-    const hasPermission = !Array.isArray(payload.allowedCommands)
-      || payload.allowedCommands.includes("set-sunshine-password");
-    return hasInstance && hasPermission;
   }
 
   function isMinecraftCommand(command) {
@@ -558,7 +534,7 @@
     const keep = (commands) => commands.filter((command) => allowed.has(command));
     const status = String(payload && payload.status || "UNKNOWN").toUpperCase();
     if (status === "TERMINATED") {
-      return keep(["status", "create", "delete", "set-sunshine-password"]);
+      return keep(["status", "create", "delete"]);
     }
     if (status === "RUNNING") {
       return keep(["status", "stop", "delete"]);
@@ -2732,69 +2708,6 @@
     }
   }
 
-  async function dispatchSetSunshinePassword(password) {
-    if (!state.user) {
-      throw new Error("Sign in with Google first.");
-    }
-
-    if (!password || typeof password !== "string") {
-      throw new Error("Password is required.");
-    }
-
-    if (!state.lastStatus || !state.lastStatus.instanceExists) {
-      throw new Error("Create or discover the VM first.");
-    }
-
-    const loadingToken = setPageLoading("Updating Sunshine password...");
-    setBusy(true);
-    setBanner("Updating Sunshine password...", "warning");
-    schedulePostCommandStatusRefresh("set-sunshine-password");
-    if (state.lastStatus) {
-      state.lastStatus = {
-        ...state.lastStatus,
-        sunshineStatus: {
-          state: "starting",
-          label: "Applying password",
-          detail: "Applying Sunshine password change.",
-        },
-      };
-      renderTargetSummary();
-      renderAccess(state.lastStatus);
-    }
-
-    try {
-      const data = await fetchApi("/api/command", {
-        method: "POST",
-        body: JSON.stringify({
-          command: "set-sunshine-password",
-          sunshinePassword: password,
-          ...selectedTargetParams(),
-        }),
-      });
-      state.lastStatus = data;
-      renderTargetSummary();
-      renderAccess(data);
-      setBanner("Sunshine password updated and VM is restarting to apply it. Waiting for Sunshine state to become ready.", "warning");
-      const readyStatus = await waitForSunshineReady();
-      state.lastStatus = readyStatus;
-      renderTargetSummary();
-      renderAccess(readyStatus);
-      setBanner(commandCompletionMessage("set-sunshine-password", readyStatus), "success");
-      pushHistory({
-        at: new Date().toISOString(),
-        command: "set-sunshine-password",
-        status: state.lastStatus.status,
-        tone: "success",
-        userEmail: state.user.email,
-        message: "Updated Sunshine Web UI password.",
-        duckdnsDomains: data.duckdnsDomains || [],
-      });
-    } finally {
-      setBusy(false);
-      markPageReady("Ready.", loadingToken);
-    }
-  }
-
   function readAutoStopHours(command) {
     if (command !== "start" && command !== "create" && command !== "set-auto-stop") {
       return null;
@@ -3080,51 +2993,6 @@
     updateActionAvailability();
   }
 
-  function bindSunshinePasswordForm(canSet) {
-    const form = elements.access.querySelector("#sunshine-password-form");
-    if (!form) {
-      return;
-    }
-
-    const input = elements.access.querySelector("#sunshine-password-input");
-    const submit = elements.access.querySelector("#sunshine-password-submit");
-    if (input) {
-      input.disabled = !canSet;
-      input.placeholder = canSet ? "New Sunshine password" : "Set to update";
-      input.value = "";
-    }
-    if (submit) {
-      submit.disabled = !canSet;
-      submit.title = canSet ? "Update Sunshine password" : "Sign in and wait until the VM is reachable";
-      submit.textContent = "Update Sunshine password";
-    }
-
-    const handler = async (event) => {
-      event.preventDefault();
-      if (state.isBusy) {
-        return;
-      }
-      const rawPassword = String((input && input.value) || "").trim();
-      if (!rawPassword) {
-        setBanner("Provide a new Sunshine password.", "warning");
-        return;
-      }
-      if (input) {
-        input.value = "";
-      }
-      try {
-        await dispatchSetSunshinePassword(rawPassword);
-      } catch (error) {
-        handleError(error);
-      }
-    };
-
-    if (!form.__sunshinePasswordBound) {
-      form.addEventListener("submit", handler);
-      form.__sunshinePasswordBound = true;
-    }
-  }
-
   async function refreshStatus(options) {
     const silent = Boolean(options && options.silent);
     const forceRender = Boolean(options && options.forceRender);
@@ -3270,7 +3138,6 @@
     const sunshineUserMeta = sunshineCredentials.username
       ? `<p class="access-meta">Username: <code>${escapeHtml(sunshineCredentials.username)}</code></p>`
       : "";
-    const canSetSunshinePasswordForAccess = canSetSunshinePassword(payload);
     const sunshineStatusMeta = renderSunshineStatusMeta(payload);
     const minecraftStatusMeta = renderMinecraftStatusMeta(payload);
     const minecraftManagement = payload.minecraftManagement || {};
@@ -3305,29 +3172,7 @@
           ${sunshineDnsMeta}
           ${sunshineStatusMeta}
           ${sunshineUserMeta}
-          <p class="access-meta">Password: <code>hidden for safety</code></p>
-          <form id="sunshine-password-form" class="access-inline-form">
-            <label for="sunshine-password-input">
-              <span>Set a custom Sunshine password</span>
-              <div class="access-inline-form-row">
-                <input
-                  id="sunshine-password-input"
-                  name="sunshine-password"
-                  type="password"
-                  minlength="8"
-                  maxlength="128"
-                  autocomplete="off"
-                  inputmode="text"
-                  spellcheck="false"
-                  placeholder="Minimum 8 characters"
-                  ${canSetSunshinePasswordForAccess ? "" : "disabled"}
-                >
-            <button id="sunshine-password-submit" type="submit" class="action status" ${canSetSunshinePasswordForAccess ? "" : "disabled"}>
-              Update Sunshine password
-            </button>
-              </div>
-            </label>
-          </form>
+          <p class="access-meta">Password: <code>managed in the administrator panel</code></p>
         </article>
 
         <article class="access-card accent">
@@ -3357,7 +3202,6 @@
         The VM can report <code>RUNNING</code> before the desktop and Sunshine finish booting. On a cold start, give noVNC and Sunshine up to a minute or two to become reachable. Restart, Stop, and Delete stay disabled until the VM reports <code>Backup ready</code>.
       </p>
     `;
-    bindSunshinePasswordForm(canSetSunshinePasswordForAccess);
   }
 
   function escapeToken(value) {

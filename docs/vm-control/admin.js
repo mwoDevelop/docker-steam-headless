@@ -38,6 +38,13 @@
     compatibilityEvidence: document.querySelector("#compatibility-evidence"),
     saveCompatibility: document.querySelector("#save-compatibility"),
     compatibilityList: document.querySelector("#compatibility-list"),
+    sunshineEndpoint: document.querySelector("#sunshine-endpoint"),
+    sunshineCurrentPassword: document.querySelector("#sunshine-current-password"),
+    sunshinePasswordToggle: document.querySelector("#sunshine-password-toggle"),
+    sunshineCredentialsSummary: document.querySelector("#sunshine-credentials-summary"),
+    sunshinePasswordForm: document.querySelector("#sunshine-password-form"),
+    sunshinePasswordInput: document.querySelector("#sunshine-password-input"),
+    sunshinePasswordSubmit: document.querySelector("#sunshine-password-submit"),
   };
 
   const state = {
@@ -52,6 +59,9 @@
     endpointsPayload: null,
     runtimeImagesPayload: null,
     compatibilityPayload: null,
+    sunshineCredentialsPayload: null,
+    sunshineEndpointId: "",
+    sunshinePasswordVisible: false,
     refreshRevision: 0,
     automaticRefreshInFlight: false,
   };
@@ -113,6 +123,13 @@
     document.querySelectorAll("[data-compatibility-remove]").forEach((input) => {
       input.disabled = nextBusy || !state.user;
     });
+    const sunshinePayload = state.sunshineCredentialsPayload || {};
+    const canUpdateSunshine = Boolean(sunshinePayload.canUpdate);
+    const canRevealSunshine = Boolean(sunshinePayload.passwordAvailable);
+    elements.sunshineEndpoint.disabled = nextBusy || !state.user || !elements.sunshineEndpoint.options.length;
+    elements.sunshinePasswordToggle.disabled = nextBusy || !state.user || !canRevealSunshine;
+    elements.sunshinePasswordInput.disabled = nextBusy || !state.user || !canUpdateSunshine;
+    elements.sunshinePasswordSubmit.disabled = nextBusy || !state.user || !canUpdateSunshine;
   }
 
   function setAuthStatus(message, tone) {
@@ -140,6 +157,7 @@
     renderEndpoints();
     renderRuntimeImages();
     renderCompatibility();
+    renderSunshineCredentials();
     setBusy(state.isBusy);
   }
 
@@ -245,6 +263,54 @@
         </div>
       `;
     }).join("");
+  }
+
+  function renderSunshineCredentials() {
+    const endpoints = state.endpointsPayload && Array.isArray(state.endpointsPayload.endpoints)
+      ? state.endpointsPayload.endpoints
+      : [];
+    const payload = state.sunshineCredentialsPayload;
+    const previousSelection = state.sunshineEndpointId || String(elements.sunshineEndpoint.value || "");
+    elements.sunshineEndpoint.innerHTML = endpoints.map((endpoint) => {
+      const id = String(endpoint.id || "");
+      const label = `${id} · ${endpoint.domain || "no DNS"}${endpoint.instanceName ? ` · ${endpoint.instanceName}` : ""}`;
+      return `<option value="${escapeHtml(id)}">${escapeHtml(label)}</option>`;
+    }).join("");
+    const selectedId = endpoints.some((endpoint) => String(endpoint.id || "") === previousSelection)
+      ? previousSelection
+      : String(endpoints[0] && endpoints[0].id || "");
+    state.sunshineEndpointId = selectedId;
+    elements.sunshineEndpoint.value = selectedId;
+
+    if (!payload || String(payload.endpoint && payload.endpoint.id || "") !== selectedId) {
+      elements.sunshineCurrentPassword.value = "";
+      elements.sunshineCurrentPassword.type = "password";
+      elements.sunshinePasswordToggle.textContent = "Show";
+      elements.sunshineCredentialsSummary.textContent = state.user
+        ? "Select an endpoint to load its Sunshine credential status."
+        : "Sign in to load Sunshine credential status.";
+      elements.sunshineCredentialsSummary.dataset.tone = "neutral";
+      return;
+    }
+
+    const credentials = payload.credentials || {};
+    const shownPassword = state.sunshinePasswordVisible ? String(credentials.password || "") : "";
+    elements.sunshineCurrentPassword.value = shownPassword;
+    elements.sunshineCurrentPassword.type = state.sunshinePasswordVisible ? "text" : "password";
+    elements.sunshinePasswordToggle.textContent = state.sunshinePasswordVisible ? "Hide" : "Show";
+    const endpoint = payload.endpoint || {};
+    const stateLabel = String(payload.instanceState || "NOT_FOUND");
+    const runtimeDetail = payload.operation && payload.operation.detail ? ` ${payload.operation.detail}` : "";
+    if (!payload.instanceExists) {
+      elements.sunshineCredentialsSummary.textContent = `${endpoint.id || "Selected endpoint"} has no VM. Create the VM before setting Sunshine credentials.`;
+      elements.sunshineCredentialsSummary.dataset.tone = "warning";
+    } else if (!payload.passwordAvailable) {
+      elements.sunshineCredentialsSummary.textContent = `${endpoint.id || "Selected endpoint"}: Sunshine password is not available yet. Start or recreate the VM to generate one.`;
+      elements.sunshineCredentialsSummary.dataset.tone = "warning";
+    } else {
+      elements.sunshineCredentialsSummary.textContent = `${endpoint.id || "Selected endpoint"}: VM ${stateLabel}. Username: ${credentials.username || "admin"}. Password is hidden until Show is selected.${runtimeDetail}`;
+      elements.sunshineCredentialsSummary.dataset.tone = "success";
+    }
   }
 
   function runtimeComponentRow(endpoint, componentId, definition) {
@@ -458,6 +524,10 @@
     state.usersPayload = null;
     state.endpointsPayload = null;
     state.runtimeImagesPayload = null;
+    state.compatibilityPayload = null;
+    state.sunshineCredentialsPayload = null;
+    state.sunshineEndpointId = "";
+    state.sunshinePasswordVisible = false;
     if (revokeGoogleSession && token && window.google && window.google.accounts && window.google.accounts.oauth2) {
       window.google.accounts.oauth2.revoke(token, () => {});
     }
@@ -528,6 +598,15 @@
     state.endpointsPayload = endpoints;
     state.runtimeImagesPayload = runtimeImages;
     state.compatibilityPayload = compatibility;
+    const availableEndpoints = Array.isArray(endpoints.endpoints) ? endpoints.endpoints : [];
+    const selectedEndpointId = availableEndpoints.some((endpoint) => String(endpoint.id || "") === state.sunshineEndpointId)
+      ? state.sunshineEndpointId
+      : String(availableEndpoints[0] && availableEndpoints[0].id || "");
+    state.sunshineEndpointId = selectedEndpointId;
+    state.sunshinePasswordVisible = false;
+    state.sunshineCredentialsPayload = selectedEndpointId
+      ? await fetchApi(`/api/admin/sunshine-credentials?endpointId=${encodeURIComponent(selectedEndpointId)}`, { method: "GET" })
+      : null;
     if (!silent) {
       setMessage("Managed GUI users loaded.", "success");
     }
@@ -626,6 +705,37 @@
     state.compatibilityPayload = payload;
     setMessage(action === "remove" ? "Compatibility result removed." : "Compatibility result saved.", "success");
     renderCompatibility();
+  }
+
+  async function loadSunshineCredentials(options) {
+    const reveal = Boolean(options && options.reveal);
+    const endpointId = String(state.sunshineEndpointId || elements.sunshineEndpoint.value || "");
+    if (!endpointId) {
+      state.sunshineCredentialsPayload = null;
+      state.sunshinePasswordVisible = false;
+      renderSunshineCredentials();
+      return;
+    }
+    const query = new URLSearchParams({ endpointId });
+    if (reveal) {
+      query.set("reveal", "true");
+    }
+    const payload = await fetchApi(`/api/admin/sunshine-credentials?${query.toString()}`, { method: "GET" });
+    state.sunshineCredentialsPayload = payload;
+    state.sunshinePasswordVisible = reveal && Boolean(payload.passwordRevealed);
+    renderSunshineCredentials();
+  }
+
+  async function updateSunshinePassword(password) {
+    const endpointId = String(state.sunshineEndpointId || elements.sunshineEndpoint.value || "");
+    const payload = await fetchApi("/api/admin/sunshine-credentials", {
+      method: "POST",
+      body: JSON.stringify({ endpointId, sunshinePassword: password }),
+    });
+    state.sunshineCredentialsPayload = payload;
+    state.sunshinePasswordVisible = false;
+    renderSunshineCredentials();
+    setMessage(`Sunshine password updated for ${endpointId}.`, "success");
   }
 
   function handleError(error) {
@@ -781,6 +891,62 @@
   elements.runtimeEndpoint.addEventListener("change", () => {
     renderRuntimeImages();
     setBusy(state.isBusy);
+  });
+
+  elements.sunshineEndpoint.addEventListener("change", async () => {
+    state.sunshineEndpointId = String(elements.sunshineEndpoint.value || "");
+    state.sunshineCredentialsPayload = null;
+    state.sunshinePasswordVisible = false;
+    try {
+      setBusy(true);
+      await loadSunshineCredentials();
+    } catch (error) {
+      handleError(error);
+    } finally {
+      setBusy(false);
+    }
+  });
+
+  elements.sunshinePasswordToggle.addEventListener("click", async () => {
+    if (state.sunshinePasswordVisible) {
+      state.sunshinePasswordVisible = false;
+      if (state.sunshineCredentialsPayload && state.sunshineCredentialsPayload.credentials) {
+        state.sunshineCredentialsPayload.credentials.password = "";
+      }
+      renderSunshineCredentials();
+      setBusy(state.isBusy);
+      return;
+    }
+    try {
+      setBusy(true);
+      await loadSunshineCredentials({ reveal: true });
+      setMessage("Sunshine password is shown only in this administrator browser view.", "warning");
+    } catch (error) {
+      handleError(error);
+    } finally {
+      setBusy(false);
+    }
+  });
+
+  elements.sunshinePasswordForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const password = String(elements.sunshinePasswordInput.value || "").trim();
+    if (!password) {
+      setMessage("Provide a new Sunshine password.", "warning");
+      return;
+    }
+    if (!window.confirm("Update the Sunshine password for the selected endpoint? A running GPU VM will restart Sunshine.")) {
+      return;
+    }
+    try {
+      setBusy(true);
+      await updateSunshinePassword(password);
+      elements.sunshinePasswordInput.value = "";
+    } catch (error) {
+      handleError(error);
+    } finally {
+      setBusy(false);
+    }
   });
 
   elements.refreshRuntimeImages.addEventListener("click", async () => {
