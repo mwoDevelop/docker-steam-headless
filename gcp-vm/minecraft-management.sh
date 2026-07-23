@@ -132,7 +132,7 @@ list_operators() {
 
 server_properties_json() {
   local properties_file="$1"
-  jq -Rn '[inputs | select(test("^[A-Za-z0-9.-]+=")) | capture("^(?<key>[A-Za-z0-9.-]+)=(?<value>.*)$")] | from_entries' < "$properties_file"
+  jq -Rn '[inputs | select(test("^[A-Za-z0-9.-]+=")) | capture("^(?<key>[A-Za-z0-9.-]+)=(?<value>.*)$")] | from_entries | del(."rcon.password")' < "$properties_file"
 }
 
 load_server_properties() {
@@ -186,9 +186,15 @@ validate_server_property_value() {
 }
 
 update_server_property() {
-  local container="$1" property="$2" value="$3" properties_file updated_file output
+  local container="$1" property="$2" value="$3" properties_file updated_file output ownership owner group mode
   properties_file="$(mktemp)"
   updated_file="$(mktemp)"
+  if ! ownership="$(docker exec --user 0 "$container" stat -c '%u:%g:%a' /data/server.properties 2>&1)" || ! [[ "$ownership" =~ ^[0-9]+:[0-9]+:[0-7]{3,4}$ ]]; then
+    rm -f "$properties_file" "$updated_file"
+    printf 'Unable to read the current server.properties ownership and permissions.'
+    return 1
+  fi
+  IFS=: read -r owner group mode <<< "$ownership"
   if ! load_server_properties "$container" "$properties_file"; then
     rm -f "$properties_file" "$updated_file"
     return 1
@@ -205,6 +211,11 @@ update_server_property() {
   fi
   if ! docker cp "$updated_file" "${container}:/data/server.properties" 2>&1; then
     rm -f "$properties_file" "$updated_file"
+    return 1
+  fi
+  if ! docker exec --user 0 "$container" chown "${owner}:${group}" /data/server.properties 2>&1 || ! docker exec --user 0 "$container" chmod "$mode" /data/server.properties 2>&1; then
+    rm -f "$properties_file" "$updated_file"
+    printf 'server.properties was copied, but its original ownership or permissions could not be restored.'
     return 1
   fi
   rm -f "$properties_file" "$updated_file"
