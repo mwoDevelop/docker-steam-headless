@@ -68,6 +68,16 @@
   font: 0.78rem/1.4 "IBM Plex Mono", monospace;
 }
 
+.content-project-link {
+  display: inline-block;
+  margin-top: 8px;
+  color: #0a6f4e;
+  font: 0.74rem/1.45 "IBM Plex Mono", monospace;
+  overflow-wrap: anywhere;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
 .management-output {
   min-height: 120px;
   max-height: 420px;

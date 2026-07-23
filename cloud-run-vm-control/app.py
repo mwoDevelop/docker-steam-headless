@@ -5137,9 +5137,12 @@ def minecraft_modrinth_catalog_search(instance: dict[str, Any], payload: dict[st
         project_id = str(hit.get("project_id") or hit.get("projectId") or "").strip()
         if not re.fullmatch(r"[A-Za-z0-9_-]{3,80}", project_id):
             continue
+        slug = str(hit.get("slug") or "").strip()
+        project_path = slug if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{1,99}", slug) else project_id
         results.append(
             {
                 "projectId": project_id,
+                "projectUrl": f"https://modrinth.com/{kind}/{project_path}",
                 "title": str(hit.get("title") or project_id).strip()[:160] or project_id,
                 "description": str(hit.get("description") or "").strip()[:500],
                 "author": str(hit.get("author") or "").strip()[:160],

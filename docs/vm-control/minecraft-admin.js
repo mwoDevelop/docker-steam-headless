@@ -73,6 +73,22 @@
     return String(value || "").replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", "\"": "&quot;" })[character]);
   }
 
+  function modrinthProjectUrl(item) {
+    try {
+      const url = new URL(String(item && item.projectUrl || ""));
+      if (
+        url.protocol === "https:"
+        && url.hostname === "modrinth.com"
+        && /^\/(?:plugin|mod)\/[A-Za-z0-9_-]+$/.test(url.pathname)
+      ) {
+        return url.toString();
+      }
+    } catch (_) {
+      // Catalog data without a valid Modrinth address is rendered without a link.
+    }
+    return "";
+  }
+
   async function api(path, options) {
     if (!state.backend) throw new Error("Cloud Run API URL is missing. Open this page through VM Control.");
     if (!state.token) throw new Error("Sign in to VM Control first, then open this page again.");
@@ -96,11 +112,17 @@
       return;
     }
     elements.contentResults.className = "content-list";
-    elements.contentResults.innerHTML = results.map((item) => `
+    elements.contentResults.innerHTML = results.map((item) => {
+      const projectUrl = modrinthProjectUrl(item);
+      const projectLink = projectUrl
+        ? `<a class="content-project-link" href="${escapeHtml(projectUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(projectUrl)}</a>`
+        : "";
+      return `
       <article class="content-item">
-        <div><h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.description || "No description available.")}</p><p class="content-meta">${escapeHtml(item.author || "Unknown author")} · ${Number(item.downloads || 0).toLocaleString()} downloads</p></div>
+        <div><h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.description || "No description available.")}</p><p class="content-meta">${escapeHtml(item.author || "Unknown author")} · ${Number(item.downloads || 0).toLocaleString()} downloads</p>${projectLink}</div>
         <button class="action create" type="button" data-content-action="install" data-project-id="${escapeHtml(item.projectId)}" data-title="${escapeHtml(item.title)}">Install</button>
-      </article>`).join("");
+      </article>`;
+    }).join("");
     elements.contentResults.querySelectorAll("[data-content-action='install']").forEach((button) => button.addEventListener("click", () => runContentAction("content-install", button.dataset.projectId, button.dataset.title)));
   }
 
