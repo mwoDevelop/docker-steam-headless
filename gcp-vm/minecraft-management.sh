@@ -132,12 +132,7 @@ list_operators() {
 
 server_properties_json() {
   local properties_file="$1"
-  awk '
-    /^[A-Za-z0-9.-]+=/ {
-      separator = index($0, "=")
-      printf "%s\\t%s\\n", substr($0, 1, separator - 1), substr($0, separator + 1)
-    }
-  ' "$properties_file" | jq -Rn '[inputs | split("\\t") | {key: .[0], value: (.[1:] | join("\\t"))}] | from_entries'
+  jq -Rn '[inputs | select(test("^[A-Za-z0-9.-]+=")) | capture("^(?<key>[A-Za-z0-9.-]+)=(?<value>.*)$")] | from_entries' < "$properties_file"
 }
 
 load_server_properties() {
