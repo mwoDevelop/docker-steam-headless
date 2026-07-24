@@ -45,6 +45,13 @@
     sunshinePasswordForm: document.querySelector("#sunshine-password-form"),
     sunshinePasswordInput: document.querySelector("#sunshine-password-input"),
     sunshinePasswordSubmit: document.querySelector("#sunshine-password-submit"),
+    softwareEndpoint: document.querySelector("#software-endpoint"),
+    softwareApplication: document.querySelector("#software-application"),
+    softwareMinecraftVersion: document.querySelector("#software-minecraft-version"),
+    softwareMinecraftServerType: document.querySelector("#software-minecraft-server-type"),
+    softwareRefreshMinecraftVersions: document.querySelector("#software-refresh-minecraft-versions"),
+    softwareActions: document.querySelector("#software-actions"),
+    softwareStatus: document.querySelector("#software-status"),
   };
 
   const state = {
@@ -62,6 +69,8 @@
     sunshineCredentialsPayload: null,
     sunshineEndpointId: "",
     sunshinePasswordVisible: false,
+    softwarePayload: null,
+    softwareEndpointId: "",
     refreshRevision: 0,
     automaticRefreshInFlight: false,
   };
@@ -130,6 +139,19 @@
     elements.sunshinePasswordToggle.disabled = nextBusy || !state.user || !canRevealSunshine;
     elements.sunshinePasswordInput.disabled = nextBusy || !state.user || !canUpdateSunshine;
     elements.sunshinePasswordSubmit.disabled = nextBusy || !state.user || !canUpdateSunshine;
+    const softwareLoaded = Boolean(state.softwarePayload);
+    [
+      elements.softwareEndpoint,
+      elements.softwareApplication,
+      elements.softwareMinecraftVersion,
+      elements.softwareMinecraftServerType,
+      elements.softwareRefreshMinecraftVersions,
+    ].forEach((input) => {
+      input.disabled = nextBusy || !state.user || !softwareLoaded;
+    });
+    document.querySelectorAll("[data-software-command]").forEach((input) => {
+      input.disabled = nextBusy || !state.user || !softwareLoaded || input.dataset.softwareDisabled === "true";
+    });
   }
 
   function setAuthStatus(message, tone) {
@@ -158,7 +180,34 @@
     renderRuntimeImages();
     renderCompatibility();
     renderSunshineCredentials();
+    renderSoftware();
     setBusy(state.isBusy);
+  }
+
+  function selectAdminTab(requestedTab) {
+    const tabs = [...document.querySelectorAll("[data-admin-tab]")];
+    const panels = [...document.querySelectorAll("[data-admin-tab-panel]")];
+    const selectedTab = tabs.some((tab) => tab.dataset.adminTab === requestedTab) ? requestedTab : "access";
+    tabs.forEach((tab) => {
+      const selected = tab.dataset.adminTab === selectedTab;
+      tab.classList.toggle("is-active", selected);
+      tab.setAttribute("aria-selected", String(selected));
+    });
+    panels.forEach((panel) => {
+      panel.hidden = panel.dataset.adminTabPanel !== selectedTab;
+    });
+  }
+
+  function initializeAdminTabs() {
+    document.querySelectorAll("[data-admin-tab]").forEach((tab) => {
+      tab.addEventListener("click", () => {
+        const selectedTab = tab.dataset.adminTab || "access";
+        window.history.replaceState(null, "", `#${selectedTab}`);
+        selectAdminTab(selectedTab);
+      });
+    });
+    window.addEventListener("hashchange", () => selectAdminTab(window.location.hash.slice(1)));
+    selectAdminTab(window.location.hash.slice(1));
   }
 
   function escapeHtml(value) {
@@ -528,6 +577,8 @@
     state.sunshineCredentialsPayload = null;
     state.sunshineEndpointId = "";
     state.sunshinePasswordVisible = false;
+    state.softwarePayload = null;
+    state.softwareEndpointId = "";
     if (revokeGoogleSession && token && window.google && window.google.accounts && window.google.accounts.oauth2) {
       window.google.accounts.oauth2.revoke(token, () => {});
     }
@@ -606,6 +657,13 @@
     state.sunshinePasswordVisible = false;
     state.sunshineCredentialsPayload = selectedEndpointId
       ? await fetchApi(`/api/admin/sunshine-credentials?endpointId=${encodeURIComponent(selectedEndpointId)}`, { method: "GET" })
+      : null;
+    const softwareEndpointId = availableEndpoints.some((endpoint) => String(endpoint.id || "") === state.softwareEndpointId)
+      ? state.softwareEndpointId
+      : String(availableEndpoints[0] && availableEndpoints[0].id || "");
+    state.softwareEndpointId = softwareEndpointId;
+    state.softwarePayload = softwareEndpointId
+      ? await fetchApi(`/api/admin/software?endpointId=${encodeURIComponent(softwareEndpointId)}`, { method: "GET" })
       : null;
     if (!silent) {
       setMessage("Managed GUI users loaded.", "success");
@@ -736,6 +794,113 @@
     state.sunshinePasswordVisible = false;
     renderSunshineCredentials();
     setMessage(`Sunshine password updated for ${endpointId}.`, "success");
+  }
+
+  function optionList(items, selectedValue, emptyLabel) {
+    const normalized = Array.isArray(items) ? items : [];
+    if (!normalized.length) {
+      return `<option value="">${escapeHtml(emptyLabel)}</option>`;
+    }
+    return normalized.map((item) => {
+      const value = String(typeof item === "string" ? item : (item.id || item.value || item.version || item.name || ""));
+      const label = String(typeof item === "string" ? item : (item.label || item.name || item.version || value));
+      return `<option value="${escapeHtml(value)}" ${value === String(selectedValue || "") ? "selected" : ""}>${escapeHtml(label)}</option>`;
+    }).join("");
+  }
+
+  function renderSoftware() {
+    const payload = state.softwarePayload;
+    if (!payload) {
+      elements.softwareEndpoint.innerHTML = '<option value="">No endpoint loaded</option>';
+      elements.softwareApplication.innerHTML = '<option value="">No applications loaded</option>';
+      elements.softwareMinecraftVersion.innerHTML = '<option value="">No versions loaded</option>';
+      elements.softwareStatus.textContent = "Sign in to load applications and Minecraft server state.";
+      elements.softwareStatus.dataset.tone = "neutral";
+      return;
+    }
+
+    const endpoints = Array.isArray(state.endpointsPayload && state.endpointsPayload.endpoints)
+      ? state.endpointsPayload.endpoints
+      : [];
+    const previousApplication = elements.softwareApplication.value;
+    const previousVersion = elements.softwareMinecraftVersion.value;
+    const previousServerType = elements.softwareMinecraftServerType.value;
+    elements.softwareEndpoint.innerHTML = endpoints.length
+      ? endpoints.map((endpoint) => {
+        const id = String(endpoint.id || "");
+        const domain = String(endpoint.domain || "");
+        return `<option value="${escapeHtml(id)}" ${id === state.softwareEndpointId ? "selected" : ""}>${escapeHtml(id)}${domain ? ` · ${escapeHtml(domain)}` : ""}</option>`;
+      }).join("")
+      : '<option value="">No endpoint configured</option>';
+
+    const applications = Array.isArray(payload.applicationCatalog) ? payload.applicationCatalog : [];
+    elements.softwareApplication.innerHTML = optionList(applications, previousApplication, "No applications available");
+    const minecraft = payload.minecraftServer || {};
+    const minecraftVersions = minecraft.versions || minecraft.availableVersions || [];
+    const selectedVersion = previousVersion || minecraft.selectedVersion || minecraft.version || "";
+    elements.softwareMinecraftVersion.innerHTML = optionList(minecraftVersions, selectedVersion, "No Minecraft versions available");
+    const selectedServerType = previousServerType || minecraft.serverType || "paper";
+    if ([...elements.softwareMinecraftServerType.options].some((option) => option.value === selectedServerType)) {
+      elements.softwareMinecraftServerType.value = selectedServerType;
+    }
+
+    const status = payload.status || {};
+    const allowedCommands = new Set(Array.isArray(status.allowedCommands) ? status.allowedCommands : []);
+    const instanceState = String(status.instanceState || status.vmState || "NOT_FOUND");
+    const minecraftState = String(
+      (status.minecraftStatus && (status.minecraftStatus.state || status.minecraftStatus.status))
+      || (status.minecraft && (status.minecraft.state || status.minecraft.status))
+      || "not installed"
+    );
+    elements.softwareStatus.textContent = `${payload.endpoint && payload.endpoint.id ? payload.endpoint.id : "Selected endpoint"}: VM ${instanceState}, Minecraft ${minecraftState}.`;
+    elements.softwareStatus.dataset.tone = instanceState === "RUNNING" ? "success" : "neutral";
+    document.querySelectorAll("[data-software-command]").forEach((button) => {
+      const command = button.dataset.softwareCommand || "";
+      const needsApplication = command === "install-app" || command === "uninstall-app";
+      const needsVersion = command === "install-minecraft";
+      button.dataset.softwareDisabled = String(
+        !allowedCommands.has(command)
+        || (needsApplication && !elements.softwareApplication.value)
+        || (needsVersion && !elements.softwareMinecraftVersion.value)
+      );
+    });
+  }
+
+  async function loadSoftware() {
+    const endpointId = String(state.softwareEndpointId || elements.softwareEndpoint.value || "");
+    state.softwareEndpointId = endpointId;
+    state.softwarePayload = endpointId
+      ? await fetchApi(`/api/admin/software?endpointId=${encodeURIComponent(endpointId)}`, { method: "GET" })
+      : null;
+    renderSoftware();
+  }
+
+  async function updateSoftware(command) {
+    const endpointId = String(state.softwareEndpointId || elements.softwareEndpoint.value || "");
+    const payload = await fetchApi("/api/admin/software", {
+      method: "POST",
+      body: JSON.stringify({
+        endpointId,
+        command,
+        applicationId: String(elements.softwareApplication.value || ""),
+        minecraftVersion: String(elements.softwareMinecraftVersion.value || ""),
+        minecraftServerType: String(elements.softwareMinecraftServerType.value || "paper"),
+      }),
+    });
+    state.softwarePayload = payload;
+    state.softwareEndpointId = endpointId;
+    const labels = {
+      "install-app": "Application installation started.",
+      "uninstall-app": "Application removal started.",
+      "install-minecraft": "Minecraft installation started.",
+      "start-minecraft": "Minecraft server start requested.",
+      "stop-minecraft": "Minecraft server stop requested.",
+      "restart-minecraft": "Minecraft server restart requested.",
+      "remove-minecraft": "Minecraft server removal started.",
+      "refresh-minecraft-versions": "Minecraft versions refreshed.",
+    };
+    setMessage(labels[command] || "Software action completed.", "success");
+    renderSoftware();
   }
 
   function handleError(error) {
@@ -1030,6 +1195,56 @@
     }
   });
 
+  elements.softwareEndpoint.addEventListener("change", async () => {
+    try {
+      state.softwareEndpointId = String(elements.softwareEndpoint.value || "");
+      setBusy(true);
+      await loadSoftware();
+    } catch (error) {
+      handleError(error);
+    } finally {
+      setBusy(false);
+    }
+  });
+
+  [elements.softwareApplication, elements.softwareMinecraftVersion, elements.softwareMinecraftServerType].forEach((input) => {
+    input.addEventListener("change", () => {
+      renderSoftware();
+      setBusy(state.isBusy);
+    });
+  });
+
+  elements.softwareRefreshMinecraftVersions.addEventListener("click", async () => {
+    try {
+      setBusy(true);
+      await updateSoftware("refresh-minecraft-versions");
+    } catch (error) {
+      handleError(error);
+    } finally {
+      setBusy(false);
+    }
+  });
+
+  elements.softwareActions.addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-software-command]");
+    if (!button || button.disabled) {
+      return;
+    }
+    const command = button.dataset.softwareCommand || "";
+    if (command === "remove-minecraft" && !window.confirm("Remove the Minecraft server container and configuration from the selected endpoint? World data is preserved.")) {
+      return;
+    }
+    try {
+      setBusy(true);
+      await updateSoftware(command);
+    } catch (error) {
+      handleError(error);
+    } finally {
+      setBusy(false);
+    }
+  });
+
+  initializeAdminTabs();
   loadConfig();
   setBusy(false);
   if (state.backendUrl) {

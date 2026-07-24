@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;700&display=swap"
       rel="stylesheet"
     >
-    <link rel="stylesheet" href="./styles.css?v=admin-sunshine-password-20260723">
+    <link rel="stylesheet" href="./styles.css?v=admin-software-tabs-20260724">
     <script src="https://accounts.google.com/gsi/client" async defer></script>
   </head>
   <body>
@@ -68,7 +68,15 @@
         </div>
       </section>
 
-      <section class="panel">
+      <nav class="admin-tabs" aria-label="Administration sections" role="tablist">
+        <button class="admin-tab is-active" type="button" data-admin-tab="access" role="tab" aria-selected="true">Access</button>
+        <button class="admin-tab" type="button" data-admin-tab="endpoints" role="tab" aria-selected="false">Endpoints</button>
+        <button class="admin-tab" type="button" data-admin-tab="software" role="tab" aria-selected="false">Software</button>
+        <button class="admin-tab" type="button" data-admin-tab="runtime" role="tab" aria-selected="false">Runtime images</button>
+        <button class="admin-tab" type="button" data-admin-tab="compatibility" role="tab" aria-selected="false">Compatibility</button>
+      </nav>
+
+      <section class="panel admin-tab-panel" data-admin-tab-panel="access">
         <div class="section-head">
           <div>
             <p class="eyebrow">Users</p>
@@ -91,7 +99,7 @@
         <div id="users-list" class="admin-list"></div>
       </section>
 
-      <section class="panel">
+      <section class="panel admin-tab-panel" data-admin-tab-panel="endpoints">
         <div class="section-head">
           <div>
             <p class="eyebrow">Public endpoints</p>
@@ -114,7 +122,7 @@
         <div id="endpoints-list" class="admin-list"></div>
       </section>
 
-      <section class="panel">
+      <section class="panel admin-tab-panel" data-admin-tab-panel="access">
         <div class="section-head">
           <div>
             <p class="eyebrow">Sunshine security</p>
@@ -149,7 +157,56 @@
         </form>
       </section>
 
-      <section class="panel">
+      <section class="panel admin-tab-panel" data-admin-tab-panel="software">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Software</p>
+            <h2>Applications and Minecraft server</h2>
+          </div>
+        </div>
+        <p class="hint">
+          These actions run against the selected endpoint. Application changes and Minecraft lifecycle operations are restricted to administrators.
+        </p>
+        <div class="form-grid" autocomplete="off">
+          <label>
+            <span>Endpoint</span>
+            <select id="software-endpoint"></select>
+          </label>
+          <label>
+            <span>Application</span>
+            <select id="software-application"></select>
+          </label>
+          <label>
+            <span>Minecraft server version</span>
+            <select id="software-minecraft-version"></select>
+          </label>
+          <label>
+            <span>Minecraft runtime</span>
+            <select id="software-minecraft-server-type">
+              <option value="paper">Paper (plugins)</option>
+              <option value="purpur">Purpur (plugins)</option>
+              <option value="fabric">Fabric (mods)</option>
+              <option value="forge">Forge (mods)</option>
+              <option value="neoforge">NeoForge (mods)</option>
+            </select>
+          </label>
+        </div>
+        <div id="software-status" class="command-status" data-tone="neutral">
+          Sign in to load applications and Minecraft server state.
+        </div>
+        <div class="inline-action-group app-action-group" id="software-actions">
+          <button class="action status" type="button" data-software-command="install-app">Install Application</button>
+          <button class="action delete" type="button" data-software-command="uninstall-app">Uninstall Application</button>
+          <button class="action backup" type="button" data-software-command="install-minecraft">Install Minecraft</button>
+          <button class="action start" type="button" data-software-command="start-minecraft">Start Minecraft</button>
+          <button class="action stop" type="button" data-software-command="stop-minecraft">Stop Minecraft</button>
+          <button class="action restart" type="button" data-software-command="restart-minecraft">Restart Minecraft</button>
+          <button class="action delete" type="button" data-software-command="remove-minecraft">Remove Minecraft</button>
+          <button id="software-refresh-minecraft-versions" class="ghost" type="button">Refresh Minecraft Versions</button>
+        </div>
+      </section>
+
+      <section class="panel admin-tab-panel" data-admin-tab-panel="runtime">
         <div class="section-head">
           <div>
             <p class="eyebrow">Runtime images</p>
@@ -168,7 +225,7 @@
         <div id="runtime-images-list" class="admin-list"></div>
       </section>
 
-      <section class="panel">
+      <section class="panel admin-tab-panel" data-admin-tab-panel="compatibility">
         <div class="section-head">
           <div>
             <p class="eyebrow">Compatibility evidence</p>
@@ -218,6 +275,6 @@
       </section>
     </main>
 
-    <script src="./admin.js?v=sunshine-password-admin-20260723"></script>
+    <script src="./admin.js?v=admin-software-tabs-20260724"></script>
   </body>
 </html>

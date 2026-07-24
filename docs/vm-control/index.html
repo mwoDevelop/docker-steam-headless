@@ -211,6 +211,11 @@
           <p>Leave empty to run without a scheduled shutdown during create/start. Use Extend Auto-stop on a running VM to reset the timer from now.</p>
         </div>
 
+        <p class="hint admin-only-notice">
+          Installing applications and administering the Minecraft server are available to administrators in
+          <a href="./admin.html#software">Administration</a>.
+        </p>
+
         <div class="backup-options">
           <label>
             <span>Backup to restore</span>
@@ -226,7 +231,7 @@
           <p id="backup-options-status">Create a manual backup, then select it here before running Restore Backup.</p>
         </div>
 
-        <div class="backup-options">
+        <div class="backup-options admin-only-controls" hidden>
           <label>
             <span>Application</span>
             <select id="application-select" name="application-select">
@@ -240,13 +245,17 @@
           <p id="application-options-status">Connect the backend to load supported applications.</p>
         </div>
 
-        <div id="minecraft-management-controls" class="backup-options minecraft-options">
+        <div class="backup-options minecraft-options">
           <label>
             <span>Minecraft Server</span>
             <input id="minecraft-address" type="text" readonly value="Connect backend to load address">
           </label>
+          <p id="minecraft-options-status">Minecraft server status will appear after VM status is loaded.</p>
+        </div>
+
+        <div id="minecraft-management-controls" class="backup-options minecraft-options admin-only-controls" hidden>
           <label>
-            <span>Server version</span>
+            <span>Server version (administrator)</span>
             <select id="minecraft-version-select" name="minecraft-version-select">
               <option value="">Connect backend to load versions</option>
             </select>
@@ -265,7 +274,6 @@
             <button class="action restart" type="button" data-command="restart-minecraft">Restart</button>
             <button class="action delete" type="button" data-command="remove-minecraft">Remove</button>
           </div>
-          <p id="minecraft-options-status">Choose Paper/Purpur for plugins or Fabric/Forge/NeoForge for mods. World data is stored under /mnt/games/minecraft-server.</p>
         </div>
 
       </section>

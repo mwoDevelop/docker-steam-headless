@@ -2936,6 +2936,7 @@ def handle_unexpected_error(error: Exception):
 @app.route("/api/admin/endpoints", methods=["GET", "POST", "OPTIONS"])
 @app.route("/api/admin/runtime-images", methods=["GET", "POST", "OPTIONS"])
 @app.route("/api/admin/compatibility", methods=["GET", "POST", "OPTIONS"])
+@app.route("/api/admin/software", methods=["GET", "POST", "OPTIONS"])
 @app.route("/api/hardware", methods=["GET", "OPTIONS"])
 @app.route("/api/instances", methods=["GET", "OPTIONS"])
 @app.route("/api/price", methods=["GET", "OPTIONS"])
@@ -3082,6 +3083,39 @@ def options_passthrough():
         payload = request.get_json(silent=True) or {}
         return jsonify(execute_admin_compatibility_action(admin_user, payload))
 
+    if request.path == "/api/admin/software":
+        admin_user = require_admin_user()
+        source = request.args if request.method == "GET" else (request.get_json(silent=True) or {})
+        apply_target_overrides(source)
+
+        if request.method == "POST":
+            command = str(source.get("command", "")).strip().lower()
+            if command == "refresh-minecraft-versions":
+                refresh_minecraft_versions_from_papermc()
+            elif command in {
+                "install-app",
+                "uninstall-app",
+                "install-minecraft",
+                "start-minecraft",
+                "stop-minecraft",
+                "restart-minecraft",
+                "remove-minecraft",
+            }:
+                execute_command(command, admin_user, source)
+            else:
+                raise ApiError("Unsupported software administration action.", 400)
+
+        instance = get_instance_or_none()
+        return jsonify(
+            {
+                "user": admin_user,
+                "endpoint": endpoint_public_payload(selected_endpoint()),
+                "status": build_status_payload(instance, user=admin_user, command="status"),
+                "applicationCatalog": APPLICATION_CATALOG,
+                "minecraftServer": minecraft_version_payload(),
+            }
+        )
+
     if request.path == "/api/admin/endpoints":
         admin_user = require_admin_user()
         if request.method == "GET":
@@ -3163,9 +3197,10 @@ def options_passthrough():
         )
 
     if request.path == "/api/minecraft/versions":
-        require_user()
         if request.method == "POST":
+            require_admin_user()
             return jsonify(refresh_minecraft_versions_from_papermc())
+        require_user()
         return jsonify(minecraft_version_payload())
 
     if request.path == "/api/minecraft/management":
@@ -3245,6 +3280,16 @@ def options_passthrough():
             "remove-minecraft",
         }:
             raise ApiError("Unsupported command.", 400)
+        if command in {
+            "install-app",
+            "uninstall-app",
+            "install-minecraft",
+            "start-minecraft",
+            "stop-minecraft",
+            "restart-minecraft",
+            "remove-minecraft",
+        }:
+            user = require_admin_user()
         result = execute_command(command, user, payload)
         return jsonify(result)
 

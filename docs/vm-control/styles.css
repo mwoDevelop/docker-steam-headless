@@ -33,10 +33,6 @@ body {
   font-family: "Space Grotesk", sans-serif;
 }
 
-body.is-page-loading {
-  overflow: hidden;
-}
-
 body.is-page-loading:not(.is-page-ready) .shell {
   opacity: 0;
   pointer-events: none;
@@ -241,6 +237,48 @@ label span {
 }
 
 .hidden {
+  display: none;
+}
+
+.admin-only-notice {
+  margin: 0 0 1rem;
+  padding: 0.8rem 0.95rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(127, 171, 255, 0.1);
+}
+
+.admin-tabs {
+  position: sticky;
+  top: 0.75rem;
+  z-index: 5;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 1.25rem 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(20, 28, 44, 0.96);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.18);
+}
+
+.admin-tab {
+  min-height: 36px;
+  padding: 7px 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  color: var(--text);
+  background: transparent;
+}
+
+.admin-tab.is-active {
+  border-color: var(--accent);
+  color: #fff;
+  background: var(--accent);
+}
+
+.admin-tab-panel[hidden] {
   display: none;
 }
 
