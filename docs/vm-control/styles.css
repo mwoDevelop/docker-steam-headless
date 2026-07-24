@@ -274,6 +274,27 @@ label span {
   display: none;
 }
 
+.admin-vm-control-frame {
+  width: 100%;
+  min-height: 1120px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--panel);
+}
+
+.readonly-instance-view .readonly-instance-panel > :not(.section-head):not(.hardware-options),
+.readonly-instance-view .readonly-instance-panel .hardware-options > :not(.instance-picker) {
+  display: none !important;
+}
+
+.readonly-instance-view .readonly-instance-panel .hardware-options {
+  display: block;
+}
+
+.readonly-instance-view .readonly-instance-panel .instance-card {
+  cursor: default;
+}
+
 label {
   display: flex;
   flex-direction: column;

@@ -3217,23 +3217,23 @@ def options_passthrough():
         return jsonify(managed_capacity_reservation_summary())
 
     if request.path == "/api/capacity-reservations/probe":
-        require_user()
+        require_admin_user()
         payload = request.get_json(silent=True) or {}
         apply_target_overrides(payload, respect_existing_endpoint_hardware=False)
         return jsonify(create_capacity_reservation_probe())
 
     if request.path == "/api/capacity-reservations/scan":
-        require_user()
+        require_admin_user()
         payload = request.get_json(silent=True) or {}
         return jsonify(scan_gpu_capacity_availability(payload))
 
     if request.path == "/api/capacity-reservations/scan-zone":
-        require_user()
+        require_admin_user()
         payload = request.get_json(silent=True) or {}
         return jsonify(scan_gpu_capacity_zone(payload))
 
     if request.path == "/api/capacity-reservations/release":
-        require_user()
+        require_admin_user()
         return jsonify(release_managed_capacity_reservations())
 
     if request.path == "/api/internal/capacity-reservations/cleanup":
@@ -3281,6 +3281,15 @@ def options_passthrough():
         }:
             raise ApiError("Unsupported command.", 400)
         if command in {
+            "start",
+            "stop",
+            "restart",
+            "create",
+            "delete",
+            "create-backup",
+            "restore-backup",
+            "remove-backup",
+            "set-auto-stop",
             "install-app",
             "uninstall-app",
             "install-minecraft",

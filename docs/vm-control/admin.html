@@ -74,6 +74,7 @@
         <button class="admin-tab" type="button" data-admin-tab="software" role="tab" aria-selected="false">Software</button>
         <button class="admin-tab" type="button" data-admin-tab="runtime" role="tab" aria-selected="false">Runtime images</button>
         <button class="admin-tab" type="button" data-admin-tab="compatibility" role="tab" aria-selected="false">Compatibility</button>
+        <button class="admin-tab" type="button" data-admin-tab="vm-control">VM Control</button>
       </nav>
 
       <section class="panel admin-tab-panel" data-admin-tab-panel="access">
@@ -156,6 +157,17 @@
           <button id="sunshine-password-submit" class="action status" type="submit">Update Sunshine password</button>
         </form>
       </section>
+      <section class="panel admin-tab-panel" data-admin-tab-panel="vm-control" hidden>
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Infrastructure</p>
+            <h2>VM Control</h2>
+          </div>
+        </div>
+        <p class="hint">Manage VM lifecycle, hardware selection, GPU capacity checks, auto-stop, and backups.</p>
+        <iframe class="admin-vm-control-frame" title="VM Control" src="./vm-admin.html"></iframe>
+      </section>
+
 
       <section class="panel admin-tab-panel" data-admin-tab-panel="software">
         <div class="section-head">
