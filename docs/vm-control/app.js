@@ -1710,6 +1710,15 @@
       `;
     }).join("");
 
+    if (isReadonlyInstanceView) {
+      elements.instancesList.querySelectorAll("[data-instance-index]").forEach((button) => {
+        const card = document.createElement("article");
+        card.className = button.className;
+        card.innerHTML = button.innerHTML;
+        button.replaceWith(card);
+      });
+    }
+
     if (elements.instancesStatus) {
       const refreshedAt = state.instancesPayload && state.instancesPayload.refreshedAt
         ? ` Refreshed: ${state.instancesPayload.refreshedAt}.`

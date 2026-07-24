@@ -287,6 +287,10 @@ label span {
   display: none !important;
 }
 
+.readonly-instance-view main > .panel:not(.hero):not(.readonly-instance-panel):not(:has(#backend-url)) {
+  display: none !important;
+}
+
 .readonly-instance-view .readonly-instance-panel .hardware-options {
   display: block;
 }
