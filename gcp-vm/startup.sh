@@ -179,6 +179,27 @@ set_sunshine_status() {
   set_instance_metadata_value vm-sunshine-status-detail "$detail"
 }
 
+complete_pending_restart() {
+  local action_status token sunshine_state
+  action_status="$(metadata_get vm-power-action-status || true)"
+  case "$action_status" in
+    rebooting:restart:*)
+      token="${action_status#rebooting:restart:}"
+      sunshine_state="$(metadata_get vm-sunshine-status || true)"
+      case "$sunshine_state" in
+        disabled|ready)
+          set_instance_metadata_value vm-power-action-status "restarted:restart:${token}"
+          set_instance_metadata_value vm-power-action ""
+          ;;
+        error)
+          set_instance_metadata_value vm-power-action-status "failed:restart:${token}"
+          set_instance_metadata_value vm-power-action ""
+          ;;
+      esac
+      ;;
+  esac
+}
+
 record_sunshine_version() {
   local container_id raw_version version
   container_id="$(docker compose "${COMPOSE_FILES[@]}" ps -q | head -n 1 || true)"
@@ -943,6 +964,7 @@ if ! gpu_enabled; then
   log "Backup readiness marker created for CPU-only VM"
   schedule_auto_shutdown
   set_sunshine_status "disabled" "GPU disabled for this VM; Sunshine stack was not started."
+  complete_pending_restart
   if ! /usr/local/bin/vm-power-action reconcile-minecraft; then
     log "Minecraft startup reconciliation failed."
   fi
@@ -1062,6 +1084,7 @@ if ! /usr/local/bin/vm-power-action reconcile-minecraft; then
   log "Minecraft startup reconciliation failed."
 fi
 mark_minecraft_management_agent_ready
+complete_pending_restart
 
 ss -lntup | egrep '(8083|47989|47990|48010)' || true
 log "noVNC: http://${EXT_IP:-$(hostname -I | awk '{print $1}')}:8083/"

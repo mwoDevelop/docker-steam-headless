@@ -5985,6 +5985,35 @@ def build_power_action_status(instance: dict[str, Any] | None) -> dict[str, str]
     }
 
 
+def reconcile_completed_restart_action(instance: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Finalize a guest reboot when the originating Cloud Run request did not survive it."""
+    if instance is None or str(instance.get("status", "")).upper() != "RUNNING":
+        return instance
+
+    phase, action, token = parse_power_action_status(
+        metadata_value(instance, POWER_ACTION_STATUS_METADATA_KEY)
+    )
+    if action != "restart" or phase != "rebooting":
+        return instance
+    if metadata_value(instance, POWER_ACTION_METADATA_KEY).strip():
+        return instance
+
+    sunshine_state = metadata_value(instance, SUNSHINE_STATUS_METADATA_KEY).strip().lower()
+    expected_state = "disabled" if is_gpu_disabled_for_instance(instance) else "ready"
+    if sunshine_state not in {expected_state, "error"}:
+        return instance
+
+    final_phase = "failed" if sunshine_state == "error" else "restarted"
+    set_instance_metadata_values(
+        instance,
+        {
+            POWER_ACTION_STATUS_METADATA_KEY: f"{final_phase}:restart:{token}",
+            POWER_ACTION_METADATA_KEY: None,
+        },
+    )
+    return get_instance()
+
+
 def build_status_payload(
     instance: dict[str, Any] | None,
     *,
@@ -5993,6 +6022,7 @@ def build_status_payload(
     duckdns_updated: bool | None = None,
     sunshine_credentials: dict[str, str] | None = None,
 ) -> dict[str, Any]:
+    instance = reconcile_completed_restart_action(instance)
     hardware = {
         "id": selected_hardware_id(),
         "zone": selected_zone(),
@@ -6703,22 +6733,11 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
                 target_phase="rebooting",
                 timeout_seconds=120,
             )
-            final_instance = wait_for_external_ip(timeout_seconds=180)
-            final_instance = wait_for_remote_access_status(timeout_seconds=240)
-            set_instance_metadata_values(
-                final_instance,
-                {
-                    POWER_ACTION_STATUS_METADATA_KEY: f"restarted:restart:{token}",
-                    POWER_ACTION_METADATA_KEY: None,
-                },
-            )
             final_instance = get_instance()
-            updated = update_duckdns(extract_external_ip(final_instance))
             return build_status_payload(
                 final_instance,
                 user=user,
                 command=command,
-                duckdns_updated=updated,
                 sunshine_credentials=sunshine_credentials,
             )
         operation = compute_request("POST", f"{instance_url()}/start")
