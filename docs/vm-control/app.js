@@ -41,8 +41,6 @@
     "create-backup": 3600000,
     "restore-backup": 3600000,
     "remove-backup": 900000,
-    "install-app": 1800000,
-    "uninstall-app": 1800000,
     "install-minecraft": 1800000,
     "start-minecraft": 900000,
     "stop-minecraft": 900000,
@@ -86,16 +84,6 @@
       label: "Restore in progress",
       detail: "Steam Headless and Sunshine can be temporarily stopped while the selected backup is restored.",
     },
-    "install-app": {
-      state: "starting",
-      label: "Updating application",
-      detail: "Updating Sunshine application list.",
-    },
-    "uninstall-app": {
-      state: "starting",
-      label: "Updating application",
-      detail: "Updating Sunshine application list.",
-    },
   };
   const COMMAND_MINECRAFT_TRANSITIONS = {
     "install-minecraft": {
@@ -134,8 +122,6 @@
     "create-backup",
     "restore-backup",
     "remove-backup",
-    "install-app",
-    "uninstall-app",
     "install-minecraft",
     "start-minecraft",
     "stop-minecraft",
@@ -171,8 +157,6 @@
     autoStopStatus: document.querySelector("#auto-stop-status"),
     backupSelect: document.querySelector("#backup-select"),
     backupOptionsStatus: document.querySelector("#backup-options-status"),
-    applicationSelect: document.querySelector("#application-select"),
-    applicationOptionsStatus: document.querySelector("#application-options-status"),
     minecraftAddress: document.querySelector("#minecraft-address"),
     minecraftVersionSelect: document.querySelector("#minecraft-version-select"),
     minecraftServerTypeSelect: document.querySelector("#minecraft-server-type-select"),
@@ -286,7 +270,6 @@
     renderHistory();
     renderTargetSummary();
     renderBackupOptions(null);
-    renderApplicationOptions(null);
     renderMinecraftOptions(null);
     renderHardwareOptions(null);
     renderInstanceOptions(null);
@@ -401,18 +384,6 @@
       const canUseBackupSelection = allowed.has("restore-backup") || allowed.has("remove-backup");
       elements.backupSelect.disabled = state.isBusy || !state.user || !canUseBackupSelection || !hasBackups;
     }
-    if (elements.applicationSelect) {
-      const hasApplications = getApplicationCatalog(state.lastStatus).length > 0;
-      // The catalog remains useful even when the selected VM cannot execute
-      // application changes, such as a CPU-only profile without Sunshine.
-      // Keep selection available and let the command buttons reflect action
-      // availability separately.
-      elements.applicationSelect.disabled = state.isBusy || !state.user || !hasApplications;
-      const canChangeApps = allowed.has("install-app") || allowed.has("uninstall-app");
-      elements.applicationSelect.title = canChangeApps
-        ? "Select an application to install or uninstall."
-        : "Application installation and Sunshine integration require a GPU-enabled VM.";
-    }
     if (elements.minecraftAddress) {
       elements.minecraftAddress.disabled = true;
     }
@@ -443,17 +414,14 @@
     elements.actionButtons.forEach((button) => {
       const command = button.dataset.command;
       const needsBackup = command === "restore-backup" || command === "remove-backup";
-      const needsApplication = command === "install-app" || command === "uninstall-app";
       const needsMinecraftState = isMinecraftCommand(command);
       const hasSelectedBackup = Boolean(elements.backupSelect && elements.backupSelect.value);
-      const hasSelectedApplication = Boolean(elements.applicationSelect && elements.applicationSelect.value);
       button.disabled = !state.user
         || (command !== "status" && (
           state.isBusy
           || !allowed.has(command)
           || (command === "create" && !profileSupportsCreate)
           || (needsBackup && !hasSelectedBackup)
-          || (needsApplication && !hasSelectedApplication)
           || (needsMinecraftState && !minecraftCommandAvailable(command))
         ));
     });
@@ -806,23 +774,6 @@
       ? payload.persistence.backups
       : [];
     return backups.filter((backup) => backup && backup.id);
-  }
-
-  function getApplicationCatalog(payload) {
-    const fromPayload = payload && payload.applications && Array.isArray(payload.applications.catalog)
-      ? payload.applications.catalog
-      : [];
-    const fromConfig = state.backendConfig && Array.isArray(state.backendConfig.applicationCatalog)
-      ? state.backendConfig.applicationCatalog
-      : [];
-    const catalog = fromPayload.length ? fromPayload : fromConfig;
-    return catalog.filter((item) => item && item.id && item.label);
-  }
-
-  function selectedApplicationLabel() {
-    const appId = String(elements.applicationSelect && elements.applicationSelect.value || "").trim();
-    const app = getApplicationCatalog(state.lastStatus).find((item) => String(item.id) === appId);
-    return app ? String(app.label || app.id) : appId;
   }
 
   function getHardwareProfiles() {
@@ -1907,47 +1858,6 @@
     updateActionAvailability();
   }
 
-  function renderApplicationOptions(payload) {
-    if (!elements.applicationSelect) {
-      return;
-    }
-
-    const previousValue = elements.applicationSelect.value;
-    const applications = getApplicationCatalog(payload);
-    if (!applications.length) {
-      elements.applicationSelect.innerHTML = '<option value="">No applications available</option>';
-      if (elements.applicationOptionsStatus) {
-        elements.applicationOptionsStatus.textContent = "No supported applications are defined by the backend.";
-      }
-      updateActionAvailability();
-      return;
-    }
-
-    elements.applicationSelect.innerHTML = [
-      '<option value="">Select application...</option>',
-      ...applications.map((app) => {
-        const id = String(app.id || "");
-        const label = String(app.label || id);
-        return `<option value="${escapeHtml(id)}">${escapeHtml(label)}</option>`;
-      }),
-    ].join("");
-    if (previousValue && applications.some((app) => String(app.id) === previousValue)) {
-      elements.applicationSelect.value = previousValue;
-    }
-    if (elements.applicationOptionsStatus) {
-      const labels = applications.map((app) => String(app.label || app.id)).join(", ");
-      const allowed = new Set(payload && Array.isArray(payload.allowedCommands) ? payload.allowedCommands : []);
-      const canChangeApps = allowed.has("install-app") || allowed.has("uninstall-app");
-      const cpuOnly = payload && payload.sunshineStatus && payload.sunshineStatus.state === "disabled";
-      elements.applicationOptionsStatus.textContent = !payload || canChangeApps
-        ? `Supported applications: ${labels}.`
-        : cpuOnly
-          ? `Supported applications: ${labels}. Application installation and Sunshine integration require a GPU-enabled VM.`
-          : `Supported applications: ${labels}. Application changes are not available while the VM is in its current state.`;
-    }
-    updateActionAvailability();
-  }
-
   function renderStatusPayload(payload, targetKey) {
     state.lastStatus = payload;
     state.lastStatusTargetKey = targetKey || selectedTargetKey();
@@ -1955,7 +1865,6 @@
     migrateHistoryDuckDnsDomains(payload.duckdnsDomains);
     renderTargetSummary();
     renderBackupOptions(payload);
-    renderApplicationOptions(payload);
     renderMinecraftOptions(payload);
     renderAutoStopStatus(payload);
     renderHardwarePriceEstimate(selectedPriceEstimate());
@@ -2294,7 +2203,6 @@
     state.backendConfig = config;
     renderEndpointOptions(config);
     renderTargetSummary();
-    renderApplicationOptions(state.lastStatus);
     renderHardwareOptions({ profiles: [], defaultSelection: config.defaultHardware || null });
     updateAuthUi();
 
@@ -2573,15 +2481,6 @@
       }
     }
 
-    if (command === "uninstall-app") {
-      const appLabel = selectedApplicationLabel();
-      const confirmed = window.confirm(`Uninstall "${appLabel}" and remove it from Sunshine applications?`);
-      if (!confirmed) {
-        setBanner("Uninstall Application cancelled.", "warning");
-        return;
-      }
-    }
-
     if (command === "remove-minecraft") {
       const confirmed = window.confirm("Remove the Minecraft container? World data under /mnt/games/minecraft-server/data will be preserved.");
       if (!confirmed) {
@@ -2592,10 +2491,7 @@
 
     const loadingToken = setPageLoading(`Running "${command}"...`);
     setBusy(true);
-    const appLabel = command === "install-app" || command === "uninstall-app"
-      ? ` for ${selectedApplicationLabel()}`
-      : "";
-    setCommandStatus(`Running "${command}"${appLabel} on the VM...`, "warning");
+    setCommandStatus(`Running "${command}" on the VM...`, "warning");
     applyCommandTransition(command);
     const previousStatus = state.lastStatus;
     const previousStatusTargetKey = state.lastStatusTargetKey;
@@ -2608,13 +2504,6 @@
       }
       if (command === "restore-backup" || command === "remove-backup") {
         body.backupId = String(elements.backupSelect && elements.backupSelect.value || "").trim();
-      }
-      if (command === "install-app" || command === "uninstall-app") {
-        const applicationId = String(elements.applicationSelect && elements.applicationSelect.value || "").trim();
-        if (!applicationId) {
-          throw new Error("Select an application first.");
-        }
-        body.applicationId = applicationId;
       }
       if (command === "install-minecraft") {
         body.minecraftVersion = requestedMinecraftVersion;
@@ -2654,9 +2543,7 @@
         status: data.status,
         tone: "success",
         userEmail: state.user.email,
-        message: command === "install-app" || command === "uninstall-app"
-          ? `${historyMessage(data)} · Application: ${selectedApplicationLabel()}`.replace(/^ · /, "")
-          : historyMessage(data),
+        message: historyMessage(data),
         duckdnsDomains: data.duckdnsDomains || [],
       });
     } catch (error) {
@@ -3453,10 +3340,6 @@
 
   if (elements.backupSelect) {
     elements.backupSelect.addEventListener("change", updateActionAvailability);
-  }
-
-  if (elements.applicationSelect) {
-    elements.applicationSelect.addEventListener("change", updateActionAvailability);
   }
 
   if (elements.minecraftVersionSelect) {

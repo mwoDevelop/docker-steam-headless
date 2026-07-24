@@ -240,14 +240,6 @@ label span {
   display: none;
 }
 
-.admin-only-notice {
-  margin: 0 0 1rem;
-  padding: 0.8rem 0.95rem;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: rgba(127, 171, 255, 0.1);
-}
-
 .admin-tabs {
   position: sticky;
   top: 0.75rem;

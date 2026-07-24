@@ -211,11 +211,6 @@
           <p>Leave empty to run without a scheduled shutdown during create/start. Use Extend Auto-stop on a running VM to reset the timer from now.</p>
         </div>
 
-        <p class="hint admin-only-notice">
-          Installing applications and administering the Minecraft server are available to administrators in
-          <a href="./admin.html#software">Administration</a>.
-        </p>
-
         <div class="backup-options">
           <label>
             <span>Backup to restore</span>
@@ -229,20 +224,6 @@
             <button class="action delete" type="button" data-command="remove-backup">Remove Backup</button>
           </div>
           <p id="backup-options-status">Create a manual backup, then select it here before running Restore Backup.</p>
-        </div>
-
-        <div class="backup-options admin-only-controls" hidden>
-          <label>
-            <span>Application</span>
-            <select id="application-select" name="application-select">
-              <option value="">No applications loaded</option>
-            </select>
-          </label>
-          <div class="inline-action-group app-action-group">
-            <button class="action status" type="button" data-command="install-app">Install</button>
-            <button class="action delete" type="button" data-command="uninstall-app">Uninstall</button>
-          </div>
-          <p id="application-options-status">Connect the backend to load supported applications.</p>
         </div>
 
         <div class="backup-options minecraft-options">
@@ -311,6 +292,6 @@
       </section>
     </main>
 
-  <script src="./app.js?v=sunshine-password-admin-20260723"></script>
+  <script src="./app.js?v=main-software-cleanup-20260724"></script>
   </body>
 </html>
