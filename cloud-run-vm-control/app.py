@@ -6701,7 +6701,8 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
                 "Application changes require a GPU-enabled VM because Steam Headless and Sunshine are not started on CPU-only VMs.",
                 409,
             )
-        require_live_backup_ready(current_instance, command)
+        if command == "install-app":
+            require_live_backup_ready(current_instance, command)
         application_id = parse_application_id(payload)
         verb = "Installing" if command == "install-app" else "Uninstalling"
         target_phase = "installed" if command == "install-app" else "uninstalled"
@@ -6735,7 +6736,12 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
         if current_status != "RUNNING":
             raise ApiError("Minecraft server actions require a running VM.", 400)
         require_minecraft_command_allowed(current_instance, command)
-        require_live_backup_ready(current_instance, command)
+        # Initial Minecraft installation changes the VM's persistent runtime
+        # layout and must not race the startup restore/backup sequence. Once a
+        # server already exists, its lifecycle actions are handled by the live
+        # VM agent and do not depend on that backup marker.
+        if command == "install-minecraft":
+            require_live_backup_ready(current_instance, command)
         ensure_firewall_rule(CONFIG["firewall_rule_minecraft"], FIREWALL_MINECRAFT_ALLOWED)
         minecraft_version = (
             concrete_minecraft_version(parse_minecraft_version(payload))
