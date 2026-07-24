@@ -192,6 +192,7 @@
     priceEstimates: {},
     isBusy: false,
     pendingMinecraftServerType: "",
+    activeCommand: "",
     commandStatusRefreshTimer: null,
     history: [],
     isPageLoading: true,
@@ -630,7 +631,11 @@
           if (generation !== state.commandStatusRefreshGeneration) {
             return;
           }
-          setCommandStatus(statusBannerMessage("VM status refreshed", data), statusMessageTone(data));
+          const stillUpdating = isTransitionalStatus(data);
+          setCommandStatus(
+            statusBannerMessage(stillUpdating ? `Command "${command}" still updating` : `Command "${command}" status refreshed`, data),
+            stillUpdating ? "warning" : statusMessageTone(data),
+          );
           if (state.isPageLoading && state.user && generation === state.commandStatusRefreshGeneration) {
             schedulePostCommandStatusRefresh(command, generation);
           }
@@ -2497,6 +2502,7 @@
 
     const loadingToken = setPageLoading(`Running "${command}"...`);
     setBusy(true);
+    state.activeCommand = command;
     setCommandStatus(`Running "${command}" on the VM...`, "warning");
     applyCommandTransition(command);
     const previousStatus = state.lastStatus;
@@ -2533,6 +2539,8 @@
       if (COMMANDS_TO_POLL_AFTER_RESPONSE.has(command)) {
         await refreshInstances({ silent: true, autoSelect: command === "delete" });
       }
+
+      clearScheduledCommandStatusRefresh();
 
       const suffix = data.duckdnsUpdated
         ? " DuckDNS refreshed."
@@ -2595,6 +2603,9 @@
     } finally {
       if (command === "install-minecraft") {
         state.pendingMinecraftServerType = "";
+      }
+      if (state.activeCommand === command) {
+        state.activeCommand = "";
       }
       setBusy(false);
       markPageReady("Ready.", loadingToken);
@@ -3294,7 +3305,11 @@
     elements.refreshStatus.addEventListener("click", async () => {
       try {
         const data = await refreshStatus({ silent: true });
-        setCommandStatus(statusBannerMessage("VM status loaded", data), statusMessageTone(data));
+        const activeCommand = String(state.activeCommand || "");
+        setCommandStatus(
+          statusBannerMessage(activeCommand ? `Command "${activeCommand}" still updating` : "VM status loaded", data),
+          activeCommand ? "warning" : statusMessageTone(data),
+        );
       } catch (error) {
         handleError(error);
       }
@@ -3322,14 +3337,20 @@
     button.addEventListener("click", async () => {
       const command = button.dataset.command;
       if (command === "status") {
-        const loadingToken = setPageLoading("Refreshing VM status...");
+        const loadingToken = state.isPageLoading ? null : setPageLoading("Refreshing VM status...");
         try {
           const data = await refreshStatus({ silent: true });
-          setCommandStatus(statusBannerMessage("VM status loaded", data), statusMessageTone(data));
+          const activeCommand = String(state.activeCommand || "");
+          setCommandStatus(
+            statusBannerMessage(activeCommand ? `Command "${activeCommand}" still updating` : "VM status loaded", data),
+            activeCommand ? "warning" : statusMessageTone(data),
+          );
         } catch (error) {
           handleError(error);
         } finally {
-          markPageReady("Ready.", loadingToken);
+          if (loadingToken) {
+            markPageReady("Ready.", loadingToken);
+          }
         }
         return;
       }
