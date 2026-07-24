@@ -421,6 +421,7 @@
           state.isBusy
           || !allowed.has(command)
           || (command === "create" && !profileSupportsCreate)
+          || (command === "create" && !selectedZone())
           || (needsBackup && !hasSelectedBackup)
           || (needsMinecraftState && !minecraftCommandAvailable(command))
         ));
@@ -648,6 +649,7 @@
   }
 
   function updateAuthUi() {
+    elements.googleSignIn.classList.toggle("hidden", Boolean(state.user));
     if (state.user) {
       setAuthStatus(`Signed in as ${state.user.email}`, "success");
       elements.signOut.classList.remove("hidden");
