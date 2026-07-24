@@ -18,6 +18,7 @@
     authStatus: document.querySelector("#auth-status"),
     googleSignIn: document.querySelector("#google-sign-in"),
     signOut: document.querySelector("#sign-out"),
+    administrationLink: document.querySelector("#administration-link"),
     targetSummary: document.querySelector("#target-summary"),
     refreshInstances: document.querySelector("#refresh-instances"),
     instancesList: document.querySelector("#instances-list"),
@@ -101,7 +102,8 @@
   function renderTargetSummary() {
     if (!elements.targetSummary) return;
     if (state.user) {
-      elements.targetSummary.innerHTML = "<p>Signed in for read-only instance and live-access information.</p>";
+      const administration = state.user.isAdmin ? " <a href=\"./admin.html\">Open Administration</a>." : "";
+      elements.targetSummary.innerHTML = "<p>Signed in for read-only instance and live-access information." + administration + "</p>";
       return;
     }
     elements.targetSummary.innerHTML = "<p>Sign in with Google to view running instances and public access addresses.</p>";
@@ -111,6 +113,7 @@
     const signedIn = Boolean(state.user);
     elements.googleSignIn?.classList.toggle("hidden", signedIn);
     elements.signOut?.classList.toggle("hidden", !signedIn);
+    elements.administrationLink?.classList.toggle("hidden", !state.user?.isAdmin);
     if (elements.backendUrl) {
       elements.backendUrl.type = signedIn ? "url" : "password";
       elements.backendUrl.value = state.backendUrl;
@@ -315,7 +318,8 @@
     const className = status === "healthy" ? "ready" : (status === "degraded" ? "starting" : "error");
     const label = String(probe.label || (status === "healthy" ? "Reachable" : "Unreachable"));
     const detail = String(probe.detail || "");
-    return "<span class=\"service-status " + className + " reachability-status\" title=\"" + escapeHtml(detail) + "\"><span class=\"service-status-dot\"></span>" + escapeHtml(label) + "</span>";
+    const visibleLabel = detail ? label + ": " + detail : label;
+    return "<span class=\"service-status " + className + " reachability-status\" title=\"" + escapeHtml(detail) + "\"><span class=\"service-status-dot\"></span>" + escapeHtml(visibleLabel) + "</span>";
   }
 
   function missingEndpointReachability() {

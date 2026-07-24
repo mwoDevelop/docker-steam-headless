@@ -166,6 +166,7 @@
   }
 
   function updateUi() {
+    elements.googleSignIn.classList.toggle("hidden", Boolean(state.user));
     if (state.user) {
       setAuthStatus(`Signed in as ${state.user.email}`, "success");
       elements.signOut.classList.remove("hidden");
@@ -269,16 +270,18 @@
       elements.usersList.innerHTML = "";
       return;
     }
-    elements.adminSummary.innerHTML = `
-      <p><strong>Admin:</strong> <code>${escapeHtml((payload.adminEmails || []).join(", ") || "none")}</code></p>
-      <p><strong>Configured users:</strong> <code>${escapeHtml((payload.configuredEmails || []).join(", ") || "none")}</code></p>
-      <p><strong>Configured domains:</strong> <code>${escapeHtml((payload.configuredDomains || []).join(", ") || "none")}</code></p>
-    `;
     const rows = payload.accounts || [
       ...(payload.adminEmails || []).map((email) => ({ email, source: "administrator", minecraftManagement: true, minecraftManagementLocked: true, administrator: true, administratorLocked: true, removable: false })),
       ...(payload.configuredEmails || []).map((email) => ({ email, source: "configured env", minecraftManagement: false, minecraftManagementLocked: false, administrator: false, administratorLocked: false, removable: false })),
       ...(payload.managedUsers || []).map((email) => ({ email, source: "managed", minecraftManagement: Boolean((payload.managedUserPermissions || {})[email]), minecraftManagementLocked: false, administrator: Boolean((payload.managedUserAdministratorPermissions || {})[email]), administratorLocked: false, removable: true })),
     ];
+    const endpointCount = Array.isArray(state.endpointsPayload?.endpoints) ? state.endpointsPayload.endpoints.length : 0;
+    const administratorCount = rows.filter((account) => Boolean(account.administrator)).length;
+    elements.adminSummary.innerHTML = `
+      <p><strong>Administrators:</strong> <code>${escapeHtml((payload.adminEmails || []).join(", ") || String(administratorCount))}</code></p>
+      <p><strong>Accounts with GUI access:</strong> <code>${rows.length}</code></p>
+      <p><strong>Registered VM endpoints:</strong> <code>${endpointCount}</code></p>
+    `;
     if (!rows.length) {
       elements.usersList.innerHTML = '<div class="admin-user-row fixed">No direct users configured.</div>';
       return;
