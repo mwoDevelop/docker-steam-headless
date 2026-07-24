@@ -256,12 +256,15 @@ label span {
 }
 
 .admin-tab {
+  display: inline-flex;
+  align-items: center;
   min-height: 36px;
   padding: 7px 12px;
   border: 1px solid var(--line);
   border-radius: 9px;
   color: var(--text);
   background: transparent;
+  text-decoration: none;
 }
 
 .admin-tab.is-active {
@@ -272,14 +275,6 @@ label span {
 
 .admin-tab-panel[hidden] {
   display: none;
-}
-
-.admin-vm-control-frame {
-  width: 100%;
-  min-height: 1120px;
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  background: var(--panel);
 }
 
 

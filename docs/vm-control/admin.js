@@ -237,6 +237,10 @@
   }
 
   function initializeAdminTabs() {
+    if (window.location.hash === "#vm-control") {
+      window.location.replace("./vm-admin.html");
+      return false;
+    }
     document.querySelectorAll("[data-admin-tab]").forEach((tab) => {
       tab.addEventListener("click", () => {
         const selectedTab = tab.dataset.adminTab || "access";
@@ -246,6 +250,7 @@
     });
     window.addEventListener("hashchange", () => selectAdminTab(window.location.hash.slice(1)));
     selectAdminTab(window.location.hash.slice(1));
+    return true;
   }
 
   function escapeHtml(value) {
@@ -1282,7 +1287,9 @@
     }
   });
 
-  initializeAdminTabs();
+  if (!initializeAdminTabs()) {
+    return;
+  }
   loadConfig();
   setBusy(false);
   if (state.backendUrl) {

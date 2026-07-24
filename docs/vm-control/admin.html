@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;700&display=swap"
       rel="stylesheet"
     >
-    <link rel="stylesheet" href="./styles.css?v=admin-activity-fix-20260724">
+    <link rel="stylesheet" href="./styles.css?v=admin-native-vm-control-20260724">
     <script src="https://accounts.google.com/gsi/client" async defer></script>
   </head>
   <body>
@@ -74,7 +74,7 @@
         <button class="admin-tab" type="button" data-admin-tab="software" role="tab" aria-selected="false">Software</button>
         <button class="admin-tab" type="button" data-admin-tab="runtime" role="tab" aria-selected="false">Runtime images</button>
         <button class="admin-tab" type="button" data-admin-tab="compatibility" role="tab" aria-selected="false">Compatibility</button>
-        <button class="admin-tab" type="button" data-admin-tab="vm-control">VM Control</button>
+        <a class="admin-tab" href="./vm-admin.html">VM Control</a>
         <button class="admin-tab" type="button" data-admin-tab="activity" role="tab" aria-selected="false">Activity</button>
       </nav>
 
@@ -158,17 +158,6 @@
           <button id="sunshine-password-submit" class="action status" type="submit">Update Sunshine password</button>
         </form>
       </section>
-      <section class="panel admin-tab-panel" data-admin-tab-panel="vm-control" hidden>
-        <div class="section-head">
-          <div>
-            <p class="eyebrow">Infrastructure</p>
-            <h2>VM Control</h2>
-          </div>
-        </div>
-        <p class="hint">Manage VM lifecycle, hardware selection, GPU capacity checks, auto-stop, and backups.</p>
-        <iframe class="admin-vm-control-frame" title="VM Control" src="./vm-admin.html?v=vm-admin-normal-fix-20260724"></iframe>
-      </section>
-
       <section class="panel admin-tab-panel" data-admin-tab-panel="activity" hidden>
         <div class="section-head">
           <div>
@@ -299,6 +288,6 @@
       </section>
     </main>
 
-    <script src="./admin.js?v=admin-activity-fix-20260724"></script>
+    <script src="./admin.js?v=admin-native-vm-control-20260724"></script>
   </body>
 </html>

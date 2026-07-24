@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;700&display=swap"
       rel="stylesheet"
     >
-    <link rel="stylesheet" href="./styles.css?v=vm-admin-normal-20260724">
+    <link rel="stylesheet" href="./styles.css?v=vm-admin-native-20260724">
     <script src="https://accounts.google.com/gsi/client" async defer></script>
   </head>
   <body class="is-page-loading">
@@ -41,6 +41,16 @@
           <a href="../cloud-run-vm-control.md">Cloud Run setup guide</a>
         </div>
       </section>
+
+      <nav class="admin-tabs" aria-label="Administration sections">
+        <a class="admin-tab" href="./admin.html#access">Access</a>
+        <a class="admin-tab" href="./admin.html#endpoints">Endpoints</a>
+        <a class="admin-tab" href="./admin.html#software">Software</a>
+        <a class="admin-tab" href="./admin.html#runtime">Runtime images</a>
+        <a class="admin-tab" href="./admin.html#compatibility">Compatibility</a>
+        <a class="admin-tab is-active" href="./vm-admin.html" aria-current="page">VM Control</a>
+        <a class="admin-tab" href="./admin.html#activity">Activity</a>
+      </nav>
 
       <section class="panel">
         <div class="section-head">
@@ -75,7 +85,7 @@
             <p class="auth-card-label">Google Sign-In</p>
             <button id="google-sign-in" class="google-sign-in" type="button">Sign in with Google</button>
             <p class="auth-help">This always opens the Google account chooser instead of a personalized default button.</p>
-            <a class="ghost button-link" href="./admin.html">Admin</a>
+            <a class="ghost button-link" href="./admin.html">Administration</a>
             <button id="sign-out" class="ghost hidden" type="button">Sign Out</button>
           </div>
 
@@ -277,6 +287,6 @@
 
     </main>
 
-  <script src="./app.js?v=vm-admin-normal-20260724"></script>
+  <script src="./app.js?v=vm-admin-native-20260724"></script>
   </body>
 </html>
