@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;700&display=swap"
       rel="stylesheet"
     >
-    <link rel="stylesheet" href="./styles.css?v=admin-vm-control-fix-20260724">
+    <link rel="stylesheet" href="./1admin-activity-20260724">
     <script src="https://accounts.google.com/gsi/client" async defer></script>
   </head>
   <body>
@@ -75,6 +75,7 @@
         <button class="admin-tab" type="button" data-admin-tab="runtime" role="tab" aria-selected="false">Runtime images</button>
         <button class="admin-tab" type="button" data-admin-tab="compatibility" role="tab" aria-selected="false">Compatibility</button>
         <button class="admin-tab" type="button" data-admin-tab="vm-control">VM Control</button>
+        <button class="admin-tab" type="button" data-admin-tab="activity" role="tab" aria-selected="false">Activity</button>
       </nav>
 
       <section class="panel admin-tab-panel" data-admin-tab-panel="access">
@@ -166,6 +167,17 @@
         </div>
         <p class="hint">Manage VM lifecycle, hardware selection, GPU capacity checks, auto-stop, and backups.</p>
         <iframe class="admin-vm-control-frame" title="VM Control" src="./vm-admin.html"></iframe>
+      </section>
+
+      <section class="panel admin-tab-panel" data-admin-tab-panel="activity" hidden>
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Activity</p>
+            <h2>Local Session History</h2>
+          </div>
+          <p class="section-meta">Recent VM control results from this browser only. No secrets are stored.</p>
+        </div>
+        <div id="admin-history" class="runs empty">No actions recorded yet.</div>
       </section>
 
 
@@ -287,6 +299,6 @@
       </section>
     </main>
 
-    <script src="./admin.js?v=admin-software-tabs-20260724"></script>
+    <script src="./1admin-activity-20260724"></script>
   </body>
 </html>

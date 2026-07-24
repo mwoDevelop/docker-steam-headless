@@ -3,6 +3,7 @@
   const storageKeys = {
     config: "vm-control-cloudrun-config",
     sessionToken: "vm-control-google-session-token",
+    history: "vm-control-session-history",
   };
   const adminSessionRequest = "vm-control-admin-session-request";
   const adminSessionResponse = "vm-control-admin-session-response";
@@ -196,6 +197,43 @@
     panels.forEach((panel) => {
       panel.hidden = panel.dataset.adminTabPanel !== selectedTab;
     });
+    if (selectedTab === "activity") {
+      renderActivityHistory();
+    }
+  }
+
+  function renderActivityHistory() {
+    const container = document.querySelector("#admin-history");
+    if (!container) return;
+    let history = [];
+    try {
+      const stored = JSON.parse(window.localStorage.getItem(storageKeys.history) || "[]");
+      history = Array.isArray(stored) ? stored : [];
+    } catch (error) {
+      history = [];
+    }
+    if (!history.length) {
+      container.className = "runs empty";
+      container.textContent = "No actions recorded yet in this browser.";
+      return;
+    }
+    container.className = "runs";
+    container.innerHTML = history.slice(0, 20).map((entry) => {
+      const title = escapeHtml(`${String(entry.command || "status").toUpperCase()} · ${entry.status || "UNKNOWN"}`);
+      const time = escapeHtml(new Date(entry.at).toLocaleString());
+      const by = entry.userEmail ? `by ${escapeHtml(entry.userEmail)}` : "unknown user";
+      const message = entry.message ? `<div class="run-detail">${escapeHtml(entry.message)}</div>` : "";
+      return `
+        <article class="run-card">
+          <div class="run-top">
+            <h3 class="run-title">${title}</h3>
+            <span class="run-time">${time}</span>
+          </div>
+          <div class="run-detail">${by}</div>
+          ${message}
+        </article>
+      `;
+    }).join("");
   }
 
   function initializeAdminTabs() {

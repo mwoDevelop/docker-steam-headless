@@ -365,7 +365,7 @@
     }
     if (elements.instancesList) {
       elements.instancesList.querySelectorAll("[data-instance-index]").forEach((button) => {
-        button.disabled = document.body.classList.contains("readonly-instance-view") || state.isBusy || !state.user;
+        button.disabled = state.isBusy || !state.user;
       });
     }
     if (elements.hardwareSelect) {
@@ -710,6 +710,10 @@
   }
 
   function renderHistory() {
+    if (!elements.history) {
+      return;
+    }
+
     if (!state.history.length) {
       elements.history.className = "runs empty";
       elements.history.textContent = "No actions recorded yet.";
@@ -1648,45 +1652,7 @@
     const selectedHardware = String(elements.hardwareSelect && elements.hardwareSelect.value || "");
     const selectedZoneValue = selectedZone();
     elements.instancesList.className = "instance-list";
-    const isReadonlyInstanceView = document.body.classList.contains("readonly-instance-view");
-    const displayedInstances = isReadonlyInstanceView
-      ? instances.filter((instance) => String(instance && instance.status || "").toUpperCase() === "RUNNING")
-      : instances;
-
-    if (isReadonlyInstanceView) {
-      const instancePicker = elements.instancesList.closest(".instance-picker");
-      const hardwareOptions = instancePicker && instancePicker.parentElement;
-      const controlPanel = elements.instancesList.closest(".panel");
-      const connectionPanel = elements.backendUrl && elements.backendUrl.closest(".panel");
-      if (controlPanel) {
-        controlPanel.classList.add("readonly-instance-panel");
-        const heading = controlPanel.querySelector(".section-head h2");
-        const eyebrow = controlPanel.querySelector(".section-head .eyebrow");
-        if (heading) {
-          heading.textContent = "Running Instances";
-        }
-        if (eyebrow) {
-          eyebrow.textContent = "Read only";
-        }
-        Array.from(controlPanel.children).forEach((child) => {
-          if (child !== hardwareOptions && !child.classList.contains("section-head")) {
-            child.hidden = true;
-          }
-        });
-      }
-      if (hardwareOptions) {
-        Array.from(hardwareOptions.children).forEach((child) => {
-          child.hidden = child !== instancePicker;
-        });
-      }
-      document.querySelectorAll("main > .panel").forEach((panel) => {
-        if (panel !== controlPanel && panel !== connectionPanel) {
-          panel.hidden = true;
-        }
-      });
-    }
-
-    elements.instancesList.innerHTML = displayedInstances.map((instance, index) => {
+    elements.instancesList.innerHTML = instances.map((instance, index) => {
       const hardware = instance.hardware || {};
       const hardwareId = String(hardware.id || "");
       const isSelected = selectedHardware && selectedZoneValue
@@ -1710,26 +1676,11 @@
       `;
     }).join("");
 
-    if (isReadonlyInstanceView) {
-      elements.instancesList.querySelectorAll("[data-instance-index]").forEach((button) => {
-        const card = document.createElement("article");
-        card.className = button.className;
-        card.innerHTML = button.innerHTML;
-        button.replaceWith(card);
-      });
-    }
-
     if (elements.instancesStatus) {
       const refreshedAt = state.instancesPayload && state.instancesPayload.refreshedAt
         ? ` Refreshed: ${state.instancesPayload.refreshedAt}.`
         : "";
-      if (isReadonlyInstanceView) {
-        elements.instancesStatus.textContent = displayedInstances.length
-          ? `${displayedInstances.length} running instance${displayedInstances.length === 1 ? "" : "s"} found.${refreshedAt}`
-          : `No running instances found.${refreshedAt}`;
-      } else {
-        elements.instancesStatus.textContent = `${instances.length} created instance${instances.length === 1 ? "" : "s"} found.${refreshedAt}`;
-      }
+      elements.instancesStatus.textContent = `${instances.length} created instance${instances.length === 1 ? "" : "s"} found.${refreshedAt}`;
     }
     updateActionAvailability();
   }
@@ -3585,7 +3536,7 @@
   if (elements.instancesList) {
     elements.instancesList.addEventListener("click", async (event) => {
       const button = event.target.closest("[data-instance-index]");
-      if (!button || state.isBusy || document.body.classList.contains("readonly-instance-view")) {
+      if (!button || state.isBusy) {
         return;
       }
       const loadingToken = setPageLoading("Loading selected instance status...");

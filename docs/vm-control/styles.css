@@ -282,22 +282,6 @@ label span {
   background: var(--panel);
 }
 
-.readonly-instance-view .readonly-instance-panel > :not(.section-head):not(.hardware-options),
-.readonly-instance-view .readonly-instance-panel .hardware-options > :not(.instance-picker) {
-  display: none !important;
-}
-
-.readonly-instance-view main > .panel:not(.hero):not(.readonly-instance-panel):not(:has(#backend-url)) {
-  display: none !important;
-}
-
-.readonly-instance-view .readonly-instance-panel .hardware-options {
-  display: block;
-}
-
-.readonly-instance-view .readonly-instance-panel .instance-card {
-  cursor: default;
-}
 
 label {
   display: flex;

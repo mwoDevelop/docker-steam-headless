@@ -3,24 +3,23 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>VM Control</title>
+    <title>VM Status</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link
       href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;700&display=swap"
       rel="stylesheet"
     >
-    <link rel="stylesheet" href="./styles.css?v=readonly-admin-vm-fix-20260724">
+    <link rel="stylesheet" href="./styles.css?v=readonly-status-activity-20260724">
     <script src="https://accounts.google.com/gsi/client" async defer></script>
   </head>
-  <body class="is-page-loading readonly-instance-view">
+  <body class="is-page-loading">
     <div id="page-loader" class="page-loader" role="status" aria-live="polite" aria-busy="true">
       <div class="page-loader-card">
         <span class="page-loader-spinner" aria-hidden="true"></span>
         <div>
-          <p class="page-loader-kicker">Loading VM Control</p>
-          <p id="page-loader-message">Preparing page components...</p>
-          <button id="cancel-gpu-scan" class="ghost page-loader-cancel hidden" type="button">Cancel Scan</button>
+          <p class="page-loader-kicker">Loading VM Status</p>
+          <p id="page-loader-message">Preparing read-only status...</p>
         </div>
       </div>
     </div>
@@ -29,15 +28,14 @@
       <section class="hero panel">
         <div>
           <p class="eyebrow">GitHub Pages + Cloud Run</p>
-          <h1>VM Control</h1>
+          <h1>VM Status</h1>
           <p class="hero-copy">
-            Secure control panel for a single GCE VM. The page signs in with Google,
-            then calls a Cloud Run API that starts, stops, restarts, or inspects
-            the instance directly.
+            Read-only status and public access details for currently running GCE instances.
+            Administration, VM lifecycle, backups, and software changes are available only in Administration.
           </p>
         </div>
         <div class="hero-note">
-          <p>No GitHub PAT is required in this mode. The page stores only the backend URL and a short-lived Google session token in the browser session.</p>
+          <p>No GitHub PAT is required. The page stores only the backend URL and a short-lived Google session token in the browser session.</p>
           <a href="../cloud-run-vm-control.md">Cloud Run setup guide</a>
         </div>
       </section>
@@ -75,188 +73,31 @@
             <p class="auth-card-label">Google Sign-In</p>
             <button id="google-sign-in" class="google-sign-in" type="button">Sign in with Google</button>
             <p class="auth-help">This always opens the Google account chooser instead of a personalized default button.</p>
-            <a class="ghost button-link" href="./admin.html">Admin</a>
+            <a class="ghost button-link" href="./admin.html">Administration</a>
             <button id="sign-out" class="ghost hidden" type="button">Sign Out</button>
           </div>
 
           <div class="auth-card">
-            <p class="auth-card-label">Target</p>
+            <p class="auth-card-label">Scope</p>
             <div id="target-summary" class="connection-summary">
-              <p>Backend not connected yet.</p>
+              <p>Read-only information is loaded after Google sign-in.</p>
             </div>
           </div>
         </div>
-
-        <p class="hint">
-          Configure the Cloud Run backend once, then use Google login for control.
-          The backend decides which Google accounts are allowed to operate the VM.
-        </p>
       </section>
 
-      <section class="panel readonly-instance-panel">
+      <section class="panel">
         <div class="section-head">
           <div>
             <p class="eyebrow">Read only</p>
             <h2>Running Instances</h2>
           </div>
+          <button id="refresh-instances" class="ghost" type="button">Refresh</button>
         </div>
-
-        <div class="hardware-options">
-          <div class="instance-picker">
-            <div class="instance-picker-head">
-              <div>
-                <span>Created instances</span>
-                <p>Pick an existing VM to fill Hardware and Zone from its current GCE configuration.</p>
-              </div>
-              <button id="refresh-instances" class="ghost" type="button">Refresh Instances</button>
-            </div>
-            <div id="instances-list" class="instance-list empty">
-              Sign in to load created instances.
-            </div>
-            <p id="instances-status">Created instances are loaded from Compute Engine.</p>
-          </div>
-
-          <label>
-            <span>Public endpoint</span>
-            <select id="endpoint-select" name="endpoint-select">
-              <option value="">Connect and sign in to load endpoints</option>
-            </select>
-          </label>
-          <p id="endpoint-status">Each endpoint has a separate DuckDNS name and regional external IP address.</p>
-
-          <div class="hardware-zone-actions">
-            <label>
-              <span>Hardware</span>
-              <select id="hardware-select" name="hardware-select">
-                <option value="">Connect and sign in to load hardware</option>
-              </select>
-            </label>
-            <label>
-              <span>Zone</span>
-              <select id="zone-select" name="zone-select">
-                <option value="">Select hardware first</option>
-              </select>
-            </label>
-            <div class="control-row single-zone-gpu-scan-row">
-              <button id="scan-selected-gpu" class="ghost" type="button">Scan All GPUs in Selected Zone</button>
-            </div>
-          </div>
-          <p class="gpu-compatibility-legend">
-            <span class="sunshine-verified">Green: tested with Sunshine</span>
-            <span class="sunshine-incompatible">Red: tested and fails with Sunshine</span>
-            <span class="sunshine-untested">Yellow: not tested with Sunshine</span>
-          </p>
-          <fieldset class="gpu-scan-scope-group">
-            <legend>Selected GPU - geographic scan</legend>
-            <label>
-              <span>GPU scan scope</span>
-              <select id="gpu-scan-scope" name="gpu-scan-scope">
-                <option value="all">All regions</option>
-                <option value="europe">Europe</option>
-                <option value="americas">Americas</option>
-                <option value="asia-pacific">Asia Pacific</option>
-                <option value="middle-east">Middle East</option>
-                <option value="africa">Africa</option>
-              </select>
-            </label>
-            <div class="control-row">
-              <button id="refresh-hardware" class="ghost" type="button">Scan All Compatible GPU Zones</button>
-            </div>
-          </fieldset>
-          <div id="hardware-price-estimate" class="hardware-price-card" data-tone="neutral">
-            Select hardware and zone to load estimated price.
-          </div>
-          <p id="hardware-options-status">Hardware and zone availability is loaded from Compute Engine.</p>
+        <div id="instances-list" class="instance-list empty">
+          Sign in to load running instances.
         </div>
-
-        <div class="control-row">
-          <button class="action create" type="button" data-command="create">Create</button>
-          <button class="action start" type="button" data-command="start">Start</button>
-          <button class="action restart" type="button" data-command="restart">Restart</button>
-          <button class="action stop" type="button" data-command="stop">Stop</button>
-          <button class="action status" type="button" data-command="status">Status</button>
-          <button class="action delete" type="button" data-command="delete">Delete</button>
-          <button id="check-gpu-capacity" class="action capacity-check" type="button">Reserve Selected GPU Capacity</button>
-          <button id="release-gpu-capacity" class="action capacity-release" type="button">
-            <span data-capacity-label>Release All GPU Reservations</span>
-            <span id="gpu-probe-count" class="gpu-probe-count" aria-label="Reserved GPU probes">0</span>
-          </button>
-        </div>
-
-        <div id="command-status" class="command-status" data-tone="neutral">
-          Command status will appear here.
-        </div>
-
-        <div id="banner" class="banner" data-tone="neutral">
-          Connect the Cloud Run backend and sign in with Google to control the VM.
-        </div>
-
-        <div class="start-options">
-          <label>
-            <span>Auto-stop hours</span>
-            <input
-              id="auto-stop-hours"
-              name="auto-stop-hours"
-              type="number"
-              min="1"
-              max="24"
-              step="1"
-              inputmode="numeric"
-              value="3"
-              placeholder="Hours, optional"
-            >
-          </label>
-          <button class="action status" type="button" data-command="set-auto-stop">Extend Auto-stop</button>
-          <p id="auto-stop-status">Auto-stop schedule will appear after VM status is loaded.</p>
-          <p>Leave empty to run without a scheduled shutdown during create/start. Use Extend Auto-stop on a running VM to reset the timer from now.</p>
-        </div>
-
-        <div class="backup-options">
-          <label>
-            <span>Backup to restore</span>
-            <select id="backup-select" name="backup-select">
-              <option value="">No backups loaded</option>
-            </select>
-          </label>
-          <div class="inline-action-group">
-            <button class="action backup" type="button" data-command="create-backup">Create Backup</button>
-            <button class="action restore" type="button" data-command="restore-backup">Restore Backup</button>
-            <button class="action delete" type="button" data-command="remove-backup">Remove Backup</button>
-          </div>
-          <p id="backup-options-status">Create a manual backup, then select it here before running Restore Backup.</p>
-        </div>
-
-        <div class="backup-options minecraft-options">
-          <label>
-            <span>Minecraft Server</span>
-            <input id="minecraft-address" type="text" readonly value="Connect backend to load address">
-          </label>
-          <p id="minecraft-options-status">Minecraft server status will appear after VM status is loaded.</p>
-        </div>
-
-        <div id="minecraft-management-controls" class="backup-options minecraft-options admin-only-controls" hidden>
-          <label>
-            <span>Server version (administrator)</span>
-            <select id="minecraft-version-select" name="minecraft-version-select">
-              <option value="">Connect backend to load versions</option>
-            </select>
-          </label>
-          <label>
-            <span>Server runtime</span>
-            <select id="minecraft-server-type-select" name="minecraft-server-type-select">
-              <option value="paper">Paper (plugins)</option>
-            </select>
-          </label>
-          <button id="refresh-minecraft-versions" class="ghost" type="button">Refresh Versions</button>
-          <div class="inline-action-group minecraft-action-group">
-            <button class="action backup" type="button" data-command="install-minecraft">Install</button>
-            <button class="action start" type="button" data-command="start-minecraft">Start</button>
-            <button class="action stop" type="button" data-command="stop-minecraft">Stop</button>
-            <button class="action restart" type="button" data-command="restart-minecraft">Restart</button>
-            <button class="action delete" type="button" data-command="remove-minecraft">Remove</button>
-          </div>
-        </div>
-
+        <p id="instances-status">Running instances are loaded from Compute Engine after Google sign-in.</p>
       </section>
 
       <section class="panel">
@@ -266,32 +107,15 @@
             <h2>Live Access</h2>
           </div>
           <p class="section-meta">
-            When the VM is running, the panel shows browser and streaming entry points.
+            Public Moonlight, Sunshine, browser desktop, and Minecraft addresses for running instances.
           </p>
         </div>
-
         <div id="access" class="access empty">
-          Refresh VM status to load current access details.
-        </div>
-      </section>
-
-      <section class="panel">
-        <div class="section-head">
-          <div>
-            <p class="eyebrow">Activity</p>
-            <h2>Local Session History</h2>
-          </div>
-          <p class="section-meta">
-            Recent control results from this browser only. No secrets are written to GitHub or Google Drive.
-          </p>
-        </div>
-
-        <div id="history" class="runs empty">
-          No actions recorded yet.
+          Sign in to load live access details.
         </div>
       </section>
     </main>
 
-  <script src="./app.js?v=readonly-admin-vm-fix-20260724"></script>
+    <script src="./readonly.js?v=readonly-status-activity-20260724"></script>
   </body>
 </html>
