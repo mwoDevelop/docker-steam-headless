@@ -7,9 +7,13 @@ import logging
 import os
 import re
 import secrets
+import socket
+import ssl
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+from http.client import HTTPConnection, HTTPSConnection
 from typing import Final
 from functools import lru_cache
 from typing import Any
@@ -1591,6 +1595,157 @@ def endpoint_public_payload(endpoint: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+LIVE_ACCESS_PROBE_TIMEOUT_SECONDS: Final = 5
+
+
+def live_access_probe_result(state: str, label: str, detail: str) -> dict[str, str]:
+    return {
+        "state": state,
+        "label": label,
+        "detail": detail,
+        "checkedAt": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def live_access_probe_error(error: Exception) -> str:
+    if isinstance(error, socket.timeout):
+        return "Connection timed out."
+    if isinstance(error, ConnectionRefusedError):
+        return "Connection was refused."
+    if isinstance(error, socket.gaierror):
+        return "DNS lookup failed."
+    message = str(error).strip()
+    return message[:160] if message else "Connection failed."
+
+
+def probe_http_live_access(host: str, port: int, service: str, tls: bool) -> dict[str, str]:
+    connection: HTTPConnection | HTTPSConnection | None = None
+    try:
+        if tls:
+            connection = HTTPSConnection(
+                host,
+                port,
+                timeout=LIVE_ACCESS_PROBE_TIMEOUT_SECONDS,
+                context=ssl._create_unverified_context(),
+            )
+        else:
+            connection = HTTPConnection(host, port, timeout=LIVE_ACCESS_PROBE_TIMEOUT_SECONDS)
+        connection.request("GET", "/", headers={"Host": host, "User-Agent": "steam-vm-control-live-access-probe"})
+        response = connection.getresponse()
+        response.read(1024)
+        if response.status < 500:
+            return live_access_probe_result("healthy", "Reachable", f"{service} responded with HTTP {response.status}.")
+        return live_access_probe_result("degraded", "Reachable, service error", f"{service} responded with HTTP {response.status}.")
+    except (OSError, ssl.SSLError) as error:
+        return live_access_probe_result("unreachable", "Unreachable", live_access_probe_error(error))
+    finally:
+        if connection:
+            connection.close()
+
+
+def encode_minecraft_varint(value: int) -> bytes:
+    encoded = bytearray()
+    while True:
+        byte = value & 0x7F
+        value >>= 7
+        encoded.append(byte | (0x80 if value else 0))
+        if not value:
+            return bytes(encoded)
+
+
+def decode_minecraft_varint(data: bytes, offset: int = 0) -> tuple[int, int]:
+    value = 0
+    for index in range(5):
+        if offset + index >= len(data):
+            raise ValueError("Incomplete Minecraft status response.")
+        byte = data[offset + index]
+        value |= (byte & 0x7F) << (7 * index)
+        if not byte & 0x80:
+            return value, offset + index + 1
+    raise ValueError("Invalid Minecraft status response.")
+
+
+def receive_minecraft_varint(connection: socket.socket) -> int:
+    data = bytearray()
+    while len(data) < 5:
+        byte = connection.recv(1)
+        if not byte:
+            raise ValueError("Minecraft server closed the status connection.")
+        data.extend(byte)
+        if not byte[0] & 0x80:
+            return decode_minecraft_varint(bytes(data))[0]
+    raise ValueError("Invalid Minecraft status response.")
+
+
+def receive_minecraft_bytes(connection: socket.socket, length: int) -> bytes:
+    if length < 0 or length > 65536:
+        raise ValueError("Invalid Minecraft status response length.")
+    data = bytearray()
+    while len(data) < length:
+        chunk = connection.recv(length - len(data))
+        if not chunk:
+            raise ValueError("Minecraft server closed the status connection.")
+        data.extend(chunk)
+    return bytes(data)
+
+
+def probe_minecraft_live_access(host: str) -> dict[str, str]:
+    try:
+        with socket.create_connection((host, 25565), timeout=LIVE_ACCESS_PROBE_TIMEOUT_SECONDS) as connection:
+            connection.settimeout(LIVE_ACCESS_PROBE_TIMEOUT_SECONDS)
+            host_bytes = host.encode("utf-8")
+            handshake = (
+                encode_minecraft_varint(0)
+                + encode_minecraft_varint(765)
+                + encode_minecraft_varint(len(host_bytes))
+                + host_bytes
+                + (25565).to_bytes(2, "big")
+                + encode_minecraft_varint(1)
+            )
+            connection.sendall(encode_minecraft_varint(len(handshake)) + handshake)
+            connection.sendall(b"\x01\x00")
+            payload = receive_minecraft_bytes(connection, receive_minecraft_varint(connection))
+            packet_id, offset = decode_minecraft_varint(payload)
+            response_length, offset = decode_minecraft_varint(payload, offset)
+            if packet_id != 0 or response_length > len(payload) - offset:
+                raise ValueError("Minecraft server returned an invalid status response.")
+            status = json.loads(payload[offset:offset + response_length].decode("utf-8"))
+            version = str(status.get("version", {}).get("name", "") or "").strip() if isinstance(status, dict) else ""
+            if not isinstance(status, dict):
+                raise ValueError("Minecraft server returned an invalid status response.")
+            detail = "Minecraft status ping succeeded" + (f" ({version})." if version else ".")
+            return live_access_probe_result("healthy", "Reachable", detail)
+    except (OSError, ValueError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        return live_access_probe_result("unreachable", "Unreachable", live_access_probe_error(error))
+
+
+def build_live_access_reachability_payload(endpoint: dict[str, Any]) -> dict[str, Any]:
+    host = str(endpoint.get("domain", "") or "").strip().lower()
+    if not re.fullmatch(r"[a-z0-9-]+\.duckdns\.org", host):
+        unavailable = live_access_probe_result("unreachable", "Unreachable", "A valid managed DuckDNS host is not assigned.")
+        return {
+            "endpointId": endpoint["id"],
+            "host": host,
+            "checkedAt": unavailable["checkedAt"],
+            "services": {"sunshine": unavailable, "novnc": unavailable, "minecraft": unavailable},
+        }
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        sunshine_probe = executor.submit(probe_http_live_access, host, 47990, "Sunshine", True)
+        novnc_probe = executor.submit(probe_http_live_access, host, 8083, "noVNC", False)
+        minecraft_probe = executor.submit(probe_minecraft_live_access, host)
+        services = {
+            "sunshine": sunshine_probe.result(),
+            "novnc": novnc_probe.result(),
+            "minecraft": minecraft_probe.result(),
+        }
+    return {
+        "endpointId": endpoint["id"],
+        "host": host,
+        "checkedAt": datetime.now(timezone.utc).isoformat(),
+        "services": services,
+    }
+
+
 def build_admin_endpoints_payload(admin_user: dict[str, Any]) -> dict[str, Any]:
     return {"user": admin_user, "endpoints": [endpoint_public_payload(endpoint) for endpoint in reconcile_endpoint_instance_bindings()]}
 
@@ -2939,6 +3094,7 @@ def handle_unexpected_error(error: Exception):
 @app.route("/api/admin/software", methods=["GET", "POST", "OPTIONS"])
 @app.route("/api/hardware", methods=["GET", "OPTIONS"])
 @app.route("/api/instances", methods=["GET", "OPTIONS"])
+@app.route("/api/reachability", methods=["GET", "OPTIONS"])
 @app.route("/api/price", methods=["GET", "OPTIONS"])
 @app.route("/api/minecraft/versions", methods=["GET", "POST", "OPTIONS"])
 @app.route("/api/minecraft/management", methods=["GET", "POST", "OPTIONS"])
@@ -3168,6 +3324,11 @@ def options_passthrough():
     if request.path == "/api/instances":
         require_user()
         return jsonify(build_instances_payload())
+
+    if request.path == "/api/reachability":
+        require_user()
+        endpoint_id = normalize_endpoint_id(request.args.get("endpointId", ""))
+        return jsonify(build_live_access_reachability_payload(endpoint_by_id(endpoint_id)))
 
     if request.path == "/api/price":
         require_user()

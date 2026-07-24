@@ -935,6 +935,11 @@ code,
   background: var(--warn);
 }
 
+.access-meta .reachability-status {
+  margin: 0 0 0 8px;
+  vertical-align: middle;
+}
+
 .service-status.ready {
   border-color: rgba(106, 228, 208, 0.28);
   background: rgba(106, 228, 208, 0.08);

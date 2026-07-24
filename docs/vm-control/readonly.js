@@ -36,6 +36,7 @@
     tokenExpiresAt: 0,
     user: null,
     instances: [],
+    reachabilityByEndpoint: {},
     isBusy: false,
   };
 
@@ -161,6 +162,7 @@
     storeSessionToken("");
     state.user = null;
     state.instances = [];
+    state.reachabilityByEndpoint = {};
     renderAuthUi();
     renderInstances([]);
     renderLiveAccess([]);
@@ -302,6 +304,28 @@
     return endpoints.find((endpoint) => String(endpoint?.instanceName || "").trim() === String(instance?.name || "").trim()) || null;
   }
 
+  function reachabilityStatus(probe) {
+    if (!probe) {
+      return "<span class=\"service-status starting reachability-status\"><span class=\"service-status-dot\"></span>Checking reachability...</span>";
+    }
+    if (probe.error) {
+      return "<span class=\"service-status error reachability-status\" title=\"" + escapeHtml(probe.error) + "\"><span class=\"service-status-dot\"></span>Check failed</span>";
+    }
+    const status = String(probe.state || "unreachable").toLowerCase();
+    const className = status === "healthy" ? "ready" : (status === "degraded" ? "starting" : "error");
+    const label = String(probe.label || (status === "healthy" ? "Reachable" : "Unreachable"));
+    const detail = String(probe.detail || "");
+    return "<span class=\"service-status " + className + " reachability-status\" title=\"" + escapeHtml(detail) + "\"><span class=\"service-status-dot\"></span>" + escapeHtml(label) + "</span>";
+  }
+
+  function missingEndpointReachability() {
+    return {
+      sunshine: { state: "unreachable", label: "Unreachable", detail: "No managed DNS endpoint is assigned." },
+      novnc: { state: "unreachable", label: "Unreachable", detail: "No managed DNS endpoint is assigned." },
+      minecraft: { state: "unreachable", label: "Unreachable", detail: "No managed DNS endpoint is assigned." },
+    };
+  }
+
   function renderLiveAccess(instances) {
     if (!state.user) {
       elements.access.className = "access empty";
@@ -318,6 +342,9 @@
     elements.access.innerHTML = "<div class=\"access-grid\">"
       + running.map((instance) => {
         const endpoint = endpointForInstance(instance);
+        const reachability = endpoint
+          ? state.reachabilityByEndpoint[String(endpoint.id || "")]?.services || state.reachabilityByEndpoint[String(endpoint.id || "")]
+          : missingEndpointReachability();
         const host = String(endpoint?.domain || instance.externalIp || "").trim();
         const hostHtml = escapeHtml(host || "External address not assigned");
         const sunshineUrl = host ? "https://" + host + ":47990/" : "";
@@ -334,13 +361,31 @@
           + "<p class=\"access-meta\">Host: <code>" + hostHtml + "</code></p>"
           + "<p class=\"access-meta\">Sunshine: <code>" + escapeHtml(serviceLabel(instance.sunshineStatus, "sunshine")) + "</code></p>"
           + sunshineLink
-          + (sunshineUrl ? "<p class=\"access-meta\">Sunshine URL: <code>" + escapeHtml(sunshineUrl) + "</code></p>" : "")
+          + (sunshineUrl ? "<p class=\"access-meta\">Sunshine URL: <code>" + escapeHtml(sunshineUrl) + "</code>" + reachabilityStatus(reachability?.sunshine) + "</p>" : "")
           + novncLink
-          + (novncUrl ? "<p class=\"access-meta\">Browser desktop: <code>" + escapeHtml(novncUrl) + "</code></p>" : "")
-          + "<p class=\"access-meta\">Minecraft: <code>" + escapeHtml(minecraftAddress) + "</code> · " + escapeHtml(serviceLabel(instance.minecraftStatus, "minecraft")) + "</p>"
+          + (novncUrl ? "<p class=\"access-meta\">Browser desktop: <code>" + escapeHtml(novncUrl) + "</code>" + reachabilityStatus(reachability?.novnc) + "</p>" : "")
+          + "<p class=\"access-meta\">Minecraft: <code>" + escapeHtml(minecraftAddress) + "</code> · " + escapeHtml(serviceLabel(instance.minecraftStatus, "minecraft")) + reachabilityStatus(reachability?.minecraft) + "</p>"
           + "</article>";
       }).join("")
       + "</div>";
+  }
+
+  async function refreshReachability(instances) {
+    const endpoints = runningInstances(instances)
+      .map((instance) => endpointForInstance(instance))
+      .filter((endpoint) => endpoint?.id);
+    state.reachabilityByEndpoint = {};
+    for (const endpoint of endpoints) state.reachabilityByEndpoint[String(endpoint.id)] = {};
+    renderLiveAccess(instances);
+    await Promise.all(endpoints.map(async (endpoint) => {
+      const endpointId = String(endpoint.id);
+      try {
+        state.reachabilityByEndpoint[endpointId] = await fetchApi("/api/reachability?endpointId=" + encodeURIComponent(endpointId), { method: "GET" });
+      } catch (error) {
+        state.reachabilityByEndpoint[endpointId] = { error: error instanceof Error ? error.message : String(error || "Reachability check failed.") };
+      }
+    }));
+    renderLiveAccess(instances);
   }
 
   async function refreshInstances() {
@@ -350,6 +395,7 @@
     state.instances = Array.isArray(payload?.instances) ? payload.instances : [];
     renderInstances(state.instances);
     renderLiveAccess(state.instances);
+    await refreshReachability(state.instances);
   }
 
   async function handleGoogleToken(response) {
