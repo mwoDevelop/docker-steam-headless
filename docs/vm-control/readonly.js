@@ -102,7 +102,7 @@
   function renderTargetSummary() {
     if (!elements.targetSummary) return;
     if (state.user) {
-      const administration = state.user.isAdmin ? " <a href=\"./admin.html\">Open Administration</a>." : "";
+      const administration = state.user.isAdmin ? " Administrator access is available from the Administration button." : "";
       elements.targetSummary.innerHTML = "<p>Signed in for read-only instance and live-access information." + administration + "</p>";
       return;
     }
