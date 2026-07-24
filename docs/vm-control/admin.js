@@ -882,13 +882,28 @@
     const applications = Array.isArray(payload.applicationCatalog) ? payload.applicationCatalog : [];
     elements.softwareApplication.innerHTML = optionList(applications, previousApplication, "No applications available");
     const minecraft = payload.minecraftServer || {};
-    const minecraftVersions = minecraft.versions || minecraft.availableVersions || [];
-    const selectedVersion = previousVersion || minecraft.selectedVersion || minecraft.version || "";
-    elements.softwareMinecraftVersion.innerHTML = optionList(minecraftVersions, selectedVersion, "No Minecraft versions available");
+    const serverTypes = Array.isArray(minecraft.serverTypes) ? minecraft.serverTypes : [];
     const selectedServerType = previousServerType || minecraft.serverType || "paper";
+    elements.softwareMinecraftServerType.innerHTML = optionList(serverTypes, selectedServerType, "No runtimes available");
     if ([...elements.softwareMinecraftServerType.options].some((option) => option.value === selectedServerType)) {
       elements.softwareMinecraftServerType.value = selectedServerType;
     }
+    const activeServerType = String(elements.softwareMinecraftServerType.value || selectedServerType || "paper");
+    const versionCatalogs = minecraft.versionCatalogs && typeof minecraft.versionCatalogs === "object"
+      ? minecraft.versionCatalogs
+      : {};
+    const versionCatalog = versionCatalogs[activeServerType] || {
+      versions: minecraft.versions || minecraft.availableVersions || [],
+      defaultVersion: minecraft.defaultVersion || "",
+      source: minecraft.source || "static",
+      updatedAt: minecraft.updatedAt || "",
+      lastError: minecraft.error || "",
+    };
+    const minecraftVersions = Array.isArray(versionCatalog.versions) ? versionCatalog.versions : [];
+    const selectedVersion = minecraftVersions.includes(previousVersion)
+      ? previousVersion
+      : (versionCatalog.defaultVersion || minecraftVersions[0] || "");
+    elements.softwareMinecraftVersion.innerHTML = optionList(minecraftVersions, selectedVersion, "Refresh Minecraft Versions to load this runtime catalog");
 
     const status = payload.status || {};
     const allowedCommands = new Set(Array.isArray(status.allowedCommands) ? status.allowedCommands : []);
@@ -898,8 +913,11 @@
       || (status.minecraft && (status.minecraft.state || status.minecraft.status))
       || "not installed"
     );
-    elements.softwareStatus.textContent = `${payload.endpoint && payload.endpoint.id ? payload.endpoint.id : "Selected endpoint"}: VM ${instanceState}, Minecraft ${minecraftState}.`;
-    elements.softwareStatus.dataset.tone = instanceState === "RUNNING" ? "success" : "neutral";
+    const catalogDetail = versionCatalog.lastError
+      ? ` Version catalog for ${activeServerType}: ${versionCatalog.lastError}`
+      : ` Version catalog for ${activeServerType}: ${minecraftVersions.length} entries${versionCatalog.source ? ` (${versionCatalog.source})` : ""}.`;
+    elements.softwareStatus.textContent = `${payload.endpoint && payload.endpoint.id ? payload.endpoint.id : "Selected endpoint"}: VM ${instanceState}, Minecraft ${minecraftState}.${catalogDetail}`;
+    elements.softwareStatus.dataset.tone = versionCatalog.lastError ? "warning" : (instanceState === "RUNNING" ? "success" : "neutral");
     document.querySelectorAll("[data-software-command]").forEach((button) => {
       const command = button.dataset.softwareCommand || "";
       const needsApplication = command === "install-app" || command === "uninstall-app";

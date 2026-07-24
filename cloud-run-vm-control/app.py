@@ -11,6 +11,7 @@ import socket
 import ssl
 import threading
 import time
+import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from http.client import HTTPConnection, HTTPSConnection
@@ -423,11 +424,12 @@ APPLICATION_IDS: Final = {str(app["id"]) for app in APPLICATION_CATALOG}
 SECRET_MANAGER_BASE_URL = "https://secretmanager.googleapis.com/v1"
 PAPERMC_PROJECT_URL = "https://fill.papermc.io/v3/projects/paper"
 PAPERMC_USER_AGENT = "docker-steam-headless-vm-control/1.0"
+PURPURMC_PROJECT_URL = "https://api.purpurmc.org/v2/purpur"
+FABRIC_GAME_VERSIONS_URL = "https://meta.fabricmc.net/v2/versions/game"
+FORGE_MAVEN_METADATA_URL = "https://maven.minecraftforge.net/net/minecraftforge/forge/maven-metadata.xml"
+NEOFORGE_MAVEN_METADATA_URL = "https://maven.neoforged.net/releases/net/neoforged/neoforge/maven-metadata.xml"
 MINECRAFT_VERSION_CACHE: dict[str, Any] = {
-    "versions": [],
-    "source": "static",
-    "updatedAt": "",
-    "lastError": "",
+    "catalogs": {},
     "loaded": False,
 }
 DEFAULT_STEAM_HEADLESS_IMAGE: Final = "josh5/steam-headless:latest"
@@ -511,39 +513,82 @@ def configured_minecraft_version_options() -> list[str]:
     return versions
 
 
-def minecraft_version_options() -> list[str]:
+def minecraft_version_catalog(server_type: Any = DEFAULT_MINECRAFT_SERVER_TYPE) -> dict[str, Any]:
     load_persisted_minecraft_versions()
-    cached_versions = MINECRAFT_VERSION_CACHE.get("versions")
-    if isinstance(cached_versions, list) and cached_versions:
-        return [str(version) for version in cached_versions if str(version or "").strip()]
-    return configured_minecraft_version_options()
+    normalized_server_type = normalize_minecraft_server_type(server_type)
+    catalogs = MINECRAFT_VERSION_CACHE.get("catalogs")
+    catalog = catalogs.get(normalized_server_type) if isinstance(catalogs, dict) else None
+    versions = normalize_minecraft_version_list(catalog.get("versions")) if isinstance(catalog, dict) else []
+    if versions:
+        return {
+            "versions": versions,
+            "defaultVersion": versions[0],
+            "source": str(catalog.get("source") or "cache"),
+            "updatedAt": str(catalog.get("updatedAt") or ""),
+            "lastError": str(catalog.get("lastError") or ""),
+        }
+    if normalized_server_type == DEFAULT_MINECRAFT_SERVER_TYPE:
+        versions = configured_minecraft_version_options()
+        return {
+            "versions": versions,
+            "defaultVersion": versions[0],
+            "source": "static",
+            "updatedAt": "",
+            "lastError": str(catalog.get("lastError") or "") if isinstance(catalog, dict) else "",
+        }
+    return {
+        "versions": [],
+        "defaultVersion": "",
+        "source": "unavailable",
+        "updatedAt": "",
+        "lastError": str(catalog.get("lastError") or "Refresh Minecraft Versions to load this runtime catalog.") if isinstance(catalog, dict) else "Refresh Minecraft Versions to load this runtime catalog.",
+    }
 
 
-def default_minecraft_version() -> str:
-    return minecraft_version_options()[0]
+def minecraft_version_options(server_type: Any = DEFAULT_MINECRAFT_SERVER_TYPE) -> list[str]:
+    return list(minecraft_version_catalog(server_type).get("versions") or [])
 
 
-def latest_concrete_minecraft_version() -> str:
-    for version in minecraft_version_options():
+def default_minecraft_version(server_type: Any = DEFAULT_MINECRAFT_SERVER_TYPE) -> str:
+    catalog = minecraft_version_catalog(server_type)
+    return str(catalog.get("defaultVersion") or "")
+
+
+def latest_concrete_minecraft_version(server_type: Any = DEFAULT_MINECRAFT_SERVER_TYPE) -> str:
+    for version in minecraft_version_options(server_type):
         candidate = str(version or "").strip()
         if candidate and candidate.upper() != "LATEST":
             return candidate
     raise ApiError("No concrete Minecraft server version is available.", 503)
 
 
-def concrete_minecraft_version(version: str) -> str:
+def concrete_minecraft_version(version: str, server_type: Any = DEFAULT_MINECRAFT_SERVER_TYPE) -> str:
     normalized = normalize_minecraft_version(version)
-    return latest_concrete_minecraft_version() if normalized.upper() == "LATEST" else normalized
+    return latest_concrete_minecraft_version(server_type) if normalized.upper() == "LATEST" else normalized
 
 
-def minecraft_version_payload(*, refreshed: bool = False, error: str = "") -> dict[str, Any]:
+def minecraft_version_payload(
+    *,
+    selected_server_type: Any = DEFAULT_MINECRAFT_SERVER_TYPE,
+    refreshed: bool = False,
+    error: str = "",
+) -> dict[str, Any]:
+    normalized_server_type = normalize_minecraft_server_type(selected_server_type)
+    catalogs = {
+        server_type: minecraft_version_catalog(server_type)
+        for server_type in MINECRAFT_SERVER_TYPES
+    }
+    selected_catalog = catalogs[normalized_server_type]
     return {
-        "versions": minecraft_version_options(),
-        "defaultVersion": default_minecraft_version(),
+        "versions": selected_catalog["versions"],
+        "availableVersions": selected_catalog["versions"],
+        "defaultVersion": selected_catalog["defaultVersion"],
+        "serverType": normalized_server_type,
         "serverTypes": minecraft_server_type_options(),
         "defaultServerType": DEFAULT_MINECRAFT_SERVER_TYPE,
-        "source": MINECRAFT_VERSION_CACHE.get("source") or "static",
-        "updatedAt": MINECRAFT_VERSION_CACHE.get("updatedAt") or "",
+        "versionCatalogs": catalogs,
+        "source": selected_catalog["source"],
+        "updatedAt": selected_catalog["updatedAt"],
         "refreshed": refreshed,
         "error": error,
     }
@@ -562,83 +607,162 @@ def minecraft_version_sort_key(version: str) -> tuple[int, list[int], str]:
     return (1 if "-" not in version else 0, parts, version)
 
 
-def refresh_minecraft_versions_from_papermc() -> dict[str, Any]:
-    previous_versions = minecraft_version_options()
-    previous_cache = dict(MINECRAFT_VERSION_CACHE)
+def stable_paper_versions(session: requests.Session, headers: dict[str, str]) -> list[str]:
+    response = session.get(PAPERMC_PROJECT_URL, headers=headers, timeout=20)
+    if response.status_code >= 400:
+        raise ApiError(f"PaperMC version API returned {response.status_code}.", 502)
+    data = response.json()
+    grouped_versions = data.get("versions", {})
+    if not isinstance(grouped_versions, dict):
+        raise ApiError("PaperMC version API returned an unexpected payload.", 502)
+    raw_versions = sorted(
+        {
+            str(version)
+            for values in grouped_versions.values()
+            if isinstance(values, list)
+            for version in values
+            if version
+        },
+        key=minecraft_version_sort_key,
+        reverse=True,
+    )
+    stable_versions: list[str] = []
+    for version in raw_versions:
+        builds_response = session.get(f"{PAPERMC_PROJECT_URL}/versions/{version}/builds", headers=headers, timeout=15)
+        if builds_response.status_code >= 400:
+            continue
+        builds = builds_response.json()
+        if any(
+            isinstance(build, dict)
+            and str(build.get("channel", "")).upper() == "STABLE"
+            and "server:default" in (build.get("downloads") or {})
+            for build in (builds if isinstance(builds, list) else [])
+        ):
+            stable_versions.append(version)
+    if not stable_versions:
+        raise ApiError("PaperMC did not return any stable server versions.", 502)
+    return stable_versions
+
+
+def stable_purpur_versions(session: requests.Session, headers: dict[str, str]) -> list[str]:
+    response = session.get(PURPURMC_PROJECT_URL, headers=headers, timeout=20)
+    if response.status_code >= 400:
+        raise ApiError(f"Purpur version API returned {response.status_code}.", 502)
+    data = response.json()
+    versions = data.get("versions") if isinstance(data, dict) else None
+    return normalize_minecraft_version_list(versions)
+
+
+def stable_fabric_versions(session: requests.Session, headers: dict[str, str]) -> list[str]:
+    response = session.get(FABRIC_GAME_VERSIONS_URL, headers=headers, timeout=20)
+    if response.status_code >= 400:
+        raise ApiError(f"Fabric version API returned {response.status_code}.", 502)
+    data = response.json()
+    versions = [item.get("version") for item in data if isinstance(item, dict) and item.get("stable")]
+    return normalize_minecraft_version_list(versions)
+
+
+def maven_metadata_versions(session: requests.Session, headers: dict[str, str], url: str, source_name: str) -> list[str]:
+    response = session.get(url, headers=headers, timeout=20)
+    if response.status_code >= 400:
+        raise ApiError(f"{source_name} version metadata returned {response.status_code}.", 502)
+    try:
+        root = ET.fromstring(response.text)
+    except ET.ParseError as error:
+        raise ApiError(f"{source_name} version metadata was invalid XML.", 502) from error
+    return [str(node.text or "").strip() for node in root.findall(".//version") if str(node.text or "").strip()]
+
+
+def stable_forge_versions(session: requests.Session, headers: dict[str, str]) -> list[str]:
+    artifact_versions = maven_metadata_versions(session, headers, FORGE_MAVEN_METADATA_URL, "Forge")
+    return normalize_minecraft_version_list([
+        artifact.split("-", 1)[0]
+        for artifact in artifact_versions
+        if "-" in artifact and not re.search(r"(?:alpha|beta|rc|snapshot|pre)", artifact, re.IGNORECASE)
+    ])
+
+
+def minecraft_version_from_neoforge_artifact(artifact: str) -> str:
+    core = artifact.split("-", 1)[0]
+    parts = core.split(".")
+    if len(parts) < 3 or not all(part.isdigit() for part in parts):
+        return ""
+    minecraft_parts = parts[:-1]
+    if core.startswith("1."):
+        candidate = ".".join(minecraft_parts)
+    elif int(parts[0]) <= 25:
+        candidate = "1." + ".".join(minecraft_parts)
+    else:
+        candidate = ".".join(minecraft_parts)
+    return candidate[:-2] if candidate.endswith(".0") else candidate
+
+
+def stable_neoforge_versions(session: requests.Session, headers: dict[str, str]) -> list[str]:
+    artifact_versions = maven_metadata_versions(session, headers, NEOFORGE_MAVEN_METADATA_URL, "NeoForge")
+    return normalize_minecraft_version_list([
+        minecraft_version_from_neoforge_artifact(artifact)
+        for artifact in artifact_versions
+        if not re.search(r"(?:alpha|beta|rc|snapshot|pre)", artifact, re.IGNORECASE)
+    ])
+
+
+def refresh_minecraft_version_catalogs() -> dict[str, Any]:
+    load_persisted_minecraft_versions()
+    previous_catalogs = dict(MINECRAFT_VERSION_CACHE.get("catalogs") or {})
     session = requests.Session()
     headers = {"User-Agent": PAPERMC_USER_AGENT, "Accept": "application/json"}
-    try:
-        response = session.get(PAPERMC_PROJECT_URL, headers=headers, timeout=20)
-        if response.status_code >= 400:
-            raise ApiError(f"PaperMC version API returned {response.status_code}.", 502)
-        data = response.json()
-        grouped_versions = data.get("versions", {})
-        if not isinstance(grouped_versions, dict):
-            raise ApiError("PaperMC version API returned an unexpected payload.", 502)
-
-        raw_versions: list[str] = []
-        for values in grouped_versions.values():
-            if isinstance(values, list):
-                raw_versions.extend(str(value) for value in values if value)
-        raw_versions = sorted(set(raw_versions), key=minecraft_version_sort_key, reverse=True)
-
-        stable_versions: list[str] = []
-        for version in raw_versions:
-            builds_response = session.get(
-                f"{PAPERMC_PROJECT_URL}/versions/{version}/builds",
-                headers=headers,
-                timeout=15,
-            )
-            if builds_response.status_code >= 400:
-                continue
-            builds = builds_response.json()
-            if not isinstance(builds, list):
-                continue
-            has_stable_server = any(
-                isinstance(build, dict)
-                and str(build.get("channel", "")).upper() == "STABLE"
-                and isinstance(build.get("downloads"), dict)
-                and "server:default" in build.get("downloads", {})
-                for build in builds
-            )
-            if has_stable_server:
-                stable_versions.append(version)
-
-        if not stable_versions:
-            raise ApiError("PaperMC did not return any stable server versions.", 502)
-
-        versions = ["LATEST", *[version for version in stable_versions if version != "LATEST"]]
-        updated_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        save_persisted_minecraft_versions(versions, source="papermc", updated_at=updated_at)
-        MINECRAFT_VERSION_CACHE.update(
-            {
+    fetchers = {
+        "paper": ("papermc", stable_paper_versions),
+        "purpur": ("purpurmc", stable_purpur_versions),
+        "fabric": ("fabricmc", stable_fabric_versions),
+        "forge": ("minecraftforge", stable_forge_versions),
+        "neoforge": ("neoforged", stable_neoforge_versions),
+    }
+    updated_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    catalogs: dict[str, dict[str, Any]] = {}
+    errors: list[str] = []
+    for server_type, (source, fetcher) in fetchers.items():
+        try:
+            versions = normalize_minecraft_version_list(fetcher(session, headers))
+            if len(versions) <= 1:
+                raise ApiError(f"{minecraft_server_type_spec(server_type)['label']} did not return any stable Minecraft versions.", 502)
+            catalogs[server_type] = {
                 "versions": versions,
-                "source": "papermc",
+                "source": source,
                 "updatedAt": updated_at,
                 "lastError": "",
-                "loaded": True,
             }
-        )
-        return minecraft_version_payload(refreshed=True)
+        except Exception as error:
+            message = error.message if isinstance(error, ApiError) else str(error)
+            previous = previous_catalogs.get(server_type)
+            previous_versions = normalize_minecraft_version_list(previous.get("versions")) if isinstance(previous, dict) else []
+            catalogs[server_type] = {
+                "versions": previous_versions,
+                "source": str(previous.get("source") or "unavailable") if isinstance(previous, dict) else "unavailable",
+                "updatedAt": str(previous.get("updatedAt") or "") if isinstance(previous, dict) else "",
+                "lastError": message,
+            }
+            errors.append(f"{minecraft_server_type_spec(server_type)['label']}: {message}")
+    try:
+        save_persisted_minecraft_versions(catalogs)
+        MINECRAFT_VERSION_CACHE.update({"catalogs": catalogs, "loaded": True})
     except Exception as error:
         message = error.message if isinstance(error, ApiError) else str(error)
-        MINECRAFT_VERSION_CACHE.update(
-            {
-                "versions": previous_versions,
-                "source": previous_cache.get("source") or "static",
-                "updatedAt": previous_cache.get("updatedAt") or "",
-                "lastError": message,
-                "loaded": True,
-            }
-        )
-        return minecraft_version_payload(refreshed=False, error=message)
+        MINECRAFT_VERSION_CACHE.update({"catalogs": previous_catalogs, "loaded": True})
+        errors.append(f"cache: {message}")
+    return minecraft_version_payload(refreshed=not errors, error="; ".join(errors))
 
 
-def parse_minecraft_version(payload: Any) -> str:
+def parse_minecraft_version(payload: Any, server_type: Any = DEFAULT_MINECRAFT_SERVER_TYPE) -> str:
+    normalized_server_type = normalize_minecraft_server_type(server_type)
     raw_version = payload.get("minecraftVersion") if hasattr(payload, "get") else ""
-    version = normalize_minecraft_version(raw_version or default_minecraft_version())
-    if version not in set(minecraft_version_options()):
-        raise ApiError(f"Minecraft server version {version} is not available.", 400)
+    catalog = minecraft_version_catalog(normalized_server_type)
+    version = normalize_minecraft_version(raw_version or catalog.get("defaultVersion"))
+    available_versions = set(catalog.get("versions") or [])
+    if not available_versions:
+        raise ApiError(f"Minecraft version catalog for {minecraft_server_type_spec(normalized_server_type)['label']} is not ready. Refresh Minecraft Versions first.", 409)
+    if version not in available_versions:
+        raise ApiError(f"Minecraft server version {version} is not available for {minecraft_server_type_spec(normalized_server_type)['label']}.", 400)
     return version
 
 
@@ -801,32 +925,41 @@ def load_persisted_minecraft_versions() -> None:
         payload = json.loads(base64.b64decode(encoded).decode("utf-8"))
         if not isinstance(payload, dict):
             raise ValueError("cache payload is not an object")
-        versions = normalize_minecraft_version_list(payload.get("versions"))
-        if not versions:
-            raise ValueError("cache does not contain valid versions")
-        MINECRAFT_VERSION_CACHE.update(
-            {
+        raw_catalogs = payload.get("catalogs")
+        catalogs: dict[str, dict[str, Any]] = {}
+        if isinstance(raw_catalogs, dict):
+            for server_type in MINECRAFT_SERVER_TYPES:
+                raw_catalog = raw_catalogs.get(server_type)
+                versions = normalize_minecraft_version_list(raw_catalog.get("versions")) if isinstance(raw_catalog, dict) else []
+                if versions:
+                    catalogs[server_type] = {
+                        "versions": versions,
+                        "source": str(raw_catalog.get("source") or "cache"),
+                        "updatedAt": str(raw_catalog.get("updatedAt") or ""),
+                        "lastError": str(raw_catalog.get("lastError") or ""),
+                    }
+        if not catalogs:
+            versions = normalize_minecraft_version_list(payload.get("versions"))
+            if not versions:
+                raise ValueError("cache does not contain valid version catalogs")
+            catalogs[DEFAULT_MINECRAFT_SERVER_TYPE] = {
                 "versions": versions,
                 "source": str(payload.get("source") or "cache"),
                 "updatedAt": str(payload.get("updatedAt") or ""),
                 "lastError": "",
             }
-        )
+        MINECRAFT_VERSION_CACHE["catalogs"] = catalogs
     except Exception as error:
         logging.warning("Unable to load persisted Minecraft versions cache: %s", error)
         MINECRAFT_VERSION_CACHE["lastError"] = str(error)
 
 
-def save_persisted_minecraft_versions(versions: list[str], *, source: str, updated_at: str) -> None:
+def save_persisted_minecraft_versions(catalogs: dict[str, dict[str, Any]]) -> None:
     secret_name = str(CONFIG["minecraft_versions_secret_name"] or "").strip()
     if not secret_name:
         raise ApiError("Minecraft versions cache secret is not configured.", 500)
     payload = json.dumps(
-        {
-            "versions": versions,
-            "source": source,
-            "updatedAt": updated_at,
-        },
+        {"catalogs": catalogs},
         separators=(",", ":"),
     ).encode("utf-8")
     response = compute_session().post(
@@ -3247,7 +3380,7 @@ def options_passthrough():
         if request.method == "POST":
             command = str(source.get("command", "")).strip().lower()
             if command == "refresh-minecraft-versions":
-                refresh_minecraft_versions_from_papermc()
+                refresh_minecraft_version_catalogs()
             elif command in {
                 "install-app",
                 "uninstall-app",
@@ -3360,7 +3493,7 @@ def options_passthrough():
     if request.path == "/api/minecraft/versions":
         if request.method == "POST":
             require_admin_user()
-            return jsonify(refresh_minecraft_versions_from_papermc())
+            return jsonify(refresh_minecraft_version_catalogs())
         require_user()
         return jsonify(minecraft_version_payload())
 
@@ -6932,15 +7065,15 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
         if command == "install-minecraft":
             require_live_backup_ready(current_instance, command)
         ensure_firewall_rule(CONFIG["firewall_rule_minecraft"], FIREWALL_MINECRAFT_ALLOWED)
-        minecraft_version = (
-            concrete_minecraft_version(parse_minecraft_version(payload))
-            if command == "install-minecraft"
-            else minecraft_version_from_instance(current_instance)
-        )
         minecraft_server_type = (
             parse_minecraft_server_type(payload)
             if command == "install-minecraft"
             else minecraft_server_type_from_instance(current_instance)
+        )
+        minecraft_version = (
+            concrete_minecraft_version(parse_minecraft_version(payload, minecraft_server_type), minecraft_server_type)
+            if command == "install-minecraft"
+            else minecraft_version_from_instance(current_instance)
         )
         target_phase = {
             "install-minecraft": "installed",
