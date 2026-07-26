@@ -19,6 +19,9 @@ MINECRAFT_STATUS_METADATA_KEY="vm-minecraft-status"
 MINECRAFT_STATUS_DETAIL_METADATA_KEY="vm-minecraft-status-detail"
 MINECRAFT_VERSION_METADATA_KEY="vm-minecraft-version"
 MINECRAFT_SERVER_TYPE_METADATA_KEY="vm-minecraft-server-type"
+MINECRAFT_SERVER_ID_METADATA_KEY="vm-minecraft-server-id"
+MINECRAFT_GAME_PORT_METADATA_KEY="vm-minecraft-game-port"
+MINECRAFT_SERVERS_METADATA_KEY="vm-minecraft-servers"
 STEAM_ENV_METADATA_KEY="steam-headless-env"
 SELECTED_APPLICATION_METADATA_KEY="vm-selected-application-id"
 ENVF=/opt/container-services/steam-headless/.env
@@ -40,6 +43,29 @@ RUNTIME_IMAGE_AGENT_METADATA_KEY="vm-runtime-image-agent"
 MINECRAFT_IMAGE_METADATA_KEY="vm-minecraft-image"
 DEFAULT_STEAM_HEADLESS_IMAGE="josh5/steam-headless:latest"
 DEFAULT_MINECRAFT_IMAGE="itzg/minecraft-server:latest"
+
+select_minecraft_server() {
+  local server_id="$1" game_port registry legacy_owner
+  [[ "$server_id" =~ ^[a-z0-9][a-z0-9-]{0,30}$ ]] || server_id="default"
+  game_port="$(metadata_get "$MINECRAFT_GAME_PORT_METADATA_KEY" | tr -d '\r' | head -n 1 || true)"
+  [[ "$game_port" =~ ^255(6[5-9]|7[0-5])$ ]] || game_port=25565
+  MINECRAFT_SERVER_ID="$server_id"
+  MINECRAFT_GAME_PORT="$game_port"
+  registry="$(metadata_get "$MINECRAFT_SERVERS_METADATA_KEY" || true)"
+  legacy_owner="$(printf '%s' "$registry" | jq -r '[.servers[]? | select(.state != "removed")] | if length == 1 then .[0].id else "" end' 2>/dev/null || true)"
+  # Existing single-server VMs used /mnt/games/minecraft-server and a
+  # container named minecraft. Keep that layout addressable until it is
+  # removed; new multi-server entries always use their own directory.
+  if [[ "$server_id" == "default" || ( "$server_id" == "$legacy_owner" && ! -f "/mnt/games/minecraft-servers/${server_id}/docker-compose.yml" && -f /mnt/games/minecraft-server/docker-compose.yml && -n "$(docker ps -aq --filter 'name=^/minecraft$' | head -n 1 || true)" ) ]]; then
+    MINECRAFT_SERVICE="minecraft"
+    MINECRAFT_ROOT=/mnt/games/minecraft-server
+  else
+    MINECRAFT_SERVICE="minecraft-${server_id}"
+    MINECRAFT_ROOT="/mnt/games/minecraft-servers/${server_id}"
+  fi
+  MINECRAFT_COMPOSE_FILE="${MINECRAFT_ROOT}/docker-compose.yml"
+  MINECRAFT_MODRINTH_PROJECTS_FILE="${MINECRAFT_ROOT}/data/modrinth-projects.txt"
+}
 
 metadata_get() {
   local key="$1"
@@ -272,15 +298,15 @@ wait_for_local_minecraft_ready() {
         set_minecraft_status "running" "Minecraft server healthcheck is healthy."
         return 0
       fi
-      if [[ -z "$health_status" ]] && timeout 2 bash -c '</dev/tcp/127.0.0.1/25565' >/dev/null 2>&1; then
-        set_minecraft_status "running" "Minecraft server port 25565 is reachable locally."
+      if [[ -z "$health_status" ]] && timeout 2 bash -c "</dev/tcp/127.0.0.1/${MINECRAFT_GAME_PORT:-25565}" >/dev/null 2>&1; then
+        set_minecraft_status "running" "Minecraft server port ${MINECRAFT_GAME_PORT:-25565} is reachable locally."
         return 0
       fi
     fi
     sleep 5
   done
 
-  set_minecraft_status "starting" "Minecraft container started, but port 25565 is not reachable yet."
+  set_minecraft_status "starting" "Minecraft container started, but port ${MINECRAFT_GAME_PORT:-25565} is not reachable yet."
   return 1
 }
 
@@ -493,10 +519,12 @@ ensure_minecraft_compose() {
 services:
   minecraft:
     image: ${image_ref}
-    container_name: minecraft
+    container_name: ${MINECRAFT_SERVICE}
+    labels:
+      vm.minecraft.server-id: "${MINECRAFT_SERVER_ID:-default}"
     restart: unless-stopped
     ports:
-      - "25565:25565"
+      - "${MINECRAFT_GAME_PORT:-25565}:25565"
     environment:
       EULA: "TRUE"
       TYPE: "${server_type}"
@@ -524,6 +552,7 @@ minecraft_installed() {
 
 reconcile_minecraft_after_boot() {
   local state version
+  select_minecraft_server "$(metadata_get "$MINECRAFT_SERVER_ID_METADATA_KEY" | tr -d '\r' | head -n 1 || true)"
   state="$(minecraft_state)"
 
   case "$state" in
@@ -554,8 +583,14 @@ reconcile_minecraft_after_boot() {
 }
 
 minecraft_state() {
-  local state
-  state="$(metadata_get "$MINECRAFT_STATUS_METADATA_KEY" | tr '[:upper:]' '[:lower:]' | tr -d '\r' | head -n 1 || true)"
+  local state registry
+  registry="$(metadata_get "$MINECRAFT_SERVERS_METADATA_KEY" || true)"
+  if [[ -n "$registry" && -n "${MINECRAFT_SERVER_ID:-}" ]]; then
+    state="$(printf '%s' "$registry" | jq -r --arg id "$MINECRAFT_SERVER_ID" '.servers[]? | select(.id == $id) | .state // empty' 2>/dev/null | head -n 1 || true)"
+  fi
+  if [[ -z "${state:-}" ]]; then
+    state="$(metadata_get "$MINECRAFT_STATUS_METADATA_KEY" | tr '[:upper:]' '[:lower:]' | tr -d '\r' | head -n 1 || true)"
+  fi
   printf '%s\n' "${state:-not_installed}"
 }
 
@@ -603,7 +638,8 @@ run_minecraft_action() {
   local state version
   local target_phase="started"
 
-  log "Running Minecraft action ${action}"
+  select_minecraft_server "$(metadata_get "$MINECRAFT_SERVER_ID_METADATA_KEY" | tr -d '\r' | head -n 1 || true)"
+  log "Running Minecraft action ${action} for ${MINECRAFT_SERVICE} on port ${MINECRAFT_GAME_PORT}"
   set_power_action_status "$action" "$token" "running"
 
   case "$action" in

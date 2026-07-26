@@ -14,6 +14,23 @@ MINECRAFT_ROOT=/mnt/games/minecraft-server
 MINECRAFT_COMPOSE_FILE="${MINECRAFT_ROOT}/docker-compose.yml"
 MINECRAFT_CONTENT_FILE="${MINECRAFT_ROOT}/data/modrinth-projects.txt"
 
+select_minecraft_server() {
+  local server_id="$1" registry legacy_owner
+  [[ "$server_id" =~ ^[a-z0-9][a-z0-9-]{0,30}$ ]] || server_id="default"
+  MINECRAFT_SERVER_ID="$server_id"
+  registry="$(metadata_get vm-minecraft-servers || true)"
+  legacy_owner="$(printf '%s' "$registry" | jq -r '[.servers[]? | select(.state != "removed")] | if length == 1 then .[0].id else "" end' 2>/dev/null || true)"
+  if [[ "$server_id" == "default" || ( "$server_id" == "$legacy_owner" && ! -f "/mnt/games/minecraft-servers/${server_id}/docker-compose.yml" && -f /mnt/games/minecraft-server/docker-compose.yml && -n "$(docker ps -aq --filter 'name=^/minecraft$' | head -n 1 || true)" ) ]]; then
+    MINECRAFT_SERVICE="minecraft"
+    MINECRAFT_ROOT=/mnt/games/minecraft-server
+  else
+    MINECRAFT_SERVICE="minecraft-${server_id}"
+    MINECRAFT_ROOT="/mnt/games/minecraft-servers/${server_id}"
+  fi
+  MINECRAFT_COMPOSE_FILE="${MINECRAFT_ROOT}/docker-compose.yml"
+  MINECRAFT_CONTENT_FILE="${MINECRAFT_ROOT}/data/modrinth-projects.txt"
+}
+
 metadata_get() {
   local key="$1"
   # A missing optional attribute is normal while no command is queued. Do not
@@ -95,8 +112,7 @@ set_metadata_value() {
 }
 
 minecraft_container() {
-  docker ps --format '{{.ID}} {{.Image}}' \
-    | awk '$2 ~ /itzg\/minecraft-server/ { print $1; exit }'
+  docker ps --filter "name=^/${MINECRAFT_SERVICE:-minecraft}$" --format '{{.ID}}' | head -n 1
 }
 
 publish_result() {
@@ -346,10 +362,12 @@ sync_modrinth_content() {
 }
 
 process_request() {
-  local raw request_id action command player property value container result_id result_state output state
+  local raw request_id action command player property value container result_id result_state output state server_id
   raw="$(metadata_get "$REQUEST_KEY")"
   [[ -n "$raw" ]] || return 0
   request_id="$(printf '%s' "$raw" | jq -r '.id // empty' 2>/dev/null || true)"
+  server_id="$(printf '%s' "$raw" | jq -r '.serverId // "default"' 2>/dev/null || true)"
+  select_minecraft_server "$server_id"
   action="$(printf '%s' "$raw" | jq -r '.action // empty' 2>/dev/null || true)"
   [[ -n "$request_id" && -n "$action" ]] || return 0
 

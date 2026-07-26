@@ -185,6 +185,9 @@ MINECRAFT_STATUS_DETAIL_METADATA_KEY = "vm-minecraft-status-detail"
 MINECRAFT_VERSION_METADATA_KEY = "vm-minecraft-version"
 MINECRAFT_SERVER_TYPE_METADATA_KEY = "vm-minecraft-server-type"
 MINECRAFT_MODRINTH_CONTENT_METADATA_KEY = "vm-minecraft-modrinth-content"
+MINECRAFT_SERVERS_METADATA_KEY = "vm-minecraft-servers"
+MINECRAFT_SERVER_ID_METADATA_KEY = "vm-minecraft-server-id"
+MINECRAFT_GAME_PORT_METADATA_KEY = "vm-minecraft-game-port"
 MINECRAFT_MANAGEMENT_REQUEST_METADATA_KEY = "vm-minecraft-management-request"
 MINECRAFT_MANAGEMENT_RESULT_METADATA_KEY = "vm-minecraft-management-result"
 MINECRAFT_MANAGEMENT_AGENT_METADATA_KEY = "vm-minecraft-management-agent"
@@ -407,7 +410,15 @@ FIREWALL_SUNSHINE_ALLOWED: Final = [
     {"IPProtocol": "tcp", "ports": ["47984", "47989", "47990", "48010", "27036-27037"]},
     {"IPProtocol": "udp", "ports": ["47998", "47999", "48000", "48002", "48010", "27031-27036"]},
 ]
-FIREWALL_MINECRAFT_ALLOWED: Final = [{"IPProtocol": "tcp", "ports": [CONFIG["minecraft_port"]]}]
+MINECRAFT_GAME_PORT_MIN = 25565
+MINECRAFT_GAME_PORT_MAX = 25575
+
+
+def minecraft_firewall_allowed(ports: list[int]) -> list[dict[str, Any]]:
+    return [{"IPProtocol": "tcp", "ports": [str(port) for port in sorted(set(ports))]}]
+
+
+FIREWALL_MINECRAFT_ALLOWED: Final = minecraft_firewall_allowed([int(CONFIG["minecraft_port"])])
 APPLICATION_CATALOG: Final = [
     {
         "id": "prism",
@@ -4391,26 +4402,36 @@ def metadata_value(instance: dict[str, Any], key: str) -> str:
 
 
 def set_instance_metadata_values(instance: dict[str, Any], updates: dict[str, str | None]) -> None:
-    metadata = instance.get("metadata", {}) or {}
-    fingerprint = str(metadata.get("fingerprint", "") or "")
-    if not fingerprint:
-        raise ApiError("Instance metadata fingerprint is missing.", 502)
-
+    current_instance = instance
     update_keys = set(updates)
-    items = [item for item in instance_metadata_items(instance) if item.get("key") not in update_keys]
-    for key, value in updates.items():
-        if value is not None:
-            items.append({"key": key, "value": value})
-
-    operation = compute_request(
-        "POST",
-        f"{instance_self_url(instance)}/setMetadata",
-        json={
-            "fingerprint": fingerprint,
-            "items": items,
-        },
-    )
-    wait_for_zone_operation(operation, zone=instance_zone_name(instance))
+    last_error: ApiError | None = None
+    for attempt in range(5):
+        metadata = current_instance.get("metadata", {}) or {}
+        fingerprint = str(metadata.get("fingerprint", "") or "")
+        if not fingerprint:
+            raise ApiError("Instance metadata fingerprint is missing.", 502)
+        items = [item for item in instance_metadata_items(current_instance) if item.get("key") not in update_keys]
+        for key, value in updates.items():
+            if value is not None:
+                items.append({"key": key, "value": value})
+        try:
+            operation = compute_request(
+                "POST",
+                f"{instance_self_url(current_instance)}/setMetadata",
+                json={"fingerprint": fingerprint, "items": items},
+            )
+            wait_for_zone_operation(operation, zone=instance_zone_name(current_instance))
+            return
+        except ApiError as error:
+            if "CONDITION_NOT_MET" not in str(error) or attempt == 4:
+                raise
+            last_error = error
+            time.sleep(0.4 * (attempt + 1))
+            refreshed = compute_request("GET", instance_self_url(current_instance))
+            if not isinstance(refreshed, dict):
+                raise last_error
+            current_instance = refreshed
+    raise last_error or ApiError("Unable to update instance metadata.", 502)
 
 
 def set_instance_metadata_value(instance: dict[str, Any], key: str, value: str | None) -> None:
@@ -4843,6 +4864,8 @@ def request_live_power_action(
         POWER_ACTION_METADATA_KEY: f"{action}:{token}",
         POWER_ACTION_STATUS_METADATA_KEY: f"requested:{action}:{token}",
     }
+    if str(CONFIG["vm_minecraft_management_script_b64"] or "").strip():
+        updates["vm-minecraft-management-script"] = decode_config_b64("vm_minecraft_management_script_b64")
     if sunshine_state is not None:
         updates[SUNSHINE_STATUS_METADATA_KEY] = sunshine_state
         updates[SUNSHINE_STATUS_DETAIL_METADATA_KEY] = status_detail
@@ -5412,6 +5435,96 @@ def minecraft_server_type_from_instance(instance: dict[str, Any] | None) -> str:
         return DEFAULT_MINECRAFT_SERVER_TYPE
 
 
+def minecraft_server_id(payload: Any, *, required: bool = False) -> str:
+    raw = payload.get("minecraftServerId") if hasattr(payload, "get") else ""
+    server_id = str(raw or "").strip().lower()
+    if not server_id and not required:
+        return "default"
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,30}", server_id):
+        raise ApiError("Minecraft server ID must use 1-31 lowercase letters, digits, or hyphens.", 400)
+    return server_id
+
+
+def minecraft_servers_from_instance(instance: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Return the per-VM Minecraft registry, migrating the legacy singleton in memory."""
+    if instance is None:
+        return []
+    raw = metadata_value(instance, MINECRAFT_SERVERS_METADATA_KEY)
+    try:
+        parsed = json.loads(raw) if raw else []
+    except (TypeError, ValueError):
+        parsed = []
+    entries = parsed.get("servers", []) if isinstance(parsed, dict) else parsed
+    servers: list[dict[str, Any]] = []
+    used_ids: set[str] = set()
+    used_ports: set[int] = set()
+    if isinstance(entries, list):
+        for value in entries:
+            if not isinstance(value, dict):
+                continue
+            try:
+                server_id = minecraft_server_id({"minecraftServerId": value.get("id")}, required=True)
+                port = int(value.get("gamePort"))
+            except (ApiError, TypeError, ValueError):
+                continue
+            if server_id in used_ids or not MINECRAFT_GAME_PORT_MIN <= port <= MINECRAFT_GAME_PORT_MAX:
+                continue
+            used_ids.add(server_id)
+            used_ports.add(port)
+            servers.append({
+                "id": server_id,
+                "version": str(value.get("version") or "LATEST"),
+                "serverType": normalize_minecraft_server_type(value.get("serverType") or DEFAULT_MINECRAFT_SERVER_TYPE),
+                "gamePort": port,
+                "state": str(value.get("state") or "stopped").lower(),
+                "detail": str(value.get("detail") or ""),
+                "content": value.get("content") if isinstance(value.get("content"), list) else [],
+            })
+    if not servers:
+        legacy_state = metadata_value(instance, MINECRAFT_STATUS_METADATA_KEY).strip().lower()
+        if legacy_state and legacy_state not in {"not_installed", "removed"}:
+            servers.append({
+                "id": "default",
+                "version": minecraft_version_from_instance(instance) or "LATEST",
+                "serverType": minecraft_server_type_from_instance(instance),
+                "gamePort": int(CONFIG["minecraft_port"]),
+                "state": legacy_state,
+                "detail": metadata_value(instance, MINECRAFT_STATUS_DETAIL_METADATA_KEY),
+                "content": minecraft_modrinth_content(instance),
+            })
+    return servers
+
+
+def minecraft_server_registry_value(servers: list[dict[str, Any]]) -> str:
+    return json.dumps({"schemaVersion": 1, "servers": servers}, separators=(",", ":"))
+
+
+def minecraft_server_by_id(instance: dict[str, Any] | None, server_id: str) -> dict[str, Any] | None:
+    return next((server for server in minecraft_servers_from_instance(instance) if server["id"] == server_id), None)
+
+
+def minecraft_next_game_port(servers: list[dict[str, Any]]) -> int:
+    used = {int(server["gamePort"]) for server in servers}
+    for port in range(MINECRAFT_GAME_PORT_MIN, MINECRAFT_GAME_PORT_MAX + 1):
+        if port not in used:
+            return port
+    raise ApiError(f"All Minecraft ports {MINECRAFT_GAME_PORT_MIN}-{MINECRAFT_GAME_PORT_MAX} are allocated on this VM.", 409)
+
+
+def ensure_minecraft_firewall_for_servers(servers: list[dict[str, Any]]) -> None:
+    ports = [int(server["gamePort"]) for server in servers if server.get("state") != "removed"]
+    if ports:
+        ensure_firewall_rule(CONFIG["firewall_rule_minecraft"], minecraft_firewall_allowed(ports))
+    else:
+        compute_request("DELETE", firewall_url(CONFIG["firewall_rule_minecraft"]), allow_404=True)
+
+
+def update_minecraft_server_registry(instance: dict[str, Any], servers: list[dict[str, Any]]) -> dict[str, Any]:
+    set_instance_metadata_value(instance, MINECRAFT_SERVERS_METADATA_KEY, minecraft_server_registry_value(servers))
+    ensure_minecraft_firewall_for_servers(servers)
+    return get_instance()
+
+
 def minecraft_modrinth_content(instance: dict[str, Any] | None) -> list[dict[str, str]]:
     raw_content = metadata_value(instance, MINECRAFT_MODRINTH_CONTENT_METADATA_KEY) if instance else ""
     try:
@@ -5652,7 +5765,17 @@ def build_minecraft_management_payload(
     message: str = "",
     catalog_results: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    selected_server_id = minecraft_server_id(request.args) if request else "default"
+    servers = minecraft_servers_from_instance(instance)
+    selected_server = next((server for server in servers if server["id"] == selected_server_id), None)
     minecraft_status = build_minecraft_status(instance)
+    if selected_server:
+        minecraft_status = {
+            "state": selected_server["state"],
+            "label": selected_server["state"].replace("_", " ").title(),
+            "detail": selected_server.get("detail", ""),
+            "version": selected_server.get("version", ""),
+        }
     agent_ready = minecraft_management_agent_ready(instance)
     runtime = minecraft_server_type_spec(minecraft_server_type_from_instance(instance))
     agent_prepared = bool(
@@ -5669,6 +5792,9 @@ def build_minecraft_management_payload(
         "instanceExists": instance is not None,
         "instanceState": str((instance or {}).get("status", "NOT_FOUND")),
         "minecraftStatus": minecraft_status,
+        "servers": servers,
+        "selectedServerId": selected_server_id,
+        "selectedServer": selected_server,
         "serverRuntime": {
             "id": runtime["id"],
             "label": runtime["label"],
@@ -5829,16 +5955,10 @@ def minecraft_installed(instance: dict[str, Any] | None) -> bool:
 
 
 def allowed_minecraft_commands(instance: dict[str, Any] | None) -> list[str]:
-    state = minecraft_state(instance)
-    if state == "running":
-        return ["stop-minecraft", "restart-minecraft", "remove-minecraft"]
-    if state == "stopped":
-        return ["start-minecraft", "remove-minecraft"]
-    if state == "error":
-        return ["install-minecraft", "remove-minecraft"]
-    if state in {"not_installed", "removed"}:
-        return ["install-minecraft"]
-    return []
+    # The selected server determines lifecycle eligibility. Keep the full
+    # surface available here so a second stopped/running server is not hidden
+    # by the legacy singleton status metadata.
+    return ["install-minecraft", "start-minecraft", "stop-minecraft", "restart-minecraft", "remove-minecraft"]
 
 
 def require_minecraft_command_allowed(instance: dict[str, Any] | None, command: str) -> None:
@@ -6196,7 +6316,8 @@ def build_status_payload(
                 "password": "",
             },
             "sunshineStatus": build_sunshine_status(None),
-              "minecraftStatus": build_minecraft_status(None),
+            "minecraftStatus": build_minecraft_status(None),
+            "minecraftServers": [],
               "minecraftManagement": build_minecraft_management_payload(None, user),
             "minecraft": {
                 **minecraft_version_payload(),
@@ -6246,7 +6367,8 @@ def build_status_payload(
         "autoStop": build_auto_stop_status(instance),
         "sunshineCredentials": normalize_sunshine_credentials_for_response(credentials),
         "sunshineStatus": build_sunshine_status(instance),
-          "minecraftStatus": build_minecraft_status(instance),
+        "minecraftStatus": build_minecraft_status(instance),
+        "minecraftServers": minecraft_servers_from_instance(instance),
           "minecraftManagement": build_minecraft_management_payload(instance, user),
         "minecraft": {
             **minecraft_version_payload(),
@@ -6543,7 +6665,7 @@ def minecraft_management_request_payload(payload: dict[str, Any]) -> dict[str, s
     if action not in allowed_actions:
         raise ApiError("Unsupported Minecraft management action.", 400)
 
-    request_payload = {"id": secrets.token_urlsafe(18), "action": action}
+    request_payload = {"id": secrets.token_urlsafe(18), "action": action, "serverId": minecraft_server_id(payload)}
     if action == "console":
         request_payload["command"] = minecraft_management_console_command(payload)
     elif action.endswith("-add") or action.endswith("-remove"):
@@ -6557,6 +6679,7 @@ def minecraft_content_sync_request(entries: list[dict[str, Any]], removed_files:
     return {
         "id": secrets.token_urlsafe(18),
         "action": "content-sync",
+        "serverId": "default",
         "entries": [f"{entry['projectId']}:{entry['versionId']}" for entry in entries],
         "expectedFiles": sorted(
             {
@@ -6589,6 +6712,7 @@ def execute_minecraft_management_action(
     payload: dict[str, Any],
 ) -> dict[str, Any]:
     action = str(payload.get("action", "") or "").strip().lower()
+    selected_server_id = minecraft_server_id(payload)
     if instance is None:
         raise ApiError("Create the selected VM before using Minecraft management.", 409)
     if action == "prepare-agent":
@@ -6600,6 +6724,9 @@ def execute_minecraft_management_action(
             message="Minecraft management agent was prepared. Restart the VM once from the main GUI to activate it.",
         )
 
+    selected_server = minecraft_server_by_id(instance, selected_server_id)
+    if selected_server is None:
+        raise ApiError("Selected Minecraft server is not installed on this VM.", 404)
     minecraft_status = build_minecraft_status(instance)
     if str(instance.get("status", "")).upper() != "RUNNING" or minecraft_status.get("state") != "running":
         raise ApiError("Minecraft server must be running before using management controls.", 409)
@@ -6625,6 +6752,7 @@ def execute_minecraft_management_action(
             raise ApiError("This Modrinth project is already installed. Remove it before selecting another version.", 409)
         updated_content = [*current_content, entry]
         request_payload = minecraft_content_sync_request(updated_content)
+        request_payload["serverId"] = selected_server_id
     elif action == "content-remove":
         project_id = str(payload.get("projectId") or "").strip()
         if not re.fullmatch(r"[A-Za-z0-9_-]{3,80}", project_id):
@@ -6635,6 +6763,7 @@ def execute_minecraft_management_action(
             raise ApiError("The selected Modrinth project is not installed.", 404)
         removed_files = [filename for item in current_content if item["projectId"] == project_id for filename in item.get("files", [])]
         request_payload = minecraft_content_sync_request(updated_content, removed_files)
+        request_payload["serverId"] = selected_server_id
     else:
         request_payload = minecraft_management_request_payload(payload)
     set_instance_metadata_values(
@@ -7057,24 +7186,68 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
             raise ApiError("Instance does not exist. Create it first.", 400)
         if current_status != "RUNNING":
             raise ApiError("Minecraft server actions require a running VM.", 400)
-        require_minecraft_command_allowed(current_instance, command)
         # Initial Minecraft installation changes the VM's persistent runtime
         # layout and must not race the startup restore/backup sequence. Once a
         # server already exists, its lifecycle actions are handled by the live
         # VM agent and do not depend on that backup marker.
         if command == "install-minecraft":
             require_live_backup_ready(current_instance, command)
-        ensure_firewall_rule(CONFIG["firewall_rule_minecraft"], FIREWALL_MINECRAFT_ALLOWED)
+        minecraft_server_id_value = minecraft_server_id(payload, required=command == "install-minecraft")
+        servers = minecraft_servers_from_instance(current_instance)
+        existing_server = next((server for server in servers if server["id"] == minecraft_server_id_value), None)
+        if command == "install-minecraft":
+            if existing_server and existing_server.get("state") == "installing":
+                phase, action, _ = parse_power_action_status(
+                    metadata_value(current_instance, POWER_ACTION_STATUS_METADATA_KEY)
+                )
+                if action != "install-minecraft" or phase not in {"requested", "running"}:
+                    existing_server["state"] = "error"
+                    existing_server["detail"] = "Previous installation did not complete. Ready to retry."
+                    current_instance = update_minecraft_server_registry(current_instance, servers)
+            if existing_server and existing_server.get("state") not in {"removed", "error"}:
+                raise ApiError("A Minecraft server with this ID already exists. Select it and use lifecycle controls.", 409)
+            game_port = int(existing_server["gamePort"]) if existing_server and existing_server.get("state") == "error" else minecraft_next_game_port([
+                server for server in servers
+                if server.get("id") != minecraft_server_id_value and server.get("state") != "removed"
+            ])
+        else:
+            if existing_server is None or existing_server.get("state") == "removed":
+                raise ApiError("Select an installed Minecraft server before running its lifecycle action.", 404)
+            game_port = int(existing_server["gamePort"])
+            current_server_state = str(existing_server.get("state") or "").lower()
+            expected_states = {
+                "start-minecraft": {"stopped"},
+                "stop-minecraft": {"running"},
+                "restart-minecraft": {"running"},
+                "remove-minecraft": {"running", "stopped", "error"},
+            }[command]
+            if current_server_state not in expected_states:
+                raise ApiError(
+                    f'Minecraft server "{minecraft_server_id_value}" cannot run "{command}" while it is {current_server_state or "unknown"}.',
+                    409,
+                )
         minecraft_server_type = (
             parse_minecraft_server_type(payload)
             if command == "install-minecraft"
-            else minecraft_server_type_from_instance(current_instance)
+            else str(existing_server["serverType"])
         )
         minecraft_version = (
             concrete_minecraft_version(parse_minecraft_version(payload, minecraft_server_type), minecraft_server_type)
             if command == "install-minecraft"
-            else minecraft_version_from_instance(current_instance)
+            else str(existing_server["version"])
         )
+        if command == "install-minecraft":
+            server_record = {
+                "id": minecraft_server_id_value,
+                "version": minecraft_version,
+                "serverType": minecraft_server_type,
+                "gamePort": game_port,
+                "state": "installing",
+                "detail": f"Installing {minecraft_server_type_spec(minecraft_server_type)['label']} {minecraft_version}.",
+                "content": [],
+            }
+            servers = [server for server in servers if server["id"] != minecraft_server_id_value] + [server_record]
+            current_instance = update_minecraft_server_registry(current_instance, servers)
         target_phase = {
             "install-minecraft": "installed",
             "start-minecraft": "started",
@@ -7095,14 +7268,41 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
                 ),
                 MINECRAFT_VERSION_METADATA_KEY: minecraft_version,
                 MINECRAFT_SERVER_TYPE_METADATA_KEY: minecraft_server_type,
+                MINECRAFT_SERVER_ID_METADATA_KEY: minecraft_server_id_value,
+                MINECRAFT_GAME_PORT_METADATA_KEY: str(game_port),
             },
         )
-        final_instance = wait_for_power_action_phase(
-            action=command,
-            token=token,
-            target_phase=target_phase,
-            timeout_seconds=1200,
-        )
+        try:
+            final_instance = wait_for_power_action_phase(
+                action=command,
+                token=token,
+                target_phase=target_phase,
+                timeout_seconds=1200,
+            )
+        except ApiError as error:
+            failed_instance = get_instance()
+            failed_servers = minecraft_servers_from_instance(failed_instance)
+            for server in failed_servers:
+                if server["id"] == minecraft_server_id_value:
+                    server["state"] = "error"
+                    server["detail"] = str(error)
+            update_minecraft_server_registry(failed_instance, failed_servers)
+            raise
+        final_servers = minecraft_servers_from_instance(final_instance)
+        final_state = {
+            "install-minecraft": "running",
+            "start-minecraft": "running",
+            "stop-minecraft": "stopped",
+            "restart-minecraft": "running",
+            "remove-minecraft": "removed",
+        }[command]
+        for server in final_servers:
+            if server["id"] == minecraft_server_id_value:
+                server["state"] = final_state
+                server["detail"] = f"Minecraft server {final_state}."
+                if command == "remove-minecraft":
+                    server["content"] = []
+        final_instance = update_minecraft_server_registry(final_instance, final_servers)
         final_instance = wait_for_external_ip(timeout_seconds=180)
         bind_selected_endpoint_to_instance(final_instance)
         updated = update_duckdns(extract_external_ip(final_instance))

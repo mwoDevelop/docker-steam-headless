@@ -50,6 +50,8 @@
     softwareApplication: document.querySelector("#software-application"),
     softwareMinecraftVersion: document.querySelector("#software-minecraft-version"),
     softwareMinecraftServerType: document.querySelector("#software-minecraft-server-type"),
+    softwareMinecraftServer: document.querySelector("#software-minecraft-server"),
+    softwareMinecraftNewServer: document.querySelector("#software-minecraft-new-server"),
     softwareRefreshMinecraftVersions: document.querySelector("#software-refresh-minecraft-versions"),
     softwareActions: document.querySelector("#software-actions"),
     softwareStatus: document.querySelector("#software-status"),
@@ -146,6 +148,8 @@
       elements.softwareApplication,
       elements.softwareMinecraftVersion,
       elements.softwareMinecraftServerType,
+      elements.softwareMinecraftServer,
+      elements.softwareMinecraftNewServer,
       elements.softwareRefreshMinecraftVersions,
     ].forEach((input) => {
       input.disabled = nextBusy || !state.user || !softwareLoaded;
@@ -871,6 +875,7 @@
     const previousApplication = elements.softwareApplication.value;
     const previousVersion = elements.softwareMinecraftVersion.value;
     const previousServerType = elements.softwareMinecraftServerType.value;
+    const previousMinecraftServer = elements.softwareMinecraftServer.value;
     elements.softwareEndpoint.innerHTML = endpoints.length
       ? endpoints.map((endpoint) => {
         const id = String(endpoint.id || "");
@@ -904,8 +909,9 @@
       ? previousVersion
       : (versionCatalog.defaultVersion || minecraftVersions[0] || "");
     elements.softwareMinecraftVersion.innerHTML = optionList(minecraftVersions, selectedVersion, "Refresh Minecraft Versions to load this runtime catalog");
-
     const status = payload.status || {};
+    const servers = Array.isArray(status.minecraftServers) ? status.minecraftServers : (Array.isArray(payload.minecraftServers) ? payload.minecraftServers : []);
+    elements.softwareMinecraftServer.innerHTML = ['<option value="">New server (use ID below)</option>', ...servers.map((server) => `<option value="${escapeHtml(String(server.id || ""))}" ${String(server.id || "") === previousMinecraftServer ? "selected" : ""}>${escapeHtml(String(server.id || ""))} · ${escapeHtml(String(server.serverType || "paper"))} ${escapeHtml(String(server.version || "LATEST"))} · :${escapeHtml(String(server.gamePort || ""))} · ${escapeHtml(String(server.state || ""))}</option>`)].join("");
     const allowedCommands = new Set(Array.isArray(status.allowedCommands) ? status.allowedCommands : []);
     const instanceState = String(status.instanceState || status.vmState || "NOT_FOUND");
     const minecraftState = String(
@@ -922,10 +928,20 @@
       const command = button.dataset.softwareCommand || "";
       const needsApplication = command === "install-app" || command === "uninstall-app";
       const needsVersion = command === "install-minecraft";
+      const selectedServer = String(elements.softwareMinecraftServer.value || "");
+      const newServer = String(elements.softwareMinecraftNewServer.value || "").trim();
+      const needsExistingServer = ["start-minecraft", "stop-minecraft", "restart-minecraft", "remove-minecraft"].includes(command);
+      const selectedServerState = String((servers.find((server) => String(server.id || "") === selectedServer) || {}).state || "").toLowerCase();
+      const invalidLifecycleState = (command === "start-minecraft" && selectedServerState !== "stopped")
+        || (["stop-minecraft", "restart-minecraft"].includes(command) && selectedServerState !== "running")
+        || (command === "remove-minecraft" && !["running", "stopped", "error"].includes(selectedServerState));
       button.dataset.softwareDisabled = String(
         !allowedCommands.has(command)
         || (needsApplication && !elements.softwareApplication.value)
         || (needsVersion && !elements.softwareMinecraftVersion.value)
+        || (command === "install-minecraft" && !newServer)
+        || (needsExistingServer && !selectedServer)
+        || (needsExistingServer && invalidLifecycleState)
       );
     });
   }
@@ -949,6 +965,7 @@
         applicationId: String(elements.softwareApplication.value || ""),
         minecraftVersion: String(elements.softwareMinecraftVersion.value || ""),
         minecraftServerType: String(elements.softwareMinecraftServerType.value || "paper"),
+        minecraftServerId: String(elements.softwareMinecraftServer.value || elements.softwareMinecraftNewServer.value || "").trim().toLowerCase(),
       }),
     });
     state.softwarePayload = payload;
@@ -1271,11 +1288,16 @@
     }
   });
 
-  [elements.softwareApplication, elements.softwareMinecraftVersion, elements.softwareMinecraftServerType].forEach((input) => {
+  [elements.softwareApplication, elements.softwareMinecraftVersion, elements.softwareMinecraftServerType, elements.softwareMinecraftServer].forEach((input) => {
     input.addEventListener("change", () => {
       renderSoftware();
       setBusy(state.isBusy);
     });
+  });
+
+  elements.softwareMinecraftNewServer.addEventListener("input", () => {
+    renderSoftware();
+    setBusy(state.isBusy);
   });
 
   elements.softwareRefreshMinecraftVersions.addEventListener("click", async () => {
