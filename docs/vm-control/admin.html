@@ -182,48 +182,65 @@
         </p>
         <div class="form-grid" autocomplete="off">
           <label>
-            <span>Endpoint</span>
+            <span>Target VM</span>
             <select id="software-endpoint"></select>
           </label>
-          <label>
-            <span>Application</span>
-            <select id="software-application"></select>
-          </label>
-          <label>
-            <span>Minecraft server version</span>
-            <select id="software-minecraft-version"></select>
-          </label>
-          <label>
-            <span>Minecraft runtime</span>
-            <select id="software-minecraft-server-type">
-              <option value="paper">Paper (plugins)</option>
-              <option value="purpur">Purpur (plugins)</option>
-              <option value="fabric">Fabric (mods)</option>
-              <option value="forge">Forge (mods)</option>
-              <option value="neoforge">NeoForge (mods)</option>
-            </select>
-          </label>
-          <label>
-            <span>Minecraft server</span>
-            <select id="software-minecraft-server"></select>
-          </label>
-          <label>
-            <span>New server ID</span>
-            <input id="software-minecraft-new-server" type="text" pattern="[a-z0-9][a-z0-9-]{0,30}" placeholder="survival" maxlength="31" autocomplete="off">
-          </label>
+        </div>
+        <div class="access-grid" id="software-actions">
+          <article class="access-card">
+            <h3>Desktop applications</h3>
+            <p class="access-meta">Choose an application, then install or remove it on the selected VM.</p>
+            <label>
+              <span>Application</span>
+              <select id="software-application"></select>
+            </label>
+            <div class="inline-action-group app-action-group">
+              <button class="action status" type="button" data-software-command="install-app">Install application</button>
+              <button class="action delete" type="button" data-software-command="uninstall-app">Uninstall application</button>
+            </div>
+          </article>
+          <article class="access-card accent">
+            <h3>Create Minecraft server</h3>
+            <p class="access-meta">Create a separate server with its own ID, runtime, version and port.</p>
+            <label>
+              <span>New server ID</span>
+              <input id="software-minecraft-new-server" type="text" pattern="[a-z0-9][a-z0-9-]{0,30}" placeholder="survival" maxlength="31" autocomplete="off">
+            </label>
+            <label>
+              <span>Runtime</span>
+              <select id="software-minecraft-server-type">
+                <option value="paper">Paper (plugins)</option>
+                <option value="purpur">Purpur (plugins)</option>
+                <option value="fabric">Fabric (mods)</option>
+                <option value="forge">Forge (mods)</option>
+                <option value="neoforge">NeoForge (mods)</option>
+              </select>
+            </label>
+            <label>
+              <span>Server version</span>
+              <select id="software-minecraft-version"></select>
+            </label>
+            <button class="action create" type="button" data-software-command="install-minecraft">Create Minecraft server</button>
+            <p id="software-minecraft-create-hint" class="access-meta">Enter a new server ID to enable creation.</p>
+            <button id="software-refresh-minecraft-versions" class="ghost" type="button">Refresh version list</button>
+          </article>
+          <article class="access-card">
+            <h3>Existing Minecraft server</h3>
+            <p class="access-meta">Select an installed server to start, stop, restart or remove it.</p>
+            <label>
+              <span>Server</span>
+              <select id="software-minecraft-server"></select>
+            </label>
+            <div class="inline-action-group app-action-group">
+              <button class="action start" type="button" data-software-command="start-minecraft">Start server</button>
+              <button class="action stop" type="button" data-software-command="stop-minecraft">Stop server</button>
+              <button class="action restart" type="button" data-software-command="restart-minecraft">Restart server</button>
+              <button class="action delete" type="button" data-software-command="remove-minecraft">Remove server</button>
+            </div>
+          </article>
         </div>
         <div id="software-status" class="command-status" data-tone="neutral">
           Sign in to load applications and Minecraft server state.
-        </div>
-        <div class="inline-action-group app-action-group" id="software-actions">
-          <button class="action status" type="button" data-software-command="install-app">Install Application</button>
-          <button class="action delete" type="button" data-software-command="uninstall-app">Uninstall Application</button>
-          <button class="action backup" type="button" data-software-command="install-minecraft">Install Minecraft</button>
-          <button class="action start" type="button" data-software-command="start-minecraft">Start Minecraft</button>
-          <button class="action stop" type="button" data-software-command="stop-minecraft">Stop Minecraft</button>
-          <button class="action restart" type="button" data-software-command="restart-minecraft">Restart Minecraft</button>
-          <button class="action delete" type="button" data-software-command="remove-minecraft">Remove Minecraft</button>
-          <button id="software-refresh-minecraft-versions" class="ghost" type="button">Refresh Minecraft Versions</button>
         </div>
         <div class="section-head software-live-access-head">
           <div>
@@ -306,6 +323,6 @@
       </section>
     </main>
 
-    <script src="./admin.js?v=admin-software-live-access-links-20260727"></script>
+    <script src="./admin.js?v=admin-software-workspace-20260727"></script>
   </body>
 </html>

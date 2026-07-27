@@ -52,6 +52,7 @@
     softwareMinecraftServerType: document.querySelector("#software-minecraft-server-type"),
     softwareMinecraftServer: document.querySelector("#software-minecraft-server"),
     softwareMinecraftNewServer: document.querySelector("#software-minecraft-new-server"),
+    softwareMinecraftCreateHint: document.querySelector("#software-minecraft-create-hint"),
     softwareRefreshMinecraftVersions: document.querySelector("#software-refresh-minecraft-versions"),
     softwareActions: document.querySelector("#software-actions"),
     softwareStatus: document.querySelector("#software-status"),
@@ -945,16 +946,24 @@
       || "not installed"
     );
     const catalogDetail = versionCatalog.lastError
-      ? ` Version catalog for ${activeServerType}: ${versionCatalog.lastError}`
-      : ` Version catalog for ${activeServerType}: ${minecraftVersions.length} entries${versionCatalog.source ? ` (${versionCatalog.source})` : ""}.`;
-    elements.softwareStatus.textContent = `${payload.endpoint && payload.endpoint.id ? payload.endpoint.id : "Selected endpoint"}: VM ${instanceState}, Minecraft ${minecraftState}.${catalogDetail}`;
+      ? `Version list error: ${versionCatalog.lastError}`
+      : `${minecraftVersions.length} ${activeServerType} versions available${versionCatalog.source ? ` from ${versionCatalog.source}` : ""}.`;
+    elements.softwareStatus.textContent = `${payload.endpoint && payload.endpoint.id ? payload.endpoint.id : "Selected endpoint"} · VM ${instanceState} · Minecraft ${minecraftState}`;
     elements.softwareStatus.dataset.tone = versionCatalog.lastError ? "warning" : (instanceState === "RUNNING" ? "success" : "neutral");
+    const newServer = String(elements.softwareMinecraftNewServer.value || "").trim().toLowerCase();
+    const validNewServer = /^[a-z0-9][a-z0-9-]{0,30}$/.test(newServer);
+    if (elements.softwareMinecraftCreateHint) {
+      elements.softwareMinecraftCreateHint.textContent = !allowedCommands.has("install-minecraft")
+        ? "The VM is not ready to create a Minecraft server yet."
+        : !validNewServer
+          ? "Enter a new server ID using lowercase letters, numbers or hyphens (for example: survival)."
+          : `Ready to create “${newServer}”. ${catalogDetail}`;
+    }
     document.querySelectorAll("[data-software-command]").forEach((button) => {
       const command = button.dataset.softwareCommand || "";
       const needsApplication = command === "install-app" || command === "uninstall-app";
       const needsVersion = command === "install-minecraft";
       const selectedServer = String(elements.softwareMinecraftServer.value || "");
-      const newServer = String(elements.softwareMinecraftNewServer.value || "").trim();
       const needsExistingServer = ["start-minecraft", "stop-minecraft", "restart-minecraft", "remove-minecraft"].includes(command);
       const selectedServerState = String((servers.find((server) => String(server.id || "") === selectedServer) || {}).state || "").toLowerCase();
       const invalidLifecycleState = (command === "start-minecraft" && selectedServerState !== "stopped")
@@ -964,7 +973,7 @@
         !allowedCommands.has(command)
         || (needsApplication && !elements.softwareApplication.value)
         || (needsVersion && !elements.softwareMinecraftVersion.value)
-        || (command === "install-minecraft" && !newServer)
+        || (command === "install-minecraft" && !validNewServer)
         || (needsExistingServer && !selectedServer)
         || (needsExistingServer && invalidLifecycleState)
       );
