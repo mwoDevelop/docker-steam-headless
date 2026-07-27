@@ -5617,7 +5617,13 @@ def minecraft_modrinth_catalog_search(instance: dict[str, Any], payload: dict[st
             "query": query,
             "limit": 20,
             "index": "relevance",
-            "facets": json.dumps([[f"project_type:{kind}"], [f"versions:{version}"]]),
+            "facets": json.dumps(
+                [
+                    [f"project_type:{kind}"],
+                    [f"versions:{version}"],
+                    [f"categories:{loader}" for loader in runtime["modrinthLoaders"]],
+                ]
+            ),
         },
     )
     hits = data.get("hits") if isinstance(data, dict) else []
