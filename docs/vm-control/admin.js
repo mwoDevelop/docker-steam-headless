@@ -690,6 +690,7 @@
   function handleGoogleOAuthError(error) {
     clearSession();
     handleError(new Error(error && error.type ? `Google sign-in failed: ${error.type}` : "Google sign-in failed."));
+    setBusy(false);
   }
 
   async function fetchApi(path, options) {
