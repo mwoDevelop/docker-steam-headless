@@ -136,20 +136,6 @@ RUN \
     && \
     echo
 
-# Install mscorefonts
-RUN \
-    echo "**** Install ms fonts ****" \
-        && su - default -c "yay -Syu --noconfirm --needed ttf-msfonts" \
-    && \
-    echo "**** Section cleanup ****" \
-	    && pacman -Scc --noconfirm \
-        && rm -fr /home/default/.cache/yay \
-        && rm -fr /var/lib/pacman/sync/* \
-        && rm -fr /var/cache/pacman/pkg/* \
-        && rm -rf /tmp/yay* \
-    && \
-    echo
-
 # Install X Server requirements
 ENV \
     XORG_SOCKET_DIR="/tmp/.X11-unix" \
