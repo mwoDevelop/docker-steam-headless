@@ -5780,11 +5780,13 @@ def build_minecraft_management_payload(
     instance: dict[str, Any] | None,
     user: dict[str, Any],
     *,
+    selected_server_id: str | None = None,
     result: dict[str, Any] | None = None,
     message: str = "",
     catalog_results: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    selected_server_id = selected_minecraft_server_id(instance, request.args if request else {})
+    if selected_server_id is None:
+        selected_server_id = selected_minecraft_server_id(instance, request.args if request else {})
     servers = minecraft_servers_from_instance(instance)
     selected_server = next((server for server in servers if server["id"] == selected_server_id), None)
     minecraft_status = build_minecraft_status(instance)
@@ -6741,11 +6743,12 @@ def execute_minecraft_management_action(
         return build_minecraft_management_payload(
             refreshed,
             user,
+            selected_server_id=selected_server_id,
             message="Minecraft management agent was prepared. Restart the VM once from the main GUI to activate it.",
         )
 
     selected_server = minecraft_server_by_id(instance, selected_server_id)
-    if selected_server is None:
+    if selected_server is None or selected_server.get("state") == "removed":
         raise ApiError("Selected Minecraft server is not installed on this VM.", 404)
     minecraft_status = build_minecraft_status(instance)
     if str(instance.get("status", "")).upper() != "RUNNING" or minecraft_status.get("state") != "running":
@@ -6755,6 +6758,7 @@ def execute_minecraft_management_action(
         return build_minecraft_management_payload(
             instance,
             user,
+            selected_server_id=selected_server_id,
             message=f"Found {len(results)} compatible Modrinth result(s).",
             catalog_results=results,
         )
@@ -6814,7 +6818,13 @@ def execute_minecraft_management_action(
         )
         refreshed = get_instance()
     message = "Minecraft management action completed." if result.get("state") == "done" else "Minecraft management action failed on the VM."
-    return build_minecraft_management_payload(refreshed, user, result=result, message=message)
+    return build_minecraft_management_payload(
+        refreshed,
+        user,
+        selected_server_id=selected_server_id,
+        result=result,
+        message=message,
+    )
 
 
 def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] | None = None) -> dict[str, Any]:
