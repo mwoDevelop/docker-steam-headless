@@ -1645,12 +1645,9 @@
 
     if (!instances.length) {
       elements.instancesList.className = "instance-list empty";
-      elements.instancesList.textContent = "No created instances found for this backend target name.";
+      elements.instancesList.textContent = "No managed Compute Engine instances are currently created.";
       if (elements.instancesStatus) {
-        const name = state.instancesPayload && state.instancesPayload.instanceName
-          ? state.instancesPayload.instanceName
-          : "configured VM";
-        elements.instancesStatus.textContent = `No Compute Engine instances named ${name} were found.`;
+        elements.instancesStatus.textContent = "No created Compute Engine instances were found.";
       }
       updateActionAvailability();
       return;

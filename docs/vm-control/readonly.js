@@ -284,7 +284,7 @@
     if (!running.length) {
       elements.instancesList.className = "instance-list empty";
       elements.instancesList.textContent = "No running instances found.";
-      setInstancesStatus("No running instances found.");
+      setInstancesStatus("Refresh completed.");
       return;
     }
     elements.instancesList.className = "instance-list";
