@@ -938,7 +938,7 @@
     const servers = Array.isArray(status.minecraftServers) ? status.minecraftServers : (Array.isArray(payload.minecraftServers) ? payload.minecraftServers : []);
     elements.softwareMinecraftServer.innerHTML = ['<option value="">New server (use ID below)</option>', ...servers.map((server) => `<option value="${escapeHtml(String(server.id || ""))}" ${String(server.id || "") === previousMinecraftServer ? "selected" : ""}>${escapeHtml(String(server.id || ""))} · ${escapeHtml(String(server.serverType || "paper"))} ${escapeHtml(String(server.version || "LATEST"))} · :${escapeHtml(String(server.gamePort || ""))} · ${escapeHtml(String(server.state || ""))}</option>`)].join("");
     const allowedCommands = new Set(Array.isArray(status.allowedCommands) ? status.allowedCommands : []);
-    const instanceState = String(status.instanceState || status.vmState || "NOT_FOUND");
+    const instanceState = String(status.instanceState || status.vmState || status.status || "NOT_FOUND");
     const minecraftState = String(
       (status.minecraftStatus && (status.minecraftStatus.state || status.minecraftStatus.status))
       || (status.minecraft && (status.minecraft.state || status.minecraft.status))
@@ -989,7 +989,7 @@
     const endpoint = payload.endpoint || {};
     const status = payload.status || {};
     const endpointId = String(endpoint.id || "selected endpoint");
-    const instanceState = String(status.instanceState || status.vmState || "NOT_FOUND").toUpperCase();
+    const instanceState = String(status.instanceState || status.vmState || status.status || "NOT_FOUND").toUpperCase();
     if (instanceState !== "RUNNING") {
       container.className = "access empty";
       container.textContent = `${endpointId}: VM ${instanceState}. Start the VM to use live access.`;
