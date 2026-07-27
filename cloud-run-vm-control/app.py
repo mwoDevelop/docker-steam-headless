@@ -5740,6 +5740,16 @@ def minecraft_management_request_result(instance: dict[str, Any] | None) -> dict
     }
 
 
+def minecraft_management_request_server_id(instance: dict[str, Any] | None) -> str:
+    raw_request = metadata_value(instance, MINECRAFT_MANAGEMENT_REQUEST_METADATA_KEY) if instance else ""
+    try:
+        request_payload = json.loads(raw_request) if raw_request else {}
+    except (TypeError, ValueError):
+        return ""
+    server_id = str(request_payload.get("serverId", "") or "").strip().lower() if isinstance(request_payload, dict) else ""
+    return server_id if re.fullmatch(r"[a-z0-9][a-z0-9-]{0,30}", server_id) else ""
+
+
 def minecraft_server_properties(instance: dict[str, Any] | None) -> dict[str, Any]:
     if instance is None:
         return {"loaded": False, "properties": []}
@@ -5823,6 +5833,9 @@ def build_minecraft_management_payload(
     agent_prepared = bool(
         instance and metadata_value(instance, "vm-minecraft-management-script").strip()
     )
+    last_result = result or minecraft_management_request_result(instance)
+    if result is None and last_result and minecraft_management_request_server_id(instance) != selected_server_id:
+        last_result = {}
     return {
         "user": user,
         "target": {
@@ -5866,7 +5879,7 @@ def build_minecraft_management_payload(
             "content-install",
             "content-remove",
         ],
-        "lastResult": result or minecraft_management_request_result(instance),
+        "lastResult": last_result,
         "message": message,
     }
 
@@ -6818,6 +6831,7 @@ def execute_minecraft_management_action(
                 {
                     "id": request_payload["id"],
                     "action": request_payload["action"],
+                    "serverId": selected_server_id,
                     "state": "queued",
                     "output": "",
                     "completedAt": "",
