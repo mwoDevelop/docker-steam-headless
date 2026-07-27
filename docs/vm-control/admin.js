@@ -212,7 +212,7 @@
   function selectAdminTab(requestedTab) {
     const tabs = [...document.querySelectorAll("[data-admin-tab]")];
     const panels = [...document.querySelectorAll("[data-admin-tab-panel]")];
-    const selectedTab = tabs.some((tab) => tab.dataset.adminTab === requestedTab) ? requestedTab : "access";
+    const selectedTab = tabs.some((tab) => tab.dataset.adminTab === requestedTab) ? requestedTab : "vm-control";
     tabs.forEach((tab) => {
       const selected = tab.dataset.adminTab === selectedTab;
       tab.classList.toggle("is-active", selected);
@@ -950,12 +950,13 @@
     elements.softwareMinecraftVersion.innerHTML = optionList(minecraftVersions, selectedVersion, "Refresh Minecraft Versions to load this runtime catalog");
     const status = payload.status || {};
     const servers = Array.isArray(status.minecraftServers) ? status.minecraftServers : (Array.isArray(payload.minecraftServers) ? payload.minecraftServers : []);
-    const selectedMinecraftServer = servers.some((server) => String(server.id || "") === previousMinecraftServer)
+    const activeServers = servers.filter((server) => String(server && server.state || "").trim().toLowerCase() !== "removed");
+    const selectedMinecraftServer = activeServers.some((server) => String(server.id || "") === previousMinecraftServer)
       ? previousMinecraftServer
-      : String(servers[0] && servers[0].id || "");
-    elements.softwareMinecraftServer.innerHTML = servers.length
-      ? servers.map((server) => `<option value="${escapeHtml(String(server.id || ""))}" ${String(server.id || "") === selectedMinecraftServer ? "selected" : ""}>${escapeHtml(String(server.id || ""))} · ${escapeHtml(String(server.serverType || "paper"))} ${escapeHtml(String(server.version || "LATEST"))} · :${escapeHtml(String(server.gamePort || ""))} · ${escapeHtml(String(server.state || ""))}</option>`).join("")
-      : '<option value="">No installed servers</option>';
+      : String(activeServers[0] && activeServers[0].id || "");
+    elements.softwareMinecraftServer.innerHTML = activeServers.length
+      ? activeServers.map((server) => `<option value="${escapeHtml(String(server.id || ""))}" ${String(server.id || "") === selectedMinecraftServer ? "selected" : ""}>${escapeHtml(String(server.id || ""))} · ${escapeHtml(String(server.serverType || "paper"))} ${escapeHtml(String(server.version || "LATEST"))} · :${escapeHtml(String(server.gamePort || ""))} · ${escapeHtml(String(server.state || ""))}</option>`).join("")
+      : '<option value="">No active servers</option>';
     const allowedCommands = new Set(Array.isArray(status.allowedCommands) ? status.allowedCommands : []);
     const instanceState = String(status.instanceState || status.vmState || status.status || "NOT_FOUND");
     const minecraftState = String(
@@ -983,7 +984,7 @@
       const needsVersion = command === "install-minecraft";
       const selectedServer = String(elements.softwareMinecraftServer.value || "");
       const needsExistingServer = ["start-minecraft", "stop-minecraft", "restart-minecraft", "remove-minecraft"].includes(command);
-      const selectedServerState = String((servers.find((server) => String(server.id || "") === selectedServer) || {}).state || "").toLowerCase();
+      const selectedServerState = String((activeServers.find((server) => String(server.id || "") === selectedServer) || {}).state || "").toLowerCase();
       const invalidLifecycleState = (command === "start-minecraft" && selectedServerState !== "stopped")
         || (["stop-minecraft", "restart-minecraft"].includes(command) && selectedServerState !== "running")
         || (command === "remove-minecraft" && !["running", "stopped", "error"].includes(selectedServerState));
