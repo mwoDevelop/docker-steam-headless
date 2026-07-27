@@ -69,6 +69,13 @@ body::before {
   display: none;
 }
 
+#page-loader.embedded-page-loader.is-active,
+#admin-page-loader.admin-page-loader:not([hidden]) {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+
 body.is-page-ready.is-page-loading .page-loader {
   inset: auto 20px 20px auto;
   width: min(440px, calc(100vw - 40px));

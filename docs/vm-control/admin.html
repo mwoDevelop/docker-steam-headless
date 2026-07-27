@@ -78,8 +78,8 @@
         <button class="admin-tab is-active" type="button" data-admin-tab="access" role="tab" aria-selected="true">Access</button>
       </nav>
 
-      <section class="panel admin-tab-panel" data-admin-tab-panel="vm-control" hidden>
-        <div id="page-loader" class="page-loader" role="status" aria-live="polite" aria-busy="false" hidden>
+      <div id="page-loader" class="page-loader embedded-page-loader" role="status" aria-live="polite" aria-busy="false" hidden>
+        <div class="page-loader-card">
           <span class="page-loader-spinner" aria-hidden="true"></span>
           <div>
             <p class="page-loader-kicker">Loading VM Control</p>
@@ -87,6 +87,18 @@
             <button id="cancel-gpu-scan" class="ghost page-loader-cancel hidden" type="button">Cancel Scan</button>
           </div>
         </div>
+      </div>
+      <div id="admin-page-loader" class="page-loader admin-page-loader" role="status" aria-live="polite" aria-busy="false" hidden>
+        <div class="page-loader-card">
+          <span class="page-loader-spinner" aria-hidden="true"></span>
+          <div>
+            <p class="page-loader-kicker">Updating administration</p>
+            <p id="admin-page-loader-message">Preparing administrator controls...</p>
+          </div>
+        </div>
+      </div>
+
+      <section class="panel admin-tab-panel" data-admin-tab-panel="vm-control" hidden>
         <div id="app-shell" data-vm-control-embedded aria-busy="false">
           <div class="section-head">
             <div>
@@ -318,7 +330,7 @@
             <p class="access-meta">Create a separate server with its own ID, runtime, version and port.</p>
             <label>
               <span>New server ID</span>
-              <input id="software-minecraft-new-server" type="text" pattern="[a-z0-9][a-z0-9-]{0,30}" placeholder="survival" maxlength="31" autocomplete="off">
+              <input id="software-minecraft-new-server" type="text" pattern="[a-z0-9][a-z0-9\-]{0,30}" placeholder="survival" maxlength="31" autocomplete="off">
             </label>
             <label>
               <span>Runtime</span>

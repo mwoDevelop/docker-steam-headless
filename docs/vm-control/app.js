@@ -210,6 +210,9 @@
     if (!elements.pageLoader) {
       return;
     }
+    if (embeddedVmControl) {
+      elements.pageLoader.classList.add("is-active");
+    }
     elements.pageLoader.hidden = false;
     elements.pageLoader.setAttribute("aria-busy", "true");
     if (elements.appShell) {
@@ -247,6 +250,9 @@
     }
     window.setTimeout(() => {
       if (!state.isPageLoading) {
+        if (embeddedVmControl) {
+          elements.pageLoader.classList.remove("is-active");
+        }
         elements.pageLoader.hidden = true;
       }
     }, 220);

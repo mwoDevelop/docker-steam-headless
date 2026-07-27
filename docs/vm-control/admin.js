@@ -96,11 +96,26 @@
     window.localStorage.setItem(storageKeys.config, JSON.stringify(saved));
   }
 
-  function setBusy(nextBusy) {
+  function setAdminPageLoading(nextBusy, message) {
+    const loader = document.querySelector("#admin-page-loader");
+    const loaderMessage = document.querySelector("#admin-page-loader-message");
+    if (!loader) {
+      return;
+    }
+    loader.hidden = !nextBusy;
+    loader.setAttribute("aria-busy", String(nextBusy));
+    if (nextBusy && loaderMessage) {
+      loaderMessage.textContent = message || "Updating administrator controls...";
+    }
+  }
+
+  function setBusy(nextBusy, loadingMessage) {
+    const wasBusy = state.isBusy;
     if (nextBusy && !state.isBusy) {
       state.refreshRevision += 1;
     }
     state.isBusy = nextBusy;
+    setAdminPageLoading(nextBusy, loadingMessage || (!wasBusy ? "Updating administrator controls..." : ""));
     elements.connect.disabled = nextBusy;
     elements.googleSignIn.disabled = nextBusy || !state.backendConfig;
     elements.addUser.disabled = nextBusy || !state.user;
@@ -1051,6 +1066,9 @@
 
   async function updateSoftware(command) {
     const endpointId = String(state.softwareEndpointId || elements.softwareEndpoint.value || "");
+    const minecraftServerId = command === "install-minecraft"
+      ? String(elements.softwareMinecraftNewServer.value || "")
+      : String(elements.softwareMinecraftServer.value || "");
     const payload = await fetchApi("/api/admin/software", {
       method: "POST",
       body: JSON.stringify({
@@ -1059,11 +1077,14 @@
         applicationId: String(elements.softwareApplication.value || ""),
         minecraftVersion: String(elements.softwareMinecraftVersion.value || ""),
         minecraftServerType: String(elements.softwareMinecraftServerType.value || "paper"),
-        minecraftServerId: String(elements.softwareMinecraftServer.value || elements.softwareMinecraftNewServer.value || "").trim().toLowerCase(),
+        minecraftServerId: minecraftServerId.trim().toLowerCase(),
       }),
     });
     state.softwarePayload = payload;
     state.softwareEndpointId = endpointId;
+    if (command === "install-minecraft") {
+      elements.softwareMinecraftNewServer.value = "";
+    }
     const labels = {
       "install-app": "Application installation started.",
       "uninstall-app": "Application removal started.",
@@ -1373,7 +1394,7 @@
   elements.softwareEndpoint.addEventListener("change", async () => {
     try {
       state.softwareEndpointId = String(elements.softwareEndpoint.value || "");
-      setBusy(true);
+      setBusy(true, "Loading selected VM software...");
       await loadSoftware();
     } catch (error) {
       handleError(error);
@@ -1396,7 +1417,7 @@
 
   elements.softwareRefreshMinecraftVersions.addEventListener("click", async () => {
     try {
-      setBusy(true);
+      setBusy(true, "Refreshing Minecraft version catalog...");
       await updateSoftware("refresh-minecraft-versions");
     } catch (error) {
       handleError(error);
@@ -1415,10 +1436,23 @@
       return;
     }
     try {
-      setBusy(true);
+      const loadingMessages = {
+        "install-app": "Installing application...",
+        "uninstall-app": "Removing application...",
+        "install-minecraft": "Creating Minecraft server...",
+        "start-minecraft": "Starting Minecraft server...",
+        "stop-minecraft": "Stopping Minecraft server...",
+        "restart-minecraft": "Restarting Minecraft server...",
+        "remove-minecraft": "Removing Minecraft server...",
+      };
+      setBusy(true, loadingMessages[command] || "Updating software...");
       await updateSoftware(command);
     } catch (error) {
       handleError(error);
+      if (elements.softwareStatus) {
+        elements.softwareStatus.textContent = error.message || "Software action failed.";
+        elements.softwareStatus.dataset.tone = "error";
+      }
     } finally {
       setBusy(false);
     }
