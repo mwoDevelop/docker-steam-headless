@@ -42,6 +42,7 @@
     endpointId: String(params.get("endpointId") || "mwo-vm1"),
     hardwareId: String(params.get("hardwareId") || ""),
     zone: String(params.get("zone") || ""),
+    minecraftServerId: String(params.get("minecraftServerId") || ""),
     data: null,
     busy: false,
   };
@@ -60,6 +61,7 @@
     if (state.endpointId) target.set("endpointId", state.endpointId);
     if (state.hardwareId) target.set("hardwareId", state.hardwareId);
     if (state.zone) target.set("zone", state.zone);
+    if (state.minecraftServerId) target.set("minecraftServerId", state.minecraftServerId);
     return target.toString();
   }
 
@@ -316,6 +318,7 @@
 
   function render(data) {
     state.data = data;
+    state.minecraftServerId = String(data.selectedServerId || state.minecraftServerId || "");
     elements.identity.textContent = `Management account: ${data.user && data.user.email || "unknown"}`;
     const endpoint = data.target && data.target.endpoint ? data.target.endpoint : {};
     const endpointLabel = endpoint.domain || state.endpointId;
@@ -360,7 +363,7 @@
   }
 
   async function runAction(action, playerInputId) {
-    const body = { action, endpointId: state.endpointId, hardwareId: state.hardwareId, zone: state.zone };
+    const body = { action, endpointId: state.endpointId, hardwareId: state.hardwareId, zone: state.zone, minecraftServerId: state.minecraftServerId };
     if (action === "console") {
       body.command = String(elements.console.value || "").trim();
       if (consoleCommandNeedsConfirmation(body.command)) {
@@ -384,7 +387,7 @@
 
   async function runContentAction(action, projectId, title) {
     if (action === "content-remove" && !window.confirm(`Remove ${projectId} and restart Minecraft?`)) return;
-    const body = { action, endpointId: state.endpointId, hardwareId: state.hardwareId, zone: state.zone, projectId, title };
+    const body = { action, endpointId: state.endpointId, hardwareId: state.hardwareId, zone: state.zone, minecraftServerId: state.minecraftServerId, projectId, title };
     if (action === "catalog-search") body.query = String(elements.contentSearchQuery.value || "").trim();
     setBusy(true);
     setStatus(action === "catalog-search" ? "Searching Modrinth..." : "Applying Modrinth content and restarting Minecraft...", "warning");
@@ -400,7 +403,7 @@
   }
 
   async function runPropertyAction(action) {
-    const body = { action, endpointId: state.endpointId, hardwareId: state.hardwareId, zone: state.zone };
+    const body = { action, endpointId: state.endpointId, hardwareId: state.hardwareId, zone: state.zone, minecraftServerId: state.minecraftServerId };
     if (action === "properties-update") {
       if (!validatePropertyValue(true)) return;
       body.property = elements.propertyName.value;

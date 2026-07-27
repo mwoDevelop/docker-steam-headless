@@ -1037,6 +1037,7 @@
     if (endpoint.id) managementUrl.searchParams.set("endpointId", String(endpoint.id));
     if (endpoint.zone) managementUrl.searchParams.set("zone", String(endpoint.zone));
     if (endpoint.hardware && endpoint.hardware.id) managementUrl.searchParams.set("hardwareId", String(endpoint.hardware.id));
+    if (minecraftManagement.selectedServerId) managementUrl.searchParams.set("minecraftServerId", String(minecraftManagement.selectedServerId));
     const card = (title, url, detail, linkLabel) => `
       <article class="access-card">
         <h3>${escapeHtml(title)}</h3>

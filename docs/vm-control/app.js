@@ -3075,6 +3075,7 @@
     minecraftManagementUrl.searchParams.set("hardwareId", String(elements.hardwareSelect && elements.hardwareSelect.value || ""));
     minecraftManagementUrl.searchParams.set("zone", selectedZone());
     minecraftManagementUrl.searchParams.set("endpointId", selectedEndpointId());
+    if (minecraftManagement.selectedServerId) minecraftManagementUrl.searchParams.set("minecraftServerId", String(minecraftManagement.selectedServerId));
     const minecraftManagementLink = minecraftManagement.authorized
       ? `<a href="${escapeHtml(minecraftManagementUrl.toString())}">Open management controls</a>`
       : "<span class=\"access-meta\">Minecraft management access has not been granted to this account.</span>";

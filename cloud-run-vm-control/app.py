@@ -5503,6 +5503,23 @@ def minecraft_server_by_id(instance: dict[str, Any] | None, server_id: str) -> d
     return next((server for server in minecraft_servers_from_instance(instance) if server["id"] == server_id), None)
 
 
+def selected_minecraft_server_id(instance: dict[str, Any] | None, payload: Any) -> str:
+    """Resolve an explicit server ID, or the most useful live server on a multi-server VM."""
+    raw_server_id = payload.get("minecraftServerId") if hasattr(payload, "get") else ""
+    if str(raw_server_id or "").strip():
+        return minecraft_server_id(payload)
+    servers = minecraft_servers_from_instance(instance)
+    if any(server["id"] == "default" for server in servers):
+        return "default"
+    for server in servers:
+        if server.get("state") == "running":
+            return str(server["id"])
+    for server in servers:
+        if server.get("state") != "removed":
+            return str(server["id"])
+    return "default"
+
+
 def minecraft_next_game_port(servers: list[dict[str, Any]]) -> int:
     used = {int(server["gamePort"]) for server in servers}
     for port in range(MINECRAFT_GAME_PORT_MIN, MINECRAFT_GAME_PORT_MAX + 1):
@@ -5585,10 +5602,11 @@ def minecraft_modrinth_catalog_search(instance: dict[str, Any], payload: dict[st
     query = str(payload.get("query") or "").strip()
     if not (2 <= len(query) <= 100) or any(ord(character) < 32 for character in query):
         raise ApiError("Modrinth search query must contain 2-100 printable characters.", 400)
-    version = minecraft_version_from_instance(instance)
+    selected_server = minecraft_server_by_id(instance, minecraft_server_id(payload))
+    version = str((selected_server or {}).get("version") or minecraft_version_from_instance(instance)).strip()
     if not version:
         raise ApiError("Install a concrete Minecraft version before searching for content.", 409)
-    runtime = minecraft_server_type_spec(minecraft_server_type_from_instance(instance))
+    runtime = minecraft_server_type_spec((selected_server or {}).get("serverType") or minecraft_server_type_from_instance(instance))
     kind = str(runtime["contentKind"])
     requested_kind = str(payload.get("kind") or kind).strip().lower()
     if requested_kind != kind:
@@ -5632,10 +5650,11 @@ def minecraft_modrinth_content_entry(instance: dict[str, Any], payload: dict[str
     project_id = str(payload.get("projectId") or "").strip()
     if not re.fullmatch(r"[A-Za-z0-9_-]{3,80}", project_id):
         raise ApiError("Invalid Modrinth project ID.", 400)
-    version = minecraft_version_from_instance(instance)
+    selected_server = minecraft_server_by_id(instance, minecraft_server_id(payload))
+    version = str((selected_server or {}).get("version") or minecraft_version_from_instance(instance)).strip()
     if not version:
         raise ApiError("Install a concrete Minecraft version before adding content.", 409)
-    runtime = minecraft_server_type_spec(minecraft_server_type_from_instance(instance))
+    runtime = minecraft_server_type_spec((selected_server or {}).get("serverType") or minecraft_server_type_from_instance(instance))
     requested_kind = str(payload.get("kind") or runtime["contentKind"]).strip().lower()
     if requested_kind != runtime["contentKind"]:
         raise ApiError(f"The selected {runtime['label']} server supports {runtime['contentLabel']} only.", 409)
@@ -5765,7 +5784,7 @@ def build_minecraft_management_payload(
     message: str = "",
     catalog_results: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    selected_server_id = minecraft_server_id(request.args) if request else "default"
+    selected_server_id = selected_minecraft_server_id(instance, request.args if request else {})
     servers = minecraft_servers_from_instance(instance)
     selected_server = next((server for server in servers if server["id"] == selected_server_id), None)
     minecraft_status = build_minecraft_status(instance)
@@ -5777,7 +5796,7 @@ def build_minecraft_management_payload(
             "version": selected_server.get("version", ""),
         }
     agent_ready = minecraft_management_agent_ready(instance)
-    runtime = minecraft_server_type_spec(minecraft_server_type_from_instance(instance))
+    runtime = minecraft_server_type_spec((selected_server or {}).get("serverType") or minecraft_server_type_from_instance(instance))
     agent_prepared = bool(
         instance and metadata_value(instance, "vm-minecraft-management-script").strip()
     )
@@ -6712,7 +6731,8 @@ def execute_minecraft_management_action(
     payload: dict[str, Any],
 ) -> dict[str, Any]:
     action = str(payload.get("action", "") or "").strip().lower()
-    selected_server_id = minecraft_server_id(payload)
+    selected_server_id = selected_minecraft_server_id(instance, payload)
+    payload = {**payload, "minecraftServerId": selected_server_id}
     if instance is None:
         raise ApiError("Create the selected VM before using Minecraft management.", 409)
     if action == "prepare-agent":
