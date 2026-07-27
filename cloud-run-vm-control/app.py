@@ -5542,12 +5542,7 @@ def update_minecraft_server_registry(instance: dict[str, Any], servers: list[dic
     return get_instance()
 
 
-def minecraft_modrinth_content(instance: dict[str, Any] | None) -> list[dict[str, str]]:
-    raw_content = metadata_value(instance, MINECRAFT_MODRINTH_CONTENT_METADATA_KEY) if instance else ""
-    try:
-        values = json.loads(raw_content) if raw_content else []
-    except (TypeError, ValueError):
-        return []
+def normalize_minecraft_modrinth_content(values: Any) -> list[dict[str, str]]:
     if not isinstance(values, list):
         return []
 
@@ -5578,6 +5573,26 @@ def minecraft_modrinth_content(instance: dict[str, Any] | None) -> list[dict[str
             }
         )
     return result
+
+
+def minecraft_modrinth_content(instance: dict[str, Any] | None) -> list[dict[str, str]]:
+    raw_content = metadata_value(instance, MINECRAFT_MODRINTH_CONTENT_METADATA_KEY) if instance else ""
+    try:
+        values = json.loads(raw_content) if raw_content else []
+    except (TypeError, ValueError):
+        return []
+    return normalize_minecraft_modrinth_content(values)
+
+
+def update_minecraft_server_content(
+    instance: dict[str, Any], server_id: str, content: list[dict[str, str]]
+) -> dict[str, Any]:
+    servers = minecraft_servers_from_instance(instance)
+    for server in servers:
+        if server["id"] == server_id:
+            server["content"] = normalize_minecraft_modrinth_content(content)
+            return update_minecraft_server_registry(instance, servers)
+    raise ApiError("Selected Minecraft server is not installed on this VM.", 404)
 
 
 def modrinth_get(path: str, *, params: dict[str, Any]) -> Any:
@@ -5830,7 +5845,7 @@ def build_minecraft_management_payload(
         },
         "serverProperties": minecraft_server_properties(instance),
         "rconSuggestions": minecraft_rcon_suggestions(instance),
-        "content": minecraft_modrinth_content(instance),
+        "content": normalize_minecraft_modrinth_content((selected_server or {}).get("content", [])),
         "catalogResults": catalog_results or [],
         "agentReady": agent_ready,
         "agentPrepared": agent_prepared,
@@ -6756,9 +6771,6 @@ def execute_minecraft_management_action(
     selected_server = minecraft_server_by_id(instance, selected_server_id)
     if selected_server is None or selected_server.get("state") == "removed":
         raise ApiError("Selected Minecraft server is not installed on this VM.", 404)
-    minecraft_status = build_minecraft_status(instance)
-    if str(instance.get("status", "")).upper() != "RUNNING" or minecraft_status.get("state") != "running":
-        raise ApiError("Minecraft server must be running before using management controls.", 409)
     if action == "catalog-search":
         results = minecraft_modrinth_catalog_search(instance, payload)
         return build_minecraft_management_payload(
@@ -6768,6 +6780,8 @@ def execute_minecraft_management_action(
             message=f"Found {len(results)} compatible Modrinth result(s).",
             catalog_results=results,
         )
+    if str(instance.get("status", "")).upper() != "RUNNING" or selected_server.get("state") != "running":
+        raise ApiError("Start the selected Minecraft server before using management controls.", 409)
     if not minecraft_management_agent_ready(instance):
         raise ApiError(
             "Minecraft management agent is not active yet. Prepare it and restart the VM from the main GUI.",
@@ -6777,7 +6791,7 @@ def execute_minecraft_management_action(
     updated_content: list[dict[str, str]] | None = None
     if action == "content-install":
         entry = minecraft_modrinth_content_entry(instance, payload)
-        current_content = minecraft_modrinth_content(instance)
+        current_content = normalize_minecraft_modrinth_content(selected_server.get("content", []))
         if any(item["projectId"] == entry["projectId"] for item in current_content):
             raise ApiError("This Modrinth project is already installed. Remove it before selecting another version.", 409)
         updated_content = [*current_content, entry]
@@ -6787,7 +6801,7 @@ def execute_minecraft_management_action(
         project_id = str(payload.get("projectId") or "").strip()
         if not re.fullmatch(r"[A-Za-z0-9_-]{3,80}", project_id):
             raise ApiError("Invalid Modrinth project ID.", 400)
-        current_content = minecraft_modrinth_content(instance)
+        current_content = normalize_minecraft_modrinth_content(selected_server.get("content", []))
         updated_content = [item for item in current_content if item["projectId"] != project_id]
         if len(updated_content) == len(current_content):
             raise ApiError("The selected Modrinth project is not installed.", 404)
@@ -6817,12 +6831,7 @@ def execute_minecraft_management_action(
         timeout_seconds=300 if updated_content is not None else 75,
     )
     if updated_content is not None and result.get("state") == "done":
-        set_instance_metadata_value(
-            refreshed,
-            MINECRAFT_MODRINTH_CONTENT_METADATA_KEY,
-            json.dumps(updated_content, separators=(",", ":")),
-        )
-        refreshed = get_instance()
+        refreshed = update_minecraft_server_content(refreshed, selected_server_id, updated_content)
     message = "Minecraft management action completed." if result.get("state") == "done" else "Minecraft management action failed on the VM."
     return build_minecraft_management_payload(
         refreshed,

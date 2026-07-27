@@ -67,17 +67,18 @@
 
   function setBusy(busy) {
     state.busy = busy;
+    const selectedServerRunning = Boolean(state.data && state.data.minecraftStatus && state.data.minecraftStatus.state === "running");
     elements.refresh.disabled = busy;
-    elements.actionButtons.forEach((button) => { button.disabled = busy || !state.data || !state.data.agentReady; });
-    if (elements.console) elements.console.disabled = busy || !state.data || !state.data.agentReady;
-    document.querySelectorAll(".console-suggestion, .console-player-hint").forEach((button) => { button.disabled = busy || !state.data || !state.data.agentReady; });
+    elements.actionButtons.forEach((button) => { button.disabled = busy || !state.data || !state.data.agentReady || !selectedServerRunning; });
+    if (elements.console) elements.console.disabled = busy || !state.data || !state.data.agentReady || !selectedServerRunning;
+    document.querySelectorAll(".console-suggestion, .console-player-hint").forEach((button) => { button.disabled = busy || !state.data || !state.data.agentReady || !selectedServerRunning; });
     const propertiesLoaded = Boolean(state.data && state.data.serverProperties && state.data.serverProperties.loaded);
-    if (elements.propertiesLoad) elements.propertiesLoad.disabled = busy || !state.data || !state.data.agentReady;
+    if (elements.propertiesLoad) elements.propertiesLoad.disabled = busy || !state.data || !state.data.agentReady || !selectedServerRunning;
     if (elements.propertyName) elements.propertyName.disabled = busy || !propertiesLoaded;
     if (elements.propertyValue) elements.propertyValue.disabled = busy || !propertiesLoaded || !selectedServerProperty()?.editable;
     if (elements.propertiesSave) elements.propertiesSave.disabled = busy || !propertiesLoaded || !selectedServerProperty()?.editable || !validatePropertyValue(false);
     if (elements.contentSearch) elements.contentSearch.disabled = busy || !state.data || !state.data.agentReady;
-    document.querySelectorAll("[data-content-action]").forEach((button) => { button.disabled = busy || !state.data || !state.data.agentReady; });
+    document.querySelectorAll("[data-content-action]").forEach((button) => { button.disabled = busy || !state.data || !state.data.agentReady || !selectedServerRunning; });
   }
 
   function setStatus(message, tone) {
@@ -328,7 +329,9 @@
     const kindLabel = runtime.contentLabel || `${runtime.contentKind || "content"}s`;
     setStatus(`Minecraft: ${minecraft.label || "Unknown"}. Runtime: ${runtime.label || "Paper"} (${kindLabel}). VM: ${data.instanceState || "unknown"}.`, data.agentReady ? "success" : "warning");
     elements.contentHeading.textContent = `Compatible Modrinth ${kindLabel}`;
-    elements.contentRuntime.textContent = `${runtime.label || "Paper"} accepts ${kindLabel}; the backend filters results by the installed Minecraft version and runtime.`;
+    elements.contentRuntime.textContent = minecraft.state === "running"
+      ? `${runtime.label || "Paper"} accepts ${kindLabel}; the backend filters results by the installed Minecraft version and runtime.`
+      : `${runtime.label || "Paper"} accepts ${kindLabel}. You can browse the catalog now; start this server before installing or removing content.`;
     renderServerProperties(data.serverProperties);
     renderCatalog(data.catalogResults || []);
     renderInstalledContent(data.content || [], runtime);
