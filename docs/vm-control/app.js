@@ -2933,6 +2933,9 @@
   }
 
   function renderAccess(payload) {
+    if (!elements.access) {
+      return;
+    }
     if (!payload) {
       elements.access.className = "access empty";
       elements.access.textContent = "Refresh VM status to load current access details.";

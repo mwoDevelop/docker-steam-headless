@@ -55,6 +55,7 @@
     softwareRefreshMinecraftVersions: document.querySelector("#software-refresh-minecraft-versions"),
     softwareActions: document.querySelector("#software-actions"),
     softwareStatus: document.querySelector("#software-status"),
+    softwareLiveAccess: document.querySelector("#software-live-access"),
   };
 
   const state = {
@@ -890,6 +891,7 @@
         ? "No VM endpoint is available. Create a VM before managing applications or Minecraft."
         : "Sign in to load applications and Minecraft server state.";
       elements.softwareStatus.dataset.tone = state.user ? "warning" : "neutral";
+      renderSoftwareLiveAccess(null);
       return;
     }
 
@@ -967,6 +969,63 @@
         || (needsExistingServer && invalidLifecycleState)
       );
     });
+    renderSoftwareLiveAccess(payload);
+  }
+
+  function renderSoftwareLiveAccess(payload) {
+    const container = elements.softwareLiveAccess;
+    if (!container) return;
+    if (!state.user) {
+      container.className = "access empty";
+      container.textContent = "Sign in to load live access details.";
+      return;
+    }
+    if (!payload) {
+      container.className = "access empty";
+      container.textContent = "No VM endpoint is available for live access.";
+      return;
+    }
+
+    const endpoint = payload.endpoint || {};
+    const status = payload.status || {};
+    const endpointId = String(endpoint.id || "selected endpoint");
+    const instanceState = String(status.instanceState || status.vmState || "NOT_FOUND").toUpperCase();
+    if (instanceState !== "RUNNING") {
+      container.className = "access empty";
+      container.textContent = `${endpointId}: VM ${instanceState}. Start the VM to use live access.`;
+      return;
+    }
+
+    const urls = status.urls || {};
+    const sunshineUrl = String(urls.sunshine || "");
+    const novncUrl = String(urls.novnc || "");
+    const minecraftAddress = String(urls.minecraft || "");
+    const minecraftStatus = status.minecraftStatus || status.minecraft || {};
+    const sunshineStatus = status.sunshineStatus || status.sunshine || {};
+    const minecraftManagement = status.minecraftManagement || {};
+    const managementUrl = new URL("./minecraft-admin.html", window.location.href);
+    if (state.backendUrl) managementUrl.searchParams.set("backend", state.backendUrl);
+    if (endpoint.id) managementUrl.searchParams.set("endpointId", String(endpoint.id));
+    if (endpoint.zone) managementUrl.searchParams.set("zone", String(endpoint.zone));
+    if (endpoint.hardware && endpoint.hardware.id) managementUrl.searchParams.set("hardwareId", String(endpoint.hardware.id));
+    const card = (title, url, detail, linkLabel) => `
+      <article class="access-card">
+        <h3>${escapeHtml(title)}</h3>
+        <p class="access-meta">${escapeHtml(detail || "Status not available")}</p>
+        ${url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noreferrer">${escapeHtml(linkLabel)}</a>` : '<span class="access-meta">Address not available</span>'}
+      </article>`;
+
+    container.className = "access";
+    container.innerHTML = `<div class="access-grid">
+      ${card("Sunshine Web UI", sunshineUrl, String(sunshineStatus.label || "Status not available"), "Open Sunshine UI")}
+      ${card("Browser desktop", novncUrl, "noVNC browser desktop", "Open noVNC")}
+      ${card("Minecraft Server", "", `${minecraftAddress || "Address not available"} · ${String(minecraftStatus.label || "Not installed")}`, "")}
+      <article class="access-card accent">
+        <h3>Minecraft management</h3>
+        <p class="access-meta">${minecraftManagement.authorized ? "Authorized administrator access." : "Minecraft management access is not available."}</p>
+        ${minecraftManagement.authorized ? `<a href="${escapeHtml(managementUrl.toString())}">Open management controls</a>` : ""}
+      </article>
+    </div>`;
   }
 
   async function loadSoftware() {
