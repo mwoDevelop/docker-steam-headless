@@ -115,8 +115,10 @@
     document.querySelectorAll("[data-endpoint-action], [data-endpoint-zone]").forEach((input) => {
       input.disabled = nextBusy || !state.user || input.dataset.endpointDisabled === "true";
     });
+    const hasVmEndpoint = vmEndpoints(state.endpointsPayload && state.endpointsPayload.endpoints).length > 0;
+    const hasRuntimeVmEndpoint = vmEndpoints(state.runtimeImagesPayload && state.runtimeImagesPayload.endpoints).length > 0;
     elements.refreshRuntimeImages.disabled = nextBusy || !state.user;
-    elements.runtimeEndpoint.disabled = nextBusy || !state.user;
+    elements.runtimeEndpoint.disabled = nextBusy || !state.user || !hasRuntimeVmEndpoint;
     document.querySelectorAll("[data-runtime-action], [data-runtime-image-select]").forEach((input) => {
       input.disabled = nextBusy || !state.user || input.dataset.runtimeDisabled === "true";
     });
@@ -138,11 +140,11 @@
     const sunshinePayload = state.sunshineCredentialsPayload || {};
     const canUpdateSunshine = Boolean(sunshinePayload.canUpdate);
     const canRevealSunshine = Boolean(sunshinePayload.passwordAvailable);
-    elements.sunshineEndpoint.disabled = nextBusy || !state.user || !elements.sunshineEndpoint.options.length;
+    elements.sunshineEndpoint.disabled = nextBusy || !state.user || !hasVmEndpoint;
     elements.sunshinePasswordToggle.disabled = nextBusy || !state.user || !canRevealSunshine;
     elements.sunshinePasswordInput.disabled = nextBusy || !state.user || !canUpdateSunshine;
     elements.sunshinePasswordSubmit.disabled = nextBusy || !state.user || !canUpdateSunshine;
-    const softwareLoaded = Boolean(state.softwarePayload);
+    const softwareLoaded = Boolean(state.softwarePayload) && hasVmEndpoint;
     [
       elements.softwareEndpoint,
       elements.softwareApplication,
