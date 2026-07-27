@@ -128,6 +128,7 @@
     "restart-minecraft",
     "remove-minecraft",
   ]);
+  const embeddedVmControl = Boolean(document.querySelector("[data-vm-control-embedded]"));
 
   const elements = {
     backendUrl: document.querySelector("#backend-url"),
@@ -203,7 +204,9 @@
   function setPageLoading(message) {
     state.pageLoadingToken += 1;
     state.isPageLoading = true;
-    document.body.classList.add("is-page-loading");
+    if (!embeddedVmControl) {
+      document.body.classList.add("is-page-loading");
+    }
     if (!elements.pageLoader) {
       return;
     }
@@ -223,7 +226,9 @@
       return;
     }
     state.isPageLoading = false;
-    document.body.classList.add("is-page-ready");
+    if (!embeddedVmControl) {
+      document.body.classList.add("is-page-ready");
+    }
     if (elements.pageLoaderMessage && message) {
       elements.pageLoaderMessage.textContent = message;
     }
@@ -231,11 +236,15 @@
       elements.appShell.setAttribute("aria-busy", "false");
     }
     if (!elements.pageLoader) {
-      document.body.classList.remove("is-page-loading");
+      if (!embeddedVmControl) {
+        document.body.classList.remove("is-page-loading");
+      }
       return;
     }
     elements.pageLoader.setAttribute("aria-busy", "false");
-    document.body.classList.remove("is-page-loading");
+    if (!embeddedVmControl) {
+      document.body.classList.remove("is-page-loading");
+    }
     window.setTimeout(() => {
       if (!state.isPageLoading) {
         elements.pageLoader.hidden = true;
@@ -304,8 +313,10 @@
 
   function setBusy(nextBusy) {
     state.isBusy = nextBusy;
-    elements.connect.disabled = nextBusy;
-    elements.googleSignIn.disabled = nextBusy || !state.backendConfig;
+    if (!embeddedVmControl) {
+      elements.connect.disabled = nextBusy;
+      elements.googleSignIn.disabled = nextBusy || !state.backendConfig;
+    }
     if (elements.refreshHardware) {
       elements.refreshHardware.disabled = nextBusy || !state.user;
     }
@@ -654,6 +665,11 @@
   }
 
   function updateAuthUi() {
+    if (embeddedVmControl) {
+      renderTargetSummary();
+      updateActionAvailability();
+      return;
+    }
     elements.googleSignIn.classList.toggle("hidden", Boolean(state.user));
     if (state.user) {
       setAuthStatus(`Signed in as ${state.user.email}`, "success");
@@ -3260,8 +3276,9 @@
     }
   }
 
-  elements.form.addEventListener("input", saveConfig);
-  elements.connect.addEventListener("click", async () => {
+  if (!embeddedVmControl) {
+    elements.form.addEventListener("input", saveConfig);
+    elements.connect.addEventListener("click", async () => {
     if (state.isBusy) {
       return;
     }
@@ -3275,9 +3292,9 @@
       setBusy(false);
       markPageReady("Ready.");
     }
-  });
+    });
 
-  elements.googleSignIn.addEventListener("click", async () => {
+    elements.googleSignIn.addEventListener("click", async () => {
     if (state.isBusy) {
       return;
     }
@@ -3294,12 +3311,45 @@
       handleError(error);
       setBusy(false);
     }
-  });
+    });
 
-  elements.signOut.addEventListener("click", () => {
-    clearSession({ revokeGoogleSession: true });
-    setBanner("Google session cleared from this browser session.", "success");
-  });
+    elements.signOut.addEventListener("click", () => {
+      clearSession({ revokeGoogleSession: true });
+      setBanner("Google session cleared from this browser session.", "success");
+    });
+  }
+
+  if (embeddedVmControl) {
+    const syncEmbeddedSession = async (force) => {
+      const token = window.sessionStorage.getItem(storageKeys.sessionToken) || "";
+      if (!token) {
+        if (state.user) {
+          state.token = "";
+          state.user = null;
+          updateAuthUi();
+        }
+        return;
+      }
+      if (!force && state.user && state.token === token) return;
+      if (state.isBusy) return;
+      state.token = token;
+      try {
+        setBusy(true);
+        await connectBackend({ silent: true });
+      } catch (error) {
+        handleError(error);
+      } finally {
+        setBusy(false);
+        markPageReady("Ready.");
+      }
+    };
+    window.addEventListener("vm-control:session-changed", () => { void syncEmbeddedSession(true); });
+    window.addEventListener("vm-control:tab-activated", (event) => {
+      if (event.detail && event.detail.tab === "vm-control") {
+        void syncEmbeddedSession(true);
+      }
+    });
+  }
 
   if (elements.refreshStatus) {
     elements.refreshStatus.addEventListener("click", async () => {

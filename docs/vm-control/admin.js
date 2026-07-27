@@ -206,6 +206,7 @@
     panels.forEach((panel) => {
       panel.hidden = panel.dataset.adminTabPanel !== selectedTab;
     });
+    window.dispatchEvent(new CustomEvent("vm-control:tab-activated", { detail: { tab: selectedTab } }));
     if (selectedTab === "activity") {
       renderActivityHistory();
     }
@@ -246,10 +247,6 @@
   }
 
   function initializeAdminTabs() {
-    if (window.location.hash === "#vm-control") {
-      window.location.replace("./vm-admin.html");
-      return false;
-    }
     document.querySelectorAll("[data-admin-tab]").forEach((tab) => {
       tab.addEventListener("click", () => {
         const selectedTab = tab.dataset.adminTab || "access";
@@ -614,6 +611,7 @@
     } else {
       window.sessionStorage.removeItem(storageKeys.sessionToken);
     }
+    window.dispatchEvent(new CustomEvent("vm-control:session-changed"));
   }
 
   window.addEventListener("message", async (event) => {

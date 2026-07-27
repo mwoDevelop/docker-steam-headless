@@ -69,7 +69,7 @@
       </section>
 
       <nav class="admin-tabs" aria-label="Administration sections" role="tablist">
-        <a class="admin-tab" href="./vm-admin.html">VM Control</a>
+        <button class="admin-tab" type="button" data-admin-tab="vm-control" role="tab" aria-selected="false">VM Control</button>
         <button class="admin-tab" type="button" data-admin-tab="software" role="tab" aria-selected="false">Software</button>
         <button class="admin-tab" type="button" data-admin-tab="runtime" role="tab" aria-selected="false">Runtime images</button>
         <button class="admin-tab" type="button" data-admin-tab="endpoints" role="tab" aria-selected="false">Endpoints</button>
@@ -77,6 +77,120 @@
         <button class="admin-tab" type="button" data-admin-tab="activity" role="tab" aria-selected="false">Activity</button>
         <button class="admin-tab is-active" type="button" data-admin-tab="access" role="tab" aria-selected="true">Access</button>
       </nav>
+
+      <section class="panel admin-tab-panel" data-admin-tab-panel="vm-control" hidden>
+        <div id="page-loader" class="page-loader" role="status" aria-live="polite" aria-busy="false" hidden>
+          <span class="page-loader-spinner" aria-hidden="true"></span>
+          <div>
+            <p class="page-loader-kicker">Loading VM Control</p>
+            <p id="page-loader-message">Preparing VM control...</p>
+            <button id="cancel-gpu-scan" class="ghost page-loader-cancel hidden" type="button">Cancel Scan</button>
+          </div>
+        </div>
+        <div id="app-shell" data-vm-control-embedded aria-busy="false">
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">VM Control</p>
+              <h2>Compute Engine lifecycle</h2>
+            </div>
+            <div id="target-summary" class="connection-summary">
+              <p>Use the administrator sign-in above to load VM controls.</p>
+            </div>
+          </div>
+
+          <div class="hardware-options">
+            <div class="instance-picker">
+              <div class="instance-picker-head">
+                <div>
+                  <span>Created instances</span>
+                  <p>Pick an existing VM to fill Hardware and Zone from its current GCE configuration.</p>
+                </div>
+                <button id="refresh-instances" class="ghost" type="button">Refresh Instances</button>
+              </div>
+              <div id="instances-list" class="instance-list empty">Sign in to load created instances.</div>
+              <p id="instances-status">Created instances are loaded from Compute Engine.</p>
+            </div>
+
+            <label>
+              <span>Public endpoint</span>
+              <select id="endpoint-select" name="endpoint-select"><option value="">Connect and sign in to load endpoints</option></select>
+            </label>
+            <p id="endpoint-status">Each endpoint has a separate DuckDNS name and regional external IP address.</p>
+
+            <div class="hardware-zone-actions">
+              <label>
+                <span>Hardware</span>
+                <select id="hardware-select" name="hardware-select"><option value="">Connect and sign in to load hardware</option></select>
+              </label>
+              <label>
+                <span>Zone</span>
+                <select id="zone-select" name="zone-select"><option value="">Select hardware first</option></select>
+              </label>
+              <div class="control-row single-zone-gpu-scan-row">
+                <button id="scan-selected-gpu" class="ghost" type="button">Scan All GPUs in Selected Zone</button>
+              </div>
+            </div>
+            <p class="gpu-compatibility-legend">
+              <span class="sunshine-verified">Green: tested with Sunshine</span>
+              <span class="sunshine-incompatible">Red: tested and fails with Sunshine</span>
+              <span class="sunshine-untested">Yellow: not tested with Sunshine</span>
+            </p>
+            <fieldset class="gpu-scan-scope-group">
+              <legend>Selected GPU - geographic scan</legend>
+              <label>
+                <span>GPU scan scope</span>
+                <select id="gpu-scan-scope" name="gpu-scan-scope">
+                  <option value="all">All regions</option>
+                  <option value="europe">Europe</option>
+                  <option value="americas">Americas</option>
+                  <option value="asia-pacific">Asia Pacific</option>
+                  <option value="middle-east">Middle East</option>
+                  <option value="africa">Africa</option>
+                </select>
+              </label>
+              <div class="control-row"><button id="refresh-hardware" class="ghost" type="button">Scan All Compatible GPU Zones</button></div>
+            </fieldset>
+            <div id="hardware-price-estimate" class="hardware-price-card" data-tone="neutral">Select hardware and zone to load estimated price.</div>
+            <p id="hardware-options-status">Hardware and zone availability is loaded from Compute Engine.</p>
+          </div>
+
+          <div class="control-row">
+            <button class="action create" type="button" data-command="create">Create</button>
+            <button class="action start" type="button" data-command="start">Start</button>
+            <button class="action restart" type="button" data-command="restart">Restart</button>
+            <button class="action stop" type="button" data-command="stop">Stop</button>
+            <button class="action status" type="button" data-command="status">Status</button>
+            <button class="action delete" type="button" data-command="delete">Delete</button>
+            <button id="check-gpu-capacity" class="action capacity-check" type="button">Reserve Selected GPU Capacity</button>
+            <button id="release-gpu-capacity" class="action capacity-release" type="button"><span data-capacity-label>Release All GPU Reservations</span><span id="gpu-probe-count" class="gpu-probe-count" aria-label="Reserved GPU probes">0</span></button>
+          </div>
+          <div id="command-status" class="command-status" data-tone="neutral">Command status will appear here.</div>
+          <div id="banner" class="banner" data-tone="neutral">Use the administrator sign-in above to control the VM.</div>
+
+          <div class="start-options">
+            <label>
+              <span>Auto-stop hours</span>
+              <input id="auto-stop-hours" name="auto-stop-hours" type="number" min="1" max="24" step="1" inputmode="numeric" value="3" placeholder="Hours, optional">
+            </label>
+            <button class="action status" type="button" data-command="set-auto-stop">Extend Auto-stop</button>
+            <p id="auto-stop-status">Auto-stop schedule will appear after VM status is loaded.</p>
+            <p>Leave empty to run without a scheduled shutdown during create/start. Use Extend Auto-stop on a running VM to reset the timer from now.</p>
+          </div>
+
+          <div class="backup-options">
+            <label>
+              <span>Backup to restore</span>
+              <select id="backup-select" name="backup-select"><option value="">No backups loaded</option></select>
+            </label>
+            <div class="inline-action-group">
+              <button class="action backup" type="button" data-command="create-backup">Create Backup</button>
+              <button class="action restore" type="button" data-command="restore-backup">Restore Backup</button>
+              <button class="action delete" type="button" data-command="remove-backup">Remove Backup</button>
+            </div>
+            <p id="backup-options-status">Create a manual backup, then select it here before running Restore Backup.</p>
+          </div>
+        </div>
+      </section>
 
       <section class="panel admin-tab-panel" data-admin-tab-panel="access">
         <div class="section-head">
@@ -323,6 +437,7 @@
       </section>
     </main>
 
-    <script src="./admin.js?v=admin-software-workspace-server-select-20260727"></script>
+    <script src="./admin.js?v=admin-embedded-vm-control-20260727"></script>
+    <script src="./app.js?v=embedded-vm-control-20260727"></script>
   </body>
 </html>
