@@ -3229,6 +3229,7 @@ def handle_unexpected_error(error: Exception):
 
 
 @app.route("/healthz", methods=["GET", "OPTIONS"])
+@app.route("/api/healthz", methods=["GET", "OPTIONS"])
 @app.route("/api/config", methods=["GET", "OPTIONS"])
 @app.route("/api/admin/users", methods=["GET", "POST", "OPTIONS"])
 @app.route("/api/admin/sunshine-credentials", methods=["GET", "POST", "OPTIONS"])
@@ -3255,7 +3256,7 @@ def options_passthrough():
     if request.method == "OPTIONS":
         return make_response(("", 204))
 
-    if request.path == "/healthz":
+    if request.path in {"/healthz", "/api/healthz"}:
         return jsonify({"ok": True})
 
     if request.path == "/api/config":
@@ -5496,7 +5497,7 @@ def minecraft_servers_from_instance(instance: dict[str, Any] | None) -> list[dic
 
 
 def minecraft_server_registry_value(servers: list[dict[str, Any]]) -> str:
-    return json.dumps({"schemaVersion": 1, "servers": servers}, separators=(",", ":"))
+    return json.dumps({"schemaVersion": 2, "servers": servers}, separators=(",", ":"))
 
 
 def minecraft_server_by_id(instance: dict[str, Any] | None, server_id: str) -> dict[str, Any] | None:
@@ -5542,11 +5543,11 @@ def update_minecraft_server_registry(instance: dict[str, Any], servers: list[dic
     return get_instance()
 
 
-def normalize_minecraft_modrinth_content(values: Any) -> list[dict[str, str]]:
+def normalize_minecraft_modrinth_content(values: Any) -> list[dict[str, Any]]:
     if not isinstance(values, list):
         return []
 
-    result: list[dict[str, str]] = []
+    result: list[dict[str, Any]] = []
     for value in values:
         if not isinstance(value, dict):
             continue
@@ -5557,6 +5558,17 @@ def normalize_minecraft_modrinth_content(values: Any) -> list[dict[str, str]]:
             continue
         if not re.fullmatch(r"[A-Za-z0-9_-]{3,80}", version_id) or kind not in {"plugin", "mod"}:
             continue
+        files = [
+            str(filename).strip()
+            for filename in (value.get("files") or [])
+            if isinstance(filename, str) and re.fullmatch(r"[A-Za-z0-9._+-]{1,240}\.jar", filename.strip())
+        ]
+        raw_checksums = value.get("checksums") if isinstance(value.get("checksums"), dict) else {}
+        checksums = {
+            filename: str(raw_checksums.get(filename) or "").lower()
+            for filename in files
+            if re.fullmatch(r"[a-fA-F0-9]{128}", str(raw_checksums.get(filename) or ""))
+        }
         result.append(
             {
                 "projectId": project_id,
@@ -5565,23 +5577,49 @@ def normalize_minecraft_modrinth_content(values: Any) -> list[dict[str, str]]:
                 "projectUrl": f"https://modrinth.com/{kind}/{project_id}",
                 "title": str(value.get("title") or project_id).strip()[:160] or project_id,
                 "version": str(value.get("version") or version_id).strip()[:120] or version_id,
-                "files": [
-                    str(filename).strip()
-                    for filename in (value.get("files") or [])
-                    if isinstance(filename, str) and re.fullmatch(r"[A-Za-z0-9._+-]{1,240}\.jar", filename.strip())
-                ],
+                "files": files,
+                "checksums": checksums,
             }
         )
     return result
 
 
-def minecraft_modrinth_content(instance: dict[str, Any] | None) -> list[dict[str, str]]:
+def minecraft_modrinth_content(instance: dict[str, Any] | None) -> list[dict[str, Any]]:
     raw_content = metadata_value(instance, MINECRAFT_MODRINTH_CONTENT_METADATA_KEY) if instance else ""
     try:
         values = json.loads(raw_content) if raw_content else []
     except (TypeError, ValueError):
         return []
     return normalize_minecraft_modrinth_content(values)
+
+
+def migrate_unambiguous_legacy_minecraft_content(instance: dict[str, Any]) -> dict[str, Any]:
+    """Copy legacy content once into a single live server; retain the legacy value for rollback."""
+    legacy_content = minecraft_modrinth_content(instance)
+    registry_raw = metadata_value(instance, MINECRAFT_SERVERS_METADATA_KEY)
+    if not legacy_content or not registry_raw:
+        return instance
+    servers = minecraft_servers_from_instance(instance)
+    live_servers = [server for server in servers if server.get("state") != "removed"]
+    if len(live_servers) != 1 or normalize_minecraft_modrinth_content(live_servers[0].get("content", [])):
+        return instance
+    live_servers[0]["content"] = legacy_content
+    audit = {
+        "state": "copied",
+        "serverId": live_servers[0]["id"],
+        "sourceChecksum": hashlib.sha256(
+            registry_raw.encode("utf-8") + json.dumps(legacy_content, sort_keys=True).encode("utf-8")
+        ).hexdigest(),
+        "migratedAt": datetime.now(timezone.utc).isoformat(),
+    }
+    set_instance_metadata_values(
+        instance,
+        {
+            MINECRAFT_SERVERS_METADATA_KEY: minecraft_server_registry_value(servers),
+            "vm-minecraft-content-migration": json.dumps(audit, separators=(",", ":")),
+        },
+    )
+    return get_instance()
 
 
 def update_minecraft_server_content(
@@ -5595,16 +5633,21 @@ def update_minecraft_server_content(
     raise ApiError("Selected Minecraft server is not installed on this VM.", 404)
 
 
-def modrinth_get(path: str, *, params: dict[str, Any]) -> Any:
+def modrinth_get(path: str, *, params: dict[str, Any], timeout_seconds: float = 20) -> Any:
+    if time.monotonic() < float(getattr(modrinth_get, "circuit_open_until", 0.0)):
+        raise ApiError("Modrinth compatibility checks are temporarily paused after rate limiting. Try again shortly.", 503)
     try:
         response = requests.get(
             f"{MODRINTH_API_BASE_URL}{path}",
             params=params,
             headers={"User-Agent": MODRINTH_USER_AGENT, "Accept": "application/json"},
-            timeout=20,
+            timeout=max(1, min(timeout_seconds, 20)),
         )
     except requests.RequestException as error:
         raise ApiError(f"Modrinth request failed: {error}", 502) from error
+    if response.status_code == 429:
+        modrinth_get.circuit_open_until = time.monotonic() + 30
+        raise ApiError("Modrinth rate limited compatibility checks. Try again in 30 seconds.", 503)
     if response.status_code >= 400:
         raise ApiError(f"Modrinth returned {response.status_code}.", 502)
     try:
@@ -5613,7 +5656,67 @@ def modrinth_get(path: str, *, params: dict[str, Any]) -> Any:
         raise ApiError("Modrinth returned invalid JSON.", 502) from error
 
 
-def minecraft_modrinth_catalog_search(instance: dict[str, Any], payload: dict[str, Any]) -> list[dict[str, Any]]:
+_modrinth_version_cache: dict[tuple[str, str, tuple[str, ...]], tuple[float, list[dict[str, Any]]]] = {}
+_modrinth_version_cache_lock = threading.Lock()
+
+
+def modrinth_project_versions(project_id: str, version: str, loaders: list[str], *, deadline: float | None = None) -> list[dict[str, Any]]:
+    key = (project_id, version, tuple(sorted(loaders)))
+    now = time.monotonic()
+    with _modrinth_version_cache_lock:
+        cached = _modrinth_version_cache.get(key)
+    if cached and cached[0] > now:
+        return cached[1]
+    remaining = 20.0 if deadline is None else deadline - now
+    if remaining <= 0:
+        raise ApiError("Modrinth compatibility verification timed out.", 504)
+    data = modrinth_get(
+        f"/project/{project_id}/version",
+        params={"game_versions": json.dumps([version]), "loaders": json.dumps(loaders)},
+        timeout_seconds=remaining,
+    )
+    if not isinstance(data, list):
+        raise ApiError("Modrinth returned an invalid version catalog.", 502)
+    versions = [candidate for candidate in data if isinstance(candidate, dict)]
+    with _modrinth_version_cache_lock:
+        if len(_modrinth_version_cache) >= 256:
+            oldest = min(_modrinth_version_cache, key=lambda item: _modrinth_version_cache[item][0])
+            _modrinth_version_cache.pop(oldest, None)
+        _modrinth_version_cache[key] = (time.monotonic() + 600, versions)
+    return versions
+
+
+def modrinth_server_artifact(candidate: dict[str, Any]) -> dict[str, str] | None:
+    environment = candidate.get("environment")
+    if isinstance(environment, dict) and str(environment.get("server") or "").lower() in {"unsupported", "client_only", "client-only"}:
+        return None
+    files = [file for file in candidate.get("files", []) if isinstance(file, dict)]
+    files.sort(key=lambda file: not bool(file.get("primary")))
+    for file in files:
+        filename = str(file.get("filename") or "").strip()
+        sha512 = str((file.get("hashes") or {}).get("sha512") or "").strip().lower()
+        if re.fullmatch(r"[A-Za-z0-9._+-]{1,240}\.jar", filename) and re.fullmatch(r"[a-f0-9]{128}", sha512):
+            return {"filename": filename, "sha512": sha512}
+    return None
+
+
+def select_compatible_modrinth_version(
+    versions: list[dict[str, Any]], loaders: list[str], requested_version_id: str = ""
+) -> tuple[dict[str, Any], dict[str, str]] | None:
+    supported_loaders = set(loaders)
+    for candidate in versions:
+        if requested_version_id and str(candidate.get("id") or "") != requested_version_id:
+            continue
+        if not supported_loaders.intersection(str(loader) for loader in (candidate.get("loaders") or [])):
+            continue
+        artifact = modrinth_server_artifact(candidate)
+        version_id = str(candidate.get("id") or "").strip()
+        if artifact and re.fullmatch(r"[A-Za-z0-9_-]{3,80}", version_id):
+            return candidate, artifact
+    return None
+
+
+def minecraft_modrinth_catalog_search(instance: dict[str, Any], payload: dict[str, Any]) -> tuple[list[dict[str, Any]], int]:
     query = str(payload.get("query") or "").strip()
     if not (2 <= len(query) <= 100) or any(ord(character) < 32 for character in query):
         raise ApiError("Modrinth search query must contain 2-100 printable characters.", 400)
@@ -5643,14 +5746,30 @@ def minecraft_modrinth_catalog_search(instance: dict[str, Any], payload: dict[st
     )
     hits = data.get("hits") if isinstance(data, dict) else []
     if not isinstance(hits, list):
-        return []
+        return [], 0
     results: list[dict[str, Any]] = []
+    skipped = 0
+    deadline = time.monotonic() + 18
     for hit in hits:
         if not isinstance(hit, dict):
             continue
         project_id = str(hit.get("project_id") or hit.get("projectId") or "").strip()
         if not re.fullmatch(r"[A-Za-z0-9_-]{3,80}", project_id):
             continue
+        try:
+            selected = select_compatible_modrinth_version(
+                modrinth_project_versions(project_id, version, list(runtime["modrinthLoaders"]), deadline=deadline),
+                list(runtime["modrinthLoaders"]),
+            )
+        except ApiError:
+            skipped += 1
+            if time.monotonic() >= deadline:
+                break
+            continue
+        if not selected:
+            skipped += 1
+            continue
+        selected_version, artifact = selected
         slug = str(hit.get("slug") or "").strip()
         project_path = slug if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{1,99}", slug) else project_id
         results.append(
@@ -5662,9 +5781,13 @@ def minecraft_modrinth_catalog_search(instance: dict[str, Any], payload: dict[st
                 "author": str(hit.get("author") or "").strip()[:160],
                 "downloads": int(hit.get("downloads") or 0) if str(hit.get("downloads") or "").isdigit() else 0,
                 "iconUrl": str(hit.get("icon_url") or "").strip()[:500],
+                "versionId": str(selected_version["id"]),
+                "version": str(selected_version.get("version_number") or selected_version["id"])[:120],
+                "files": [artifact["filename"]],
+                "checksums": {artifact["filename"]: artifact["sha512"]},
             }
         )
-    return results
+    return results, skipped
 
 
 def minecraft_modrinth_content_entry(instance: dict[str, Any], payload: dict[str, Any]) -> dict[str, str]:
@@ -5679,29 +5802,13 @@ def minecraft_modrinth_content_entry(instance: dict[str, Any], payload: dict[str
     requested_kind = str(payload.get("kind") or runtime["contentKind"]).strip().lower()
     if requested_kind != runtime["contentKind"]:
         raise ApiError(f"The selected {runtime['label']} server supports {runtime['contentLabel']} only.", 409)
-    versions = modrinth_get(
-        f"/project/{project_id}/version",
-        params={
-            "game_versions": json.dumps([version]),
-            "loaders": json.dumps(runtime["modrinthLoaders"]),
-        },
-    )
-    if not isinstance(versions, list):
-        raise ApiError("Modrinth returned an invalid version catalog.", 502)
+    versions = modrinth_project_versions(project_id, version, list(runtime["modrinthLoaders"]))
     requested_version_id = str(payload.get("versionId") or "").strip()
-    selected = next(
-        (
-            candidate
-            for candidate in versions
-            if isinstance(candidate, dict)
-            and (not requested_version_id or str(candidate.get("id") or "") == requested_version_id)
-            and any(loader in set(runtime["modrinthLoaders"]) for loader in (candidate.get("loaders") or []))
-        ),
-        None,
-    )
+    selected = select_compatible_modrinth_version(versions, list(runtime["modrinthLoaders"]), requested_version_id)
     if not selected:
         raise ApiError(f"No compatible Modrinth {runtime['contentKind']} version was found for Minecraft {version} and {runtime['label']}.", 409)
-    version_id = str(selected.get("id") or "").strip()
+    selected_version, artifact = selected
+    version_id = str(selected_version.get("id") or "").strip()
     if not re.fullmatch(r"[A-Za-z0-9_-]{3,80}", version_id):
         raise ApiError("Modrinth returned an invalid version ID.", 502)
     return {
@@ -5709,12 +5816,9 @@ def minecraft_modrinth_content_entry(instance: dict[str, Any], payload: dict[str
         "versionId": version_id,
         "kind": str(runtime["contentKind"]),
         "title": str(payload.get("title") or project_id).strip()[:160] or project_id,
-        "version": str(selected.get("version_number") or version_id).strip()[:120] or version_id,
-        "files": [
-            str(file.get("filename") or "").strip()
-            for file in (selected.get("files") or [])
-            if isinstance(file, dict) and re.fullmatch(r"[A-Za-z0-9._+-]{1,240}\.jar", str(file.get("filename") or "").strip())
-        ],
+        "version": str(selected_version.get("version_number") or version_id).strip()[:120] or version_id,
+        "files": [artifact["filename"]],
+        "checksums": {artifact["filename"]: artifact["sha512"]},
     }
 
 
@@ -6744,6 +6848,14 @@ def minecraft_content_sync_request(entries: list[dict[str, Any]], removed_files:
                 if isinstance(filename, str) and re.fullmatch(r"[A-Za-z0-9._+-]{1,240}\.jar", filename)
             }
         ),
+        "expectedChecksums": [
+            {"filename": filename, "sha512": str((entry.get("checksums") or {}).get(filename) or "").lower()}
+            for entry in entries
+            for filename in entry.get("files", [])
+            if isinstance(filename, str)
+            and re.fullmatch(r"[A-Za-z0-9._+-]{1,240}\.jar", filename)
+            and re.fullmatch(r"[a-fA-F0-9]{128}", str((entry.get("checksums") or {}).get(filename) or ""))
+        ],
         "removeFiles": [filename for filename in (removed_files or []) if re.fullmatch(r"[A-Za-z0-9._+-]{1,240}\.jar", filename)],
     }
 
@@ -6767,10 +6879,10 @@ def execute_minecraft_management_action(
     payload: dict[str, Any],
 ) -> dict[str, Any]:
     action = str(payload.get("action", "") or "").strip().lower()
-    selected_server_id = selected_minecraft_server_id(instance, payload)
-    payload = {**payload, "minecraftServerId": selected_server_id}
     if instance is None:
         raise ApiError("Create the selected VM before using Minecraft management.", 409)
+    selected_server_id = selected_minecraft_server_id(instance, payload)
+    payload = {**payload, "minecraftServerId": selected_server_id}
     if action == "prepare-agent":
         prepare_minecraft_management_agent(instance)
         refreshed = get_instance()
@@ -6785,12 +6897,12 @@ def execute_minecraft_management_action(
     if selected_server is None or selected_server.get("state") == "removed":
         raise ApiError("Selected Minecraft server is not installed on this VM.", 404)
     if action == "catalog-search":
-        results = minecraft_modrinth_catalog_search(instance, payload)
+        results, skipped = minecraft_modrinth_catalog_search(instance, payload)
         return build_minecraft_management_payload(
             instance,
             user,
             selected_server_id=selected_server_id,
-            message=f"Found {len(results)} compatible Modrinth result(s).",
+            message=f"Found {len(results)} verified compatible Modrinth result(s). {skipped} result(s) were skipped because their server artifact could not be verified.",
             catalog_results=results,
         )
     if str(instance.get("status", "")).upper() != "RUNNING" or selected_server.get("state") != "running":
@@ -6803,6 +6915,10 @@ def execute_minecraft_management_action(
 
     updated_content: list[dict[str, str]] | None = None
     if action == "content-install":
+        instance = migrate_unambiguous_legacy_minecraft_content(instance)
+        selected_server = minecraft_server_by_id(instance, selected_server_id)
+        if selected_server is None:
+            raise ApiError("Selected Minecraft server is not installed on this VM.", 404)
         entry = minecraft_modrinth_content_entry(instance, payload)
         current_content = normalize_minecraft_modrinth_content(selected_server.get("content", []))
         if any(item["projectId"] == entry["projectId"] for item in current_content):

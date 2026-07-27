@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Stale
-        uses: actions/stale@v5
+        uses: actions/stale@1e223db275d687790206a7acac4d1a11bd6fe629 # v10.1.0
         with:
           close-issue-message: >
             This issue was closed because it has been stalled for 5 days with no activity.
@@ -33,7 +33,7 @@ jobs:
             Comment or remove the stale label, otherwise this will be closed in 10 days.
 
       - name: Invalid Template
-        uses: actions/stale@v5
+        uses: actions/stale@1e223db275d687790206a7acac4d1a11bd6fe629 # v10.1.0
         with:
           close-issue-message: >
             This issue was closed because the the template was not completed after 5 days.

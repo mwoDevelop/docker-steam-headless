@@ -111,7 +111,6 @@ ENV \
     PGID=100 \
     UMASK=000 \
     USER="default" \
-    USER_PASSWORD="password" \
     USER_HOME="/home/default" \
     TZ="Pacific/Auckland" \
     USER_LOCALES="en_US.UTF-8 UTF-8"
@@ -564,12 +563,9 @@ ENV \
     MODE="primary" \
     WEB_UI_MODE="vnc" \
     ENABLE_VNC_AUDIO="true" \
-    NEKO_PASSWORD=neko \
-    NEKO_PASSWORD_ADMIN=admin \
     ENABLE_STEAM="true" \
     STEAM_ARGS="-silent" \
     WEBUI_USER="" \
-    WEBUI_PASS="" \
     ENABLE_SUNSHINE="true" \
     ENABLE_EVDEV_INPUTS="true" \
     ENABLE_WOL_POWER_MANAGER="false" \

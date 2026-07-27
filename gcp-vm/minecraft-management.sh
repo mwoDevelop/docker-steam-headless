@@ -300,7 +300,7 @@ reconcile_minecraft_status() {
 }
 
 sync_modrinth_content() {
-  local raw="$1" entries entry removed_file expected_file temporary_file container output missing_files
+  local raw="$1" entries entry removed_file expected_file checksum_entry expected_name expected_sha512 actual_sha512 file_path temporary_file container output missing_files checksum_failures
   entries="$(printf '%s' "$raw" | jq -r '.entries // [] | .[]' 2>/dev/null || true)"
   mkdir -p "${MINECRAFT_ROOT}/data"
   temporary_file="$(mktemp)"
@@ -342,6 +342,7 @@ sync_modrinth_content() {
     container="$(minecraft_container || true)"
     if [[ -n "$container" ]] && wait_for_rcon "$container"; then
       missing_files=""
+      checksum_failures=""
       while IFS= read -r expected_file; do
         [[ "$expected_file" =~ ^[A-Za-z0-9._+-]{1,240}\.jar$ ]] || continue
         if [[ ! -f "${MINECRAFT_ROOT}/data/plugins/${expected_file}" && ! -f "${MINECRAFT_ROOT}/data/mods/${expected_file}" ]]; then
@@ -350,6 +351,22 @@ sync_modrinth_content() {
       done < <(printf '%s' "$raw" | jq -r '.expectedFiles // [] | .[]' 2>/dev/null || true)
       if [[ -n "$missing_files" ]]; then
         printf 'Minecraft restarted, but Modrinth files are missing:%s\n' "$missing_files"
+        return 1
+      fi
+      while IFS= read -r checksum_entry; do
+        expected_name="${checksum_entry%%:*}"
+        expected_sha512="${checksum_entry#*:}"
+        [[ "$expected_name" =~ ^[A-Za-z0-9._+-]{1,240}\.jar$ && "$expected_sha512" =~ ^[a-fA-F0-9]{128}$ ]] || continue
+        file_path=""
+        for candidate in "${MINECRAFT_ROOT}/data/plugins/${expected_name}" "${MINECRAFT_ROOT}/data/mods/${expected_name}"; do
+          [[ -f "$candidate" ]] && { file_path="$candidate"; break; }
+        done
+        [[ -n "$file_path" ]] || { checksum_failures+=" ${expected_name}(missing)"; continue; }
+        actual_sha512="$(sha512sum "$file_path" | awk '{print $1}')"
+        [[ "$actual_sha512" == "$expected_sha512" ]] || checksum_failures+=" ${expected_name}(checksum)"
+      done < <(printf '%s' "$raw" | jq -r '.expectedChecksums // [] | .[] | select((.filename | type == "string") and (.sha512 | type == "string")) | "\(.filename):\(.sha512)"' 2>/dev/null || true)
+      if [[ -n "$checksum_failures" ]]; then
+        printf 'Minecraft restarted, but Modrinth checksum verification failed:%s\n' "$checksum_failures"
         return 1
       fi
       printf 'Applied %s Modrinth project(s) and restarted Minecraft.\n' "$(wc -l < "$MINECRAFT_CONTENT_FILE" | tr -d ' ')"

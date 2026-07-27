@@ -2,6 +2,12 @@ name: Build and Deploy CI
 
 on:
   workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Publish image tags (disabled by default for validation runs)'
+        required: false
+        default: false
+        type: boolean
   push:
     branches: ['dev-**', 'pr-**', staging, master]
     tags: ['**']
@@ -26,7 +32,10 @@ jobs:
     steps:
       # ---
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.0.0
+
+      - name: Reject password-like Dockerfile defaults
+        run: .github/scripts/check-dockerfile-secrets.sh Dockerfile.debian Dockerfile.arch
 
       # ---
       - name: Set up Docker Buildx
@@ -112,6 +121,9 @@ jobs:
             DOCKER_PUSH="false"
           fi
           if [[ "X${DOCKER_TAGS}" == "X" ]]; then
+            DOCKER_PUSH="false"
+          fi
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.publish }}" != "true" ]]; then
             DOCKER_PUSH="false"
           fi
           echo "DOCKER_PUSH='${DOCKER_PUSH}'"

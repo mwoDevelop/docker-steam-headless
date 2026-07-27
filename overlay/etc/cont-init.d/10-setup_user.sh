@@ -12,7 +12,7 @@
 PUID=${PUID:-99}
 PGID=${PGID:-100}
 UMASK=${UMASK:-000}
-USER_PASSWORD=${USER_PASSWORD:-password}
+: "${USER_PASSWORD:?USER_PASSWORD must be supplied at runtime}"
 
 print_header "Configure default user"
 
