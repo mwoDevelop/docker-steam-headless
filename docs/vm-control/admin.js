@@ -364,22 +364,39 @@
     }).join("");
   }
 
+  function vmEndpoints(endpoints) {
+    return (Array.isArray(endpoints) ? endpoints : []).filter((endpoint) => (
+      String(endpoint && endpoint.instanceName || "").trim()
+      && String(endpoint && endpoint.zone || "").trim()
+    ));
+  }
+
   function renderSunshineCredentials() {
-    const endpoints = state.endpointsPayload && Array.isArray(state.endpointsPayload.endpoints)
-      ? state.endpointsPayload.endpoints
-      : [];
+    const endpoints = vmEndpoints(state.endpointsPayload && state.endpointsPayload.endpoints);
     const payload = state.sunshineCredentialsPayload;
     const previousSelection = state.sunshineEndpointId || String(elements.sunshineEndpoint.value || "");
-    elements.sunshineEndpoint.innerHTML = endpoints.map((endpoint) => {
+    elements.sunshineEndpoint.innerHTML = endpoints.length ? endpoints.map((endpoint) => {
       const id = String(endpoint.id || "");
       const label = `${id} · ${endpoint.domain || "no DNS"}${endpoint.instanceName ? ` · ${endpoint.instanceName}` : ""}`;
       return `<option value="${escapeHtml(id)}">${escapeHtml(label)}</option>`;
-    }).join("");
+    }).join("") : '<option value="">No VM endpoint available</option>';
     const selectedId = endpoints.some((endpoint) => String(endpoint.id || "") === previousSelection)
       ? previousSelection
       : String(endpoints[0] && endpoints[0].id || "");
     state.sunshineEndpointId = selectedId;
     elements.sunshineEndpoint.value = selectedId;
+    elements.sunshineEndpoint.disabled = !endpoints.length;
+
+    if (!endpoints.length) {
+      elements.sunshineCurrentPassword.value = "";
+      elements.sunshineCurrentPassword.type = "password";
+      elements.sunshinePasswordToggle.textContent = "Show";
+      elements.sunshineCredentialsSummary.textContent = state.user
+        ? "No VM exists for a managed endpoint. Create a VM before managing Sunshine credentials."
+        : "Sign in to load Sunshine credential status.";
+      elements.sunshineCredentialsSummary.dataset.tone = state.user ? "warning" : "neutral";
+      return;
+    }
 
     if (!payload || String(payload.endpoint && payload.endpoint.id || "") !== selectedId) {
       elements.sunshineCurrentPassword.value = "";
@@ -455,19 +472,21 @@
       elements.runtimeImagesList.innerHTML = "";
       return;
     }
+    const endpoints = vmEndpoints(payload.endpoints);
     const previousSelection = String(elements.runtimeEndpoint.value || "");
-    elements.runtimeEndpoint.innerHTML = payload.endpoints.map((endpoint) => {
+    elements.runtimeEndpoint.innerHTML = endpoints.length ? endpoints.map((endpoint) => {
       const id = String(endpoint.id || "");
       const label = `${id} · ${endpoint.domain || "no DNS"}${endpoint.instanceName ? ` · ${endpoint.instanceName}` : ""}`;
       return `<option value="${escapeHtml(id)}">${escapeHtml(label)}</option>`;
-    }).join("");
-    const selectedId = payload.endpoints.some((endpoint) => endpoint.id === previousSelection)
+    }).join("") : '<option value="">No VM endpoint available</option>';
+    elements.runtimeEndpoint.disabled = !endpoints.length;
+    const selectedId = endpoints.some((endpoint) => endpoint.id === previousSelection)
       ? previousSelection
-      : String(payload.endpoints[0] && payload.endpoints[0].id || "");
+      : String(endpoints[0] && endpoints[0].id || "");
     elements.runtimeEndpoint.value = selectedId;
-    const endpoint = payload.endpoints.find((entry) => entry.id === selectedId);
+    const endpoint = endpoints.find((entry) => entry.id === selectedId);
     if (!endpoint) {
-      elements.runtimeImagesList.innerHTML = '<div class="admin-user-row fixed">No endpoints configured.</div>';
+      elements.runtimeImagesList.innerHTML = '<div class="admin-user-row fixed">No VM endpoint available. Create a VM before managing runtime images.</div>';
       return;
     }
     const components = payload.catalog && payload.catalog.components || {};
@@ -699,7 +718,7 @@
     state.endpointsPayload = endpoints;
     state.runtimeImagesPayload = runtimeImages;
     state.compatibilityPayload = compatibility;
-    const availableEndpoints = Array.isArray(endpoints.endpoints) ? endpoints.endpoints : [];
+    const availableEndpoints = vmEndpoints(endpoints.endpoints);
     const selectedEndpointId = availableEndpoints.some((endpoint) => String(endpoint.id || "") === state.sunshineEndpointId)
       ? state.sunshineEndpointId
       : String(availableEndpoints[0] && availableEndpoints[0].id || "");
@@ -861,17 +880,18 @@
   function renderSoftware() {
     const payload = state.softwarePayload;
     if (!payload) {
-      elements.softwareEndpoint.innerHTML = '<option value="">No endpoint loaded</option>';
+      elements.softwareEndpoint.innerHTML = '<option value="">No VM endpoint available</option>';
+      elements.softwareEndpoint.disabled = true;
       elements.softwareApplication.innerHTML = '<option value="">No applications loaded</option>';
       elements.softwareMinecraftVersion.innerHTML = '<option value="">No versions loaded</option>';
-      elements.softwareStatus.textContent = "Sign in to load applications and Minecraft server state.";
-      elements.softwareStatus.dataset.tone = "neutral";
+      elements.softwareStatus.textContent = state.user
+        ? "No VM endpoint is available. Create a VM before managing applications or Minecraft."
+        : "Sign in to load applications and Minecraft server state.";
+      elements.softwareStatus.dataset.tone = state.user ? "warning" : "neutral";
       return;
     }
 
-    const endpoints = Array.isArray(state.endpointsPayload && state.endpointsPayload.endpoints)
-      ? state.endpointsPayload.endpoints
-      : [];
+    const endpoints = vmEndpoints(state.endpointsPayload && state.endpointsPayload.endpoints);
     const previousApplication = elements.softwareApplication.value;
     const previousVersion = elements.softwareMinecraftVersion.value;
     const previousServerType = elements.softwareMinecraftServerType.value;
@@ -882,7 +902,8 @@
         const domain = String(endpoint.domain || "");
         return `<option value="${escapeHtml(id)}" ${id === state.softwareEndpointId ? "selected" : ""}>${escapeHtml(id)}${domain ? ` · ${escapeHtml(domain)}` : ""}</option>`;
       }).join("")
-      : '<option value="">No endpoint configured</option>';
+      : '<option value="">No VM endpoint available</option>';
+    elements.softwareEndpoint.disabled = !endpoints.length;
 
     const applications = Array.isArray(payload.applicationCatalog) ? payload.applicationCatalog : [];
     elements.softwareApplication.innerHTML = optionList(applications, previousApplication, "No applications available");
