@@ -270,7 +270,7 @@
       });
     });
     window.addEventListener("hashchange", () => selectAdminTab(window.location.hash.slice(1)));
-    selectAdminTab(window.location.hash.slice(1));
+    selectAdminTab(window.location.hash.slice(1) || "vm-control");
     return true;
   }
 

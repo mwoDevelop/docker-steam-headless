@@ -69,13 +69,13 @@
       </section>
 
       <nav class="admin-tabs" aria-label="Administration sections" role="tablist">
-        <button class="admin-tab" type="button" data-admin-tab="vm-control" role="tab" aria-selected="false">VM Control</button>
+        <button class="admin-tab is-active" type="button" data-admin-tab="vm-control" role="tab" aria-selected="true">VM Control</button>
         <button class="admin-tab" type="button" data-admin-tab="software" role="tab" aria-selected="false">Software</button>
         <button class="admin-tab" type="button" data-admin-tab="runtime" role="tab" aria-selected="false">Runtime images</button>
         <button class="admin-tab" type="button" data-admin-tab="endpoints" role="tab" aria-selected="false">Endpoints</button>
         <button class="admin-tab" type="button" data-admin-tab="compatibility" role="tab" aria-selected="false">Compatibility</button>
         <button class="admin-tab" type="button" data-admin-tab="activity" role="tab" aria-selected="false">Activity</button>
-        <button class="admin-tab is-active" type="button" data-admin-tab="access" role="tab" aria-selected="true">Access</button>
+        <button class="admin-tab" type="button" data-admin-tab="access" role="tab" aria-selected="false">Access</button>
       </nav>
 
       <div id="page-loader" class="page-loader embedded-page-loader" role="status" aria-live="polite" aria-busy="false" hidden>
@@ -98,7 +98,7 @@
         </div>
       </div>
 
-      <section class="panel admin-tab-panel" data-admin-tab-panel="vm-control" hidden>
+      <section class="panel admin-tab-panel" data-admin-tab-panel="vm-control">
         <div id="app-shell" data-vm-control-embedded aria-busy="false">
           <div class="section-head">
             <div>
