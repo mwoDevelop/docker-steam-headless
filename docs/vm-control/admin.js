@@ -937,7 +937,12 @@
     elements.softwareMinecraftVersion.innerHTML = optionList(minecraftVersions, selectedVersion, "Refresh Minecraft Versions to load this runtime catalog");
     const status = payload.status || {};
     const servers = Array.isArray(status.minecraftServers) ? status.minecraftServers : (Array.isArray(payload.minecraftServers) ? payload.minecraftServers : []);
-    elements.softwareMinecraftServer.innerHTML = ['<option value="">New server (use ID below)</option>', ...servers.map((server) => `<option value="${escapeHtml(String(server.id || ""))}" ${String(server.id || "") === previousMinecraftServer ? "selected" : ""}>${escapeHtml(String(server.id || ""))} · ${escapeHtml(String(server.serverType || "paper"))} ${escapeHtml(String(server.version || "LATEST"))} · :${escapeHtml(String(server.gamePort || ""))} · ${escapeHtml(String(server.state || ""))}</option>`)].join("");
+    const selectedMinecraftServer = servers.some((server) => String(server.id || "") === previousMinecraftServer)
+      ? previousMinecraftServer
+      : String(servers[0] && servers[0].id || "");
+    elements.softwareMinecraftServer.innerHTML = servers.length
+      ? servers.map((server) => `<option value="${escapeHtml(String(server.id || ""))}" ${String(server.id || "") === selectedMinecraftServer ? "selected" : ""}>${escapeHtml(String(server.id || ""))} · ${escapeHtml(String(server.serverType || "paper"))} ${escapeHtml(String(server.version || "LATEST"))} · :${escapeHtml(String(server.gamePort || ""))} · ${escapeHtml(String(server.state || ""))}</option>`).join("")
+      : '<option value="">No installed servers</option>';
     const allowedCommands = new Set(Array.isArray(status.allowedCommands) ? status.allowedCommands : []);
     const instanceState = String(status.instanceState || status.vmState || status.status || "NOT_FOUND");
     const minecraftState = String(
