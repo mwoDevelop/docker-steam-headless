@@ -1012,7 +1012,7 @@
       <article class="access-card">
         <h3>${escapeHtml(title)}</h3>
         <p class="access-meta">${escapeHtml(detail || "Status not available")}</p>
-        ${url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noreferrer">${escapeHtml(linkLabel)}</a>` : '<span class="access-meta">Address not available</span>'}
+        ${url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noreferrer">${escapeHtml(linkLabel)}</a>` : (linkLabel ? '<span class="access-meta">Address not available</span>' : "")}
       </article>`;
 
     container.className = "access";
