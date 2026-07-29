@@ -722,6 +722,7 @@ Sync-ProfileToIsolatedUserDataDir -SourceUserDataDir $SourceUserDataDir -SourceP
 $Arguments = @(
     "--remote-debugging-port=$ChromeRemoteDebuggingPort",
     "--remote-debugging-address=$ChromeRemoteDebuggingAddress",
+    "--remote-allow-origins=http://127.0.0.1:$ChromeRemoteDebuggingPort,http://localhost:$ChromeRemoteDebuggingPort",
     "--user-data-dir=`"$RuntimeUserDataDir`"",
     "--profile-directory=`"$($SelectedProfile.ProfileDirectory)`"",
     "--no-first-run",

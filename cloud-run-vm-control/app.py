@@ -5253,7 +5253,8 @@ def build_instance_create_request(
     return request_body
 
 
-def build_urls(external_ip: str) -> dict[str, Any]:
+def build_urls(external_ip: str, minecraft_port: int | None = None) -> dict[str, Any]:
+    game_port = int(minecraft_port or CONFIG["minecraft_port"])
     urls: dict[str, Any] = {
         "novnc": "",
         "sunshine": "",
@@ -5266,12 +5267,12 @@ def build_urls(external_ip: str) -> dict[str, Any]:
     if primary_duckdns:
         urls["novnc"] = f"http://{primary_duckdns}:{CONFIG['novnc_port']}/"
         urls["sunshine"] = f"https://{primary_duckdns}:{CONFIG['sunshine_port']}/"
-        urls["minecraft"] = f"{primary_duckdns}:{CONFIG['minecraft_port']}"
+        urls["minecraft"] = f"{primary_duckdns}:{game_port}"
         urls["moonlightHost"] = primary_duckdns
     elif external_ip:
         urls["novnc"] = f"http://{external_ip}:{CONFIG['novnc_port']}/"
         urls["sunshine"] = f"https://{external_ip}:{CONFIG['sunshine_port']}/"
-        urls["minecraft"] = f"{external_ip}:{CONFIG['minecraft_port']}"
+        urls["minecraft"] = f"{external_ip}:{game_port}"
 
     duckdns_entries = []
     for domain in endpoint_domains:
@@ -5280,7 +5281,7 @@ def build_urls(external_ip: str) -> dict[str, Any]:
                 "domain": domain,
                 "novnc": f"http://{domain}:{CONFIG['novnc_port']}/",
                 "sunshine": f"https://{domain}:{CONFIG['sunshine_port']}/",
-                "minecraft": f"{domain}:{CONFIG['minecraft_port']}",
+                "minecraft": f"{domain}:{game_port}",
             }
         )
     urls["duckdns"] = duckdns_entries
@@ -5510,8 +5511,6 @@ def selected_minecraft_server_id(instance: dict[str, Any] | None, payload: Any) 
     if str(raw_server_id or "").strip():
         return minecraft_server_id(payload)
     servers = minecraft_servers_from_instance(instance)
-    if any(server["id"] == "default" for server in servers):
-        return "default"
     for server in servers:
         if server.get("state") == "running":
             return str(server["id"])
@@ -5988,8 +5987,11 @@ def build_minecraft_management_payload(
     }
 
 
-def build_minecraft_status(instance: dict[str, Any] | None) -> dict[str, str]:
-    version = minecraft_version_from_instance(instance)
+def build_minecraft_status(
+    instance: dict[str, Any] | None,
+    server: dict[str, Any] | None = None,
+) -> dict[str, str]:
+    version = str(server.get("version") or "") if server else minecraft_version_from_instance(instance)
     if instance is None:
         return {
             "state": "not_created",
@@ -6007,8 +6009,16 @@ def build_minecraft_status(instance: dict[str, Any] | None) -> dict[str, str]:
             "version": version,
         }
 
-    state = metadata_value(instance, MINECRAFT_STATUS_METADATA_KEY).strip().lower() or "not_installed"
-    detail = metadata_value(instance, MINECRAFT_STATUS_DETAIL_METADATA_KEY).strip()
+    state = (
+        str(server.get("state") or "").strip().lower()
+        if server
+        else metadata_value(instance, MINECRAFT_STATUS_METADATA_KEY).strip().lower()
+    ) or "not_installed"
+    detail = (
+        str(server.get("detail") or "").strip()
+        if server
+        else metadata_value(instance, MINECRAFT_STATUS_DETAIL_METADATA_KEY).strip()
+    )
     phase, power_action, _ = parse_power_action_status(
         metadata_value(instance, POWER_ACTION_STATUS_METADATA_KEY)
     )
@@ -6503,6 +6513,25 @@ def build_status_payload(
             "username": credentials.get("username", SUNSHINE_USERNAME) or SUNSHINE_USERNAME,
             "password": "",
         }
+    minecraft_servers = minecraft_servers_from_instance(instance)
+    active_minecraft_server_id = selected_minecraft_server_id(instance, {})
+    active_minecraft_server = next(
+        (server for server in minecraft_servers if server["id"] == active_minecraft_server_id),
+        None,
+    )
+    active_minecraft_port = int(active_minecraft_server["gamePort"]) if active_minecraft_server else int(CONFIG["minecraft_port"])
+    minecraft_payload = {
+        **minecraft_version_payload(),
+        "serverType": (
+            str(active_minecraft_server["serverType"])
+            if active_minecraft_server
+            else minecraft_server_type_from_instance(instance)
+        ),
+        "activeServerId": active_minecraft_server_id if active_minecraft_server else "",
+        "gamePort": active_minecraft_port,
+    }
+    if active_minecraft_server:
+        minecraft_payload["installedVersion"] = str(active_minecraft_server["version"])
     payload = {
         "command": command,
         "target": {
@@ -6520,19 +6549,16 @@ def build_status_payload(
         "allowedCommands": allowed_commands(instance),
         "externalIp": external_ip,
         "duckdnsDomains": selected_endpoint_domains(),
-        "urls": build_urls(external_ip),
+        "urls": build_urls(external_ip, active_minecraft_port),
         "user": user,
         "autoStopHours": metadata_value(instance, AUTO_STOP_METADATA_KEY),
         "autoStop": build_auto_stop_status(instance),
         "sunshineCredentials": normalize_sunshine_credentials_for_response(credentials),
         "sunshineStatus": build_sunshine_status(instance),
-        "minecraftStatus": build_minecraft_status(instance),
-        "minecraftServers": minecraft_servers_from_instance(instance),
+        "minecraftStatus": build_minecraft_status(instance, active_minecraft_server),
+        "minecraftServers": minecraft_servers,
           "minecraftManagement": build_minecraft_management_payload(instance, user),
-        "minecraft": {
-            **minecraft_version_payload(),
-            "serverType": minecraft_server_type_from_instance(instance),
-        },
+        "minecraft": minecraft_payload,
         "persistence": build_persistence_status(instance),
         "powerAction": build_power_action_status(instance),
         "applications": {

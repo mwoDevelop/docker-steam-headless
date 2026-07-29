@@ -3558,12 +3558,22 @@
         updateGpuAvailabilityScanButton();
         return;
       }
-      resetGpuAvailabilityScan();
-      renderZoneOptions();
-      await refreshPriceEstimate({ silent: false });
-      await refreshStatus({ silent: true });
-      setCommandStatus("GPU scan scope changed. All compatible zones are shown again.", "success");
-      updateGpuAvailabilityScanButton();
+      const loadingToken = setPageLoading("Updating GPU scan scope...");
+      try {
+        // Prevent the asynchronous scope reset from racing a new scan.
+        setBusy(true);
+        resetGpuAvailabilityScan();
+        renderZoneOptions();
+        await refreshPriceEstimate({ silent: false });
+        await refreshStatus({ silent: true });
+        setCommandStatus("GPU scan scope changed. All compatible zones are shown again.", "success");
+      } catch (error) {
+        handleError(error);
+      } finally {
+        setBusy(false);
+        updateGpuAvailabilityScanButton();
+        markPageReady("Ready.", loadingToken);
+      }
     });
   }
 
