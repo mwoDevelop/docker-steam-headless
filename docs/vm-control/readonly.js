@@ -315,7 +315,7 @@
       return "<span class=\"service-status error reachability-status\" title=\"" + escapeHtml(probe.error) + "\"><span class=\"service-status-dot\"></span>Check failed</span>";
     }
     const status = String(probe.state || "unreachable").toLowerCase();
-    const className = status === "healthy" ? "ready" : (status === "degraded" ? "starting" : "error");
+    const className = status === "healthy" ? "ready" : (["degraded", "restricted"].includes(status) ? "starting" : "error");
     const label = String(probe.label || (status === "healthy" ? "Reachable" : "Unreachable"));
     const detail = String(probe.detail || "");
     const visibleLabel = detail ? label + ": " + detail : label;
@@ -352,13 +352,9 @@
         const host = String(endpoint?.domain || instance.externalIp || "").trim();
         const hostHtml = escapeHtml(host || "External address not assigned");
         const sunshineUrl = host ? "https://" + host + ":47990/" : "";
-        const novncUrl = host ? "http://" + host + ":8083/" : "";
         const minecraftAddress = host ? host + ":25565" : "External address not assigned";
         const sunshineLink = sunshineUrl
           ? "<div class=\"access-links\"><a href=\"" + escapeHtml(sunshineUrl) + "\" target=\"_blank\" rel=\"noreferrer\">Open Sunshine UI</a></div>"
-          : "";
-        const novncLink = novncUrl
-          ? "<div class=\"access-links\"><a href=\"" + escapeHtml(novncUrl) + "\" target=\"_blank\" rel=\"noreferrer\">Open noVNC</a></div>"
           : "";
         return "<article class=\"access-card accent\">"
           + "<h3>" + escapeHtml(instance.name) + " · " + escapeHtml(instance.zone) + "</h3>"
@@ -366,8 +362,7 @@
           + "<p class=\"access-meta\">Sunshine: <code>" + escapeHtml(serviceLabel(instance.sunshineStatus, "sunshine")) + "</code></p>"
           + sunshineLink
           + (sunshineUrl ? "<p class=\"access-meta\">Sunshine URL: <code>" + escapeHtml(sunshineUrl) + "</code>" + reachabilityStatus(reachability?.sunshine) + "</p>" : "")
-          + novncLink
-          + (novncUrl ? "<p class=\"access-meta\">Browser desktop: <code>" + escapeHtml(novncUrl) + "</code>" + reachabilityStatus(reachability?.novnc) + "</p>" : "")
+          + "<p class=\"access-meta\">Browser desktop: <code>administrator access through Google IAP</code>" + reachabilityStatus(reachability?.novnc) + "</p>"
           + "<p class=\"access-meta\">Minecraft: <code>" + escapeHtml(minecraftAddress) + "</code> · " + escapeHtml(serviceLabel(instance.minecraftStatus, "minecraft")) + reachabilityStatus(reachability?.minecraft) + "</p>"
           + "</article>";
       }).join("")
