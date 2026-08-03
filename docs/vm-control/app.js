@@ -1992,6 +1992,9 @@
     if (!hours) {
       return "Auto-stop: disabled.";
     }
+    if (autoStop.label === "Will be scheduled after next start") {
+      return `Auto-stop: will be scheduled ${hours}h after the next start.`;
+    }
     if (!scheduledAt) {
       return `Auto-stop: scheduled after ${hours}h.`;
     }

@@ -4679,6 +4679,15 @@ def build_auto_stop_status(instance: dict[str, Any] | None) -> dict[str, Any]:
     except ValueError:
         hours = None
 
+    if str(instance.get("status", "")).upper() != "RUNNING":
+        return {
+            "hours": hours_raw,
+            "scheduledAt": "",
+            "remainingSeconds": None,
+            "source": "",
+            "label": "Will be scheduled after next start",
+        }
+
     if not scheduled_at and hours is not None and str(instance.get("status", "")).upper() == "RUNNING":
         scheduled_at = estimated_auto_stop_at(instance, hours)
         source = "estimated" if scheduled_at else ""
