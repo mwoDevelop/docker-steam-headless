@@ -205,7 +205,7 @@ record_sunshine_version() {
   container_id="$(docker compose "${COMPOSE_FILES[@]}" ps -q | head -n 1 || true)"
   [[ -n "$container_id" ]] || return 0
   raw_version="$(docker exec "$container_id" sunshine --version 2>/dev/null | head -n 1 || true)"
-  version="$(printf '%s\n' "$raw_version" | grep -Eo '[0-9]+(\.[0-9]+){1,3}([+-][0-9A-Za-z.-]+)?' | head -n 1 || true)"
+  version="$(printf '%s\n' "$raw_version" | sed -nE 's/.*Sunshine version:[[:space:]]*([0-9]+(\.[0-9]+){1,3}([+-][0-9A-Za-z.-]+)?).*/\1/p' | head -n 1 || true)"
   [[ -n "$version" ]] && set_instance_metadata_value vm-sunshine-version "$version"
 }
 
