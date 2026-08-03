@@ -1027,7 +1027,9 @@
 
     const urls = status.urls || {};
     const sunshineUrl = String(urls.sunshine || "");
-    const novncUrl = String(urls.novnc || "");
+    const novncIap = urls.novncIap || {};
+    const novncTunnelCommand = String(novncIap.command || "");
+    const novncLocalUrl = String(novncIap.localUrl || "http://localhost:8083/");
     const minecraftAddress = String(urls.minecraft || "");
     const minecraftStatus = status.minecraftStatus || status.minecraft || {};
     const sunshineStatus = status.sunshineStatus || status.sunshine || {};
@@ -1048,7 +1050,12 @@
     container.className = "access";
     container.innerHTML = `<div class="access-grid">
       ${card("Sunshine Web UI", sunshineUrl, String(sunshineStatus.label || "Status not available"), "Open Sunshine UI")}
-      ${card("Browser desktop", novncUrl, "noVNC browser desktop", "Open noVNC")}
+      <article class="access-card accent">
+        <h3>Browser desktop</h3>
+        <p class="access-meta">Restricted to configured administrators through Google IAP. Run this on your administrator workstation:</p>
+        <p class="access-meta"><code>${escapeHtml(novncTunnelCommand || "IAP tunnel command is not available.")}</code></p>
+        <p class="access-meta">Then open <code>${escapeHtml(novncLocalUrl)}</code>.</p>
+      </article>
       ${card("Minecraft Server", "", `${minecraftAddress || "Address not available"} · ${String(minecraftStatus.label || "Not installed")}`, "")}
       <article class="access-card accent">
         <h3>Minecraft management</h3>

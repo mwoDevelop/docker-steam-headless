@@ -137,6 +137,7 @@ CONFIG = {
     "vm_tags": csv_env("VM_TAGS") or csv_env("TAGS"),
     "firewall_source_ranges": csv_env("FIREWALL_SOURCE_RANGES") or csv_env("ALLOW_CIDR") or ["0.0.0.0/0"],
     "firewall_rule_web": os.environ.get("FIREWALL_RULE_WEB", "allow-steam-headless-web"),
+    "firewall_rule_novnc_iap": os.environ.get("FIREWALL_RULE_NOVNC_IAP", "allow-steam-headless-novnc-iap"),
     "firewall_rule_sunshine": os.environ.get("FIREWALL_RULE_SUNSHINE", "allow-sunshine"),
     "firewall_rule_minecraft": os.environ.get("FIREWALL_RULE_MINECRAFT", "allow-minecraft-server"),
     "vm_service_account_email": os.environ.get("VM_SERVICE_ACCOUNT_EMAIL", ""),
@@ -405,7 +406,9 @@ PRICE_INDEX_CACHE: dict[str, Any] = {
     "conversion_rate": None,
 }
 PRICE_INDEX_LOCK = threading.Lock()
-FIREWALL_WEB_ALLOWED: Final = [{"IPProtocol": "tcp", "ports": ["22", "8083"]}]
+FIREWALL_WEB_ALLOWED: Final = [{"IPProtocol": "tcp", "ports": ["22"]}]
+IAP_TCP_FORWARDING_SOURCE_RANGES: Final = ["35.235.240.0/20"]
+FIREWALL_NOVNC_IAP_ALLOWED: Final = [{"IPProtocol": "tcp", "ports": ["8083"]}]
 FIREWALL_SUNSHINE_ALLOWED: Final = [
     {"IPProtocol": "tcp", "ports": ["47984", "47989", "47990", "48010", "27036-27037"]},
     {"IPProtocol": "udp", "ports": ["47998", "47999", "48000", "48002", "48010", "27031-27036"]},
@@ -1875,11 +1878,14 @@ def build_live_access_reachability_payload(endpoint: dict[str, Any]) -> dict[str
         }
     with ThreadPoolExecutor(max_workers=3) as executor:
         sunshine_probe = executor.submit(probe_http_live_access, host, 47990, "Sunshine", True)
-        novnc_probe = executor.submit(probe_http_live_access, host, 8083, "noVNC", False)
         minecraft_probe = executor.submit(probe_minecraft_live_access, host)
         services = {
             "sunshine": sunshine_probe.result(),
-            "novnc": novnc_probe.result(),
+            "novnc": live_access_probe_result(
+                "restricted",
+                "Administrator access only",
+                "noVNC is intentionally private and is available through an authorized Google IAP TCP tunnel.",
+            ),
             "minecraft": minecraft_probe.result(),
         }
     return {
@@ -5157,20 +5163,28 @@ def build_instance_metadata_items(
     return items
 
 
-def firewall_rule_body(name: str, allowed: list[dict[str, Any]]) -> dict[str, Any]:
+def firewall_rule_body(
+    name: str,
+    allowed: list[dict[str, Any]],
+    source_ranges: list[str] | None = None,
+) -> dict[str, Any]:
     tags = CONFIG["vm_tags"] or ["steam-headless"]
     return {
         "name": name,
         "network": network_path(),
         "direction": "INGRESS",
         "allowed": allowed,
-        "sourceRanges": CONFIG["firewall_source_ranges"],
+        "sourceRanges": source_ranges or CONFIG["firewall_source_ranges"],
         "targetTags": tags,
     }
 
 
-def ensure_firewall_rule(name: str, allowed: list[dict[str, Any]]) -> None:
-    body = firewall_rule_body(name, allowed)
+def ensure_firewall_rule(
+    name: str,
+    allowed: list[dict[str, Any]],
+    source_ranges: list[str] | None = None,
+) -> None:
+    body = firewall_rule_body(name, allowed, source_ranges)
     existing = compute_request("GET", firewall_url(name), allow_404=True)
     if existing is None:
         operation = compute_request("POST", firewalls_collection_url(), json=body)
@@ -5182,6 +5196,11 @@ def ensure_firewall_rule(name: str, allowed: list[dict[str, Any]]) -> None:
 
 def ensure_firewall_rules() -> None:
     ensure_firewall_rule(CONFIG["firewall_rule_web"], FIREWALL_WEB_ALLOWED)
+    ensure_firewall_rule(
+        CONFIG["firewall_rule_novnc_iap"],
+        FIREWALL_NOVNC_IAP_ALLOWED,
+        IAP_TCP_FORWARDING_SOURCE_RANGES,
+    )
     ensure_firewall_rule(CONFIG["firewall_rule_sunshine"], FIREWALL_SUNSHINE_ALLOWED)
     ensure_firewall_rule(CONFIG["firewall_rule_minecraft"], FIREWALL_MINECRAFT_ALLOWED)
 
@@ -5271,6 +5290,14 @@ def build_urls(external_ip: str, minecraft_port: int | None = None) -> dict[str,
     game_port = int(minecraft_port or CONFIG["minecraft_port"])
     urls: dict[str, Any] = {
         "novnc": "",
+        "novncIap": {
+            "localUrl": f"http://localhost:{CONFIG['novnc_port']}/",
+            "command": (
+                f"gcloud compute start-iap-tunnel {selected_instance_name()} {CONFIG['novnc_port']} "
+                f"--project {CONFIG['project']} --zone {selected_zone()} "
+                f"--local-host-port=localhost:{CONFIG['novnc_port']}"
+            ),
+        },
         "sunshine": "",
         "minecraft": "",
         "moonlightHost": external_ip,
@@ -5279,12 +5306,10 @@ def build_urls(external_ip: str, minecraft_port: int | None = None) -> dict[str,
     endpoint_domains = selected_endpoint_domains()
     primary_duckdns = endpoint_domains[0] if endpoint_domains else ""
     if primary_duckdns:
-        urls["novnc"] = f"http://{primary_duckdns}:{CONFIG['novnc_port']}/"
         urls["sunshine"] = f"https://{primary_duckdns}:{CONFIG['sunshine_port']}/"
         urls["minecraft"] = f"{primary_duckdns}:{game_port}"
         urls["moonlightHost"] = primary_duckdns
     elif external_ip:
-        urls["novnc"] = f"http://{external_ip}:{CONFIG['novnc_port']}/"
         urls["sunshine"] = f"https://{external_ip}:{CONFIG['sunshine_port']}/"
         urls["minecraft"] = f"{external_ip}:{game_port}"
 
@@ -5293,7 +5318,6 @@ def build_urls(external_ip: str, minecraft_port: int | None = None) -> dict[str,
         duckdns_entries.append(
             {
                 "domain": domain,
-                "novnc": f"http://{domain}:{CONFIG['novnc_port']}/",
                 "sunshine": f"https://{domain}:{CONFIG['sunshine_port']}/",
                 "minecraft": f"{domain}:{game_port}",
             }
