@@ -146,6 +146,14 @@
                     <option value="africa">Africa</option>
                   </select>
                 </label>
+                <div class="gpu-scan-profile-picker">
+                  <span>GPUs to scan</span>
+                  <details>
+                    <summary id="gpu-scan-profiles-summary">Loading GPU profiles...</summary>
+                    <div id="gpu-scan-profiles" class="gpu-scan-profile-list" role="group" aria-label="GPU profiles to scan"></div>
+                  </details>
+                  <p id="gpu-scan-profiles-count">Select GPU profiles after hardware data loads.</p>
+                </div>
                 <div class="control-row">
                   <button id="refresh-hardware" class="ghost" type="button">Scan All Compatible GPU Zones</button>
                 </div>
