@@ -298,7 +298,7 @@ SUNSHINE_GPU_COMPATIBILITY: Final = {
     "nvidia-tesla-p4": {
         "state": "incompatible",
         "label": "Tested: fails",
-        "detail": "Sunshine failed to find a usable display encoder on this raw P4 profile.",
+        "detail": "Tested in us-east4-a on 2026-08-11: Tesla P4 with driver 580.173.02 and Sunshine 2026.516.143833 exposes only the NULL Xorg MetaMode, so Sunshine cannot initialize X11 capture or NVENC.",
     },
 }
 INCOMPATIBLE_SUNSHINE_ACCELERATORS: Final = frozenset(
