@@ -1845,7 +1845,7 @@
     setCommandStatus(message, cleanupFailures ? "warning" : "success");
   }
 
-  async function scanAllGpuZoneAvailability() {
+  async function scanAllGpuZoneAvailability(options = {}) {
     if (activeAllGpuZoneAvailabilityScan()) {
       resetAllGpuZoneAvailabilityScan();
       renderHardwareOptions(state.hardwarePayload);
@@ -1867,7 +1867,7 @@
     if (!targets.length) {
       throw new Error("No GPU hardware profiles are configured for the full capacity scan.");
     }
-    if (!window.confirm(`This will create and immediately release ${targets.length} short-lived GPU capacity reservations across ${profiles.length} GPU profiles. It can take several minutes and may be cancelled. Continue?`)) {
+    if (!options.confirmed && !window.confirm(`This will create and immediately release ${targets.length} short-lived GPU capacity reservations across ${profiles.length} GPU profiles. It can take several minutes and may be cancelled. Continue?`)) {
       setCommandStatus("Full GPU capacity scan cancelled before it started.", "neutral");
       return;
     }
@@ -3969,11 +3969,17 @@
   if (elements.scanAllGpuZones) {
     elements.scanAllGpuZones.addEventListener("click", async () => {
       const restoringCatalog = Boolean(activeAllGpuZoneAvailabilityScan());
+      const profiles = eligibleGpuScanProfiles();
+      const targetCount = profiles.reduce((total, profile) => total + profile.zones.length, 0);
+      if (!restoringCatalog && profiles.length && !window.confirm(`This will create and immediately release ${targetCount} short-lived GPU capacity reservations across ${profiles.length} GPU profiles. It can take several minutes and may be cancelled. Continue?`)) {
+        setCommandStatus("Full GPU capacity scan cancelled before it started.", "neutral");
+        return;
+      }
       const loadingToken = setPageLoading(restoringCatalog ? "Restoring all configured GPU profiles and zones..." : "Scanning all configured GPU profiles in all compatible zones...");
       try {
         setBusy(true);
         updateGpuAvailabilityScanButton();
-        await scanAllGpuZoneAvailability();
+        await scanAllGpuZoneAvailability({ confirmed: true });
       } catch (error) {
         handleError(error);
       } finally {
