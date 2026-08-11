@@ -812,6 +812,40 @@ if [ -f "$COMPOSE_OVERRIDE" ]; then
   COMPOSE_FILES+=(-f "$COMPOSE_OVERRIDE")
 fi
 
+# The current upstream dumb-udev helper restarts Xorg for every uinput device
+# created by Sunshine on NVIDIA vWS profiles. That produces a restart loop:
+# Xorg exits, then Sunshine loses its display and never keeps its ports open.
+# Keep the upstream image untouched and disable that helper only after the
+# container has completed its own initialization.
+VWS_DISABLE_DUMB_UDEV=0
+if [[ "$(metadata_get vm-gpu-type || true)" == *-vws ]]; then
+  VWS_DISABLE_DUMB_UDEV=1
+fi
+
+stabilize_vws_input_stack() {
+  local container_id
+  [[ "$VWS_DISABLE_DUMB_UDEV" == "1" ]] || return 0
+
+  # The upstream image can spend several minutes installing the matching
+  # NVIDIA userspace packages before supervisord becomes available.
+  for _ in $(seq 1 180); do
+    container_id="$(docker compose "${COMPOSE_FILES[@]}" ps -q | head -n 1 || true)"
+    if [[ -n "$container_id" ]] && docker exec --user root "$container_id" supervisorctl pid >/dev/null 2>&1; then
+      log "Disabling dumb-udev for the NVIDIA vWS input stack."
+      docker exec --user root "$container_id" supervisorctl stop sunshine x11vnc desktop xorg udev >/dev/null 2>&1 || true
+      docker exec --user root "$container_id" rm -f /tmp/.X0-lock /tmp/.X11-unix/X0
+      docker exec --user root "$container_id" supervisorctl start xorg >/dev/null 2>&1 || true
+      sleep 3
+      docker exec --user root "$container_id" supervisorctl start desktop x11vnc sunshine >/dev/null 2>&1 || true
+      return 0
+    fi
+    sleep 2
+  done
+
+  log "Could not reach supervisor to stabilize the NVIDIA vWS input stack."
+  return 0
+}
+
 ENVF=/opt/container-services/steam-headless/.env
 ENV_METADATA="$(metadata_get_with_retry steam-headless-env 20)"
 if [[ -z "$ENV_METADATA" ]]; then
@@ -973,6 +1007,7 @@ if ! gpu_enabled; then
 fi
 
 docker compose "${COMPOSE_FILES[@]}" up -d --force-recreate
+stabilize_vws_input_stack
 
 for _ in $(seq 1 60); do
   if ss -lntup | grep -qE ':8083\s|:47990\s'; then
@@ -1027,6 +1062,7 @@ sed -i -E \
 apply_sunshine_state_credentials
 
 docker compose "${COMPOSE_FILES[@]}" restart || true
+stabilize_vws_input_stack
 
 if [ -f "$SUNSHINE_DIRECT_CONFIG" ]; then
   for _ in $(seq 1 60); do

@@ -281,9 +281,9 @@ GPU_VRAM_GB: Final = {
 }
 SUNSHINE_GPU_COMPATIBILITY: Final = {
     "nvidia-tesla-t4-vws": {
-        "state": "untested",
-        "label": "Latest image requires validation",
-        "detail": "The prior vWS result must be revalidated with the current Steam Headless latest image.",
+        "state": "compatible",
+        "label": "Latest: tested works",
+        "detail": "Validated with the current Steam Headless latest image: Sunshine, Xorg, noVNC, and NVIDIA NVENC started successfully on T4 vWS.",
     },
     "nvidia-l4-vws": {
         "state": "untested",

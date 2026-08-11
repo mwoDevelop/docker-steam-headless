@@ -600,7 +600,7 @@
   }
 
   function statusBannerMessage(prefix, data) {
-    if (data && data.instanceExists === false) {
+    if (data && data.instanceExists === false && !isTransitionalStatus(data)) {
       const target = data.target || {};
       const hardware = data.hardware || {};
       const zone = hardware.zone || target.zone || "unknown";
