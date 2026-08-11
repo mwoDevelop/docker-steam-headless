@@ -1,16 +1,16 @@
-# Kubernetes
+#Kubernetes
 
-Have a cluster at home and want to add steam headless to it?
+Masz klaster w domu i chcesz go poprosić o parę bezgłową?
 
-Requirements
-- NVIDIA Device plugin (if using nvidia GPU) https://github.com/NVIDIA/k8s-device-plugin 
-- A storageclass
+Wymagania
+- Wtyczka urządzenia NVIDIA (jeśli jest to oddzielne narzędzie graficzne NVIDIA) https://github.com/NVIDIA/k8s-device-plugin
+- Zajęcia z przechowywania
 
-Tasks
-1. Configure the statefulset to your liking. Things to note:
+Zadania
+1. Skonfiguruj zestaw stanowy według upodobań. Rzeczy warte uwagi:
     - CPU & Memory
     - Env vars (see compose-files/.env.example for documentation; keep real passwords in a local Secret / untracked env)
-2. Change the PVC to your liking. Things to note:
+2. Zmień PCV według upodobań elektrycznych. Rzeczy warte uwagi:
     - Storage Class
     - Size
-3. Deploy it: `kubectl create -f k8s-files/*`
+3. Wdróż go: `kubectl create -f k8s-files/*`

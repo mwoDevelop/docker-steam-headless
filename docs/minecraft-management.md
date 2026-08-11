@@ -1,11 +1,11 @@
-# Minecraft management panel
+# Panel zarządzania Minecraftem
 
-The Minecraft management panel is available at `docs/vm-control/minecraft-admin.html` through the **Open management controls** link in VM Control.
+Panel zarządzania Minecraft jest dostępny pod adresem `docs/vm-control/minecraft-admin.html` poprzez połączenie **Otwórz zarządzanie zarządzanie** w VM Control.
 
-- Access is granted per Google account by an administrator in `admin.html`.
-- Administrator accounts always have Minecraft management access.
-- Cloud Run authorizes every request; the browser never receives the RCON password.
-- The VM runs the RCON client locally inside the `itzg/minecraft-server` container. TCP `25575` is not published and no firewall rule is added for it.
-- The panel supports console commands, player listing, whitelist changes, OP changes, and a container restart.
+- Dostęp jest dostępny na koncie Google przez administratora w `admin.html`.
+- Konta administratorów zawsze mają dostęp do zarządzania Minecraftem.
+- Cloud Run autoryzuje każde pobieranie; Przeglądarka nie została dostarczona hasła RCON.
+— Maszyna wirtualna uruchamiająca klienta RCON lokalnie w kontenerze `itzg/minecraft-server`. TCP `25575` nie jest publikowany i nie jest dodawany dla innej konkretnej zapory sieciowej.
+- Panel obsługujący konsolę, listę odtwarzaczy, zmianę na ekranie, zmianę OP i udostępnienie kontenera.
 
-For an already-created VM, use **Enable management agent** once and restart the VM from the main GUI. Newly created VMs install the agent automatically during startup.
+W przypadku już zorganizowanej maszyny wirtualnej raz opcja **Włącz agenta zarządzania** i uruchom ponownie maszynę wirtualną z poziomu interfejsu GUI. Nowo utworzone maszyny wirtualne instalują agenta automatycznie podczas uruchamiania.

@@ -1,395 +1,385 @@
-# VM State Persistence Plan
+# Plan trwałości stanu maszyny wirtualnej
 
-## Goal
+## Cel
 
-Preserve the state needed to rebuild the Steam VM from scratch, including:
+Zachowaj stan niezbędny do odbudowania maszyny wirtualnej Steam od zera, w tym:
 
-- Steam login/session state
-- Sunshine pairing/auth state
-- Sunshine configuration
-- user-level application state under the container home
-- installed game files under `/mnt/games`
+- Stan logowania/sesji Steam
+- Stan parowania/uwierzytelniania Sunshine
+- Konfiguracja słoneczna
+- stan aplikacji na poziomie użytkownika w domu kontenera
+- zainstalowałem pliki gry w katalogu `/mnt/games`
 
-Target outcome:
+Wynik docelowy:
 
-1. the VM can be fully destroyed and recreated,
-2. the required state is restored automatically during bootstrap,
-3. Google Drive on `mwodevelop@gmail.com` is the single backup source of truth,
-4. secrets do not end up committed to git,
-5. normal `Stop` and `Restart` stay reasonably fast.
+1. maszynę wirtualną można całkowicie zniszczyć i odtworzyć,
+2. wymagany stan jest przywracany automatycznie podczas ładowania początkowego,
+3. Dysk Google pod adresem `mwodevelop@gmail.com` to jedyne zapasowe źródło prawdy,
+4. sekrety nie trafiają do gita,
+5. Normalne „Stop” i „Uruchom ponownie” działają dość szybko.
 
-## Decisions Confirmed
+## Decyzje potwierdzone
 
-1. Google Drive is used for backup and restore synchronization, not as a live-mounted primary filesystem.
-2. The full Steam Headless home tree must be persisted.
-3. `/mnt/games` must also survive full rebuilds.
-4. Backup/sync should happen automatically.
-5. `Delete` must require operator confirmation before backup + destroy.
-6. Google Drive credentials may be stored in Secret Manager.
-7. The control panel must expose `Create` and `Delete`, with enablement based on VM state.
-8. Google Drive storage is pinned to the main account `mwodevelop@gmail.com`; other allowed Google accounts are only for panel login.
-9. `/home` and `/mnt/games` should not use the same persistence method.
-10. VM storage layout should use one shared data disk for both `/opt/container-data/steam-headless/home` and `/mnt/games`, plus the normal boot disk.
-11. `Create` and `Delete` must manage the full lifecycle of that shared data disk; Drive remains the recovery source of truth, not a detached disk left behind after `Delete`.
+1. Dysk Google służy do synchronizacji kopii zapasowych i przywracania, a nie jako główny system plików montowany na żywo.
+2. Należy zachować pełne drzewo główne Steam Headless.
+3. `/mnt/games` musi także przetrwać pełną przebudowę.
+4. Kopia zapasowa/synchronizacja powinna nastąpić automatycznie.
+5. Opcja „Usuń” musi wymagać potwierdzenia przez operatora przed utworzeniem kopii zapasowej i zniszczeniem.
+6. Dane uwierzytelniające Dysku Google mogą być przechowywane w Secret Managerze.
+7. Panel sterowania musi udostępniać opcje „Utwórz” i „Usuń”, z możliwością włączenia na podstawie stanu maszyny wirtualnej.
+8. Miejsce na Dysku Google jest przypięte do konta głównego `mwodevelop@gmail.com`; inne dozwolone konta Google służą wyłącznie do logowania się do panelu.
+9. `/home` i `/mnt/games` nie powinny używać tej samej metody utrwalania.
+10. Układ pamięci masowej maszyny wirtualnej powinien wykorzystywać jeden współdzielony dysk danych dla `/opt/container-data/steam-headless/home` i `/mnt/games` oraz normalny dysk startowy.
+11. „Utwórz” i „Usuń” muszą zarządzać pełnym cyklem życia tego współdzielonego dysku z danymi; Dysk pozostaje źródłem prawdy, a nie odłączonym dyskiem pozostawionym po operacji „Usuń”.
 
-## Current State
+## Obecny stan
 
-Current deployment already stores the Steam Headless container home on the VM host under:
+Obecne wdrożenie przechowuje już kontener Steam Headless na hoście maszyny wirtualnej w lokalizacji:
 
-- host path: `/opt/container-data/steam-headless/home`
-- container path: `/home/default`
+- ścieżka hosta: `/opt/container-data/steam-headless/home`
+- ścieżka kontenera: `/home/default`
 
-The game library lives under:
+Biblioteka gier znajduje się pod:
 
-- `/mnt/games`
+- `/mnt/gry`
 
-Current startup path:
+Bieżąca ścieżka startowa:
 
-- VM metadata provides `steam-headless-env`
-- startup script writes `/opt/container-services/steam-headless/.env`
-- docker compose mounts `${HOME_DIR}` to `/home/default`
+- Metadane maszyny wirtualnej zapewniają `steam-headless-env`
+- skrypt startowy zapisuje `/opt/container-services/steam-headless/.env`
+- docker compose montuje `${HOME_DIR}` do `/home/default`
 
-Current persistence behavior already works for `/home` through the host-side backup/restore flow tied to Google Drive.
+Obecne zachowanie trwałości działa już w przypadku „/home” poprzez proces tworzenia kopii zapasowych/przywracania po stronie hosta powiązany z Dyskiem Google.
 
-Current deployment note:
+Aktualna uwaga dotycząca wdrożenia:
 
-- the existing implementation does not yet define the shared-data-disk lifecycle described below,
-- this plan therefore includes both a storage-layout change and a persistence-flow change.
+- istniejąca implementacja nie definiuje jeszcze opisanego poniżej cyklu życia współdzielonego dysku z danymi,
+- zatem plan ten obejmuje zarówno zmianę układu przechowywania, jak i zmianę przepływu trwałości.
 
-## Discovery Findings
+## Ustalenia odkrycia
 
-Inspection on the live VM showed:
+Kontrola działającej maszyny wirtualnej wykazała:
 
-- Sunshine state lives under `/opt/container-data/steam-headless/home/.config/sunshine`
-- key Sunshine files include:
+- Stan Sunshine znajduje się pod `/opt/container-data/steam-headless/home/.config/sunshine`
+- kluczowe pliki Sunshine obejmują:
   - `apps.json`
   - `credentials/cacert.pem`
   - `credentials/cakey.pem`
   - `sunshine.conf`
   - `sunshine_state.json`
-- Steam state lives under `/opt/container-data/steam-headless/home/.steam`
-- key Steam files include:
+- Stan Steam znajduje się w `/opt/container-data/steam-headless/home/.steam`
+- kluczowe pliki Steam obejmują:
   - `.steam/steam/config/loginusers.vdf`
   - `.steam/steam/config/config.vdf`
   - `.steam/steam.token`
 
-This means:
+To oznacza:
 
-- `/home` is the right recovery boundary for Steam auth/session and Sunshine pairing/configuration,
-- `/mnt/games` is separate and should be treated as installed content, not lightweight runtime state,
-- bootstrap config and secrets must still be restored independently of `/home`.
+- `/home` to właściwa granica odzyskiwania dla autoryzacji/sesji Steam i parowania/konfiguracji Sunshine,
+- `/mnt/games` jest oddzielny i należy go traktować jako zainstalowaną zawartość, a nie lekki stan wykonawczy,
+- konfiguracja bootstrap i sekrety muszą zostać przywrócone niezależnie od `/home`.
 
-## Design Direction
+## Kierunek projektowania
 
-### `/home`
+### `/dom`
 
-Keep the current lightweight backup path:
+Zachowaj bieżącą lekką ścieżkę kopii zapasowej:
 
-- restore on `Create` / fresh-create boot
-- backup on `Stop`, `Restart`, and `Delete`
+- przywróć przy rozruchu „Utwórz” / świeżo-utwórz
+- wykonaj kopię zapasową przy poleceniach „Stop”, „Uruchom ponownie” i „Usuń”.
 
-Reasoning:
+Rozumowanie:- zawiera stan uwierzytelnienia/konfiguracji, którego faktycznie często potrzebujemy,
+- jest stosunkowo niewielki,
+- dopuszczalne jest częste tworzenie kopii zapasowych.
 
-- it contains the authentication/configuration state we actually need often,
-- it is relatively small,
-- frequent backup is acceptable.
+### `/mnt/gry`
 
-### `/mnt/games`
+Nie przechowuj `/mnt/games` w tej samej ścieżce synchronizacji na poziomie katalogu, co `/home`.
 
-Do not keep `/mnt/games` on the same directory-level sync path as `/home`.
+Zamiast tego:
 
-Instead:
+- archiwizuj `/mnt/games` tylko podczas `Delete`,
+- przywróć to archiwum tylko podczas rozruchu typu `Create` / Fresh-create,
+- nie twórz kopii zapasowej `/mnt/games` podczas `Stop` lub `Restart`.
 
-- archive `/mnt/games` only during `Delete`,
-- restore that archive only during `Create` / fresh-create boot,
-- do not back up `/mnt/games` during `Stop` or `Restart`.
+Rozumowanie:
 
-Reasoning:
+- biblioteki gier są duże,
+- częsta synchronizacja jest zbyt wolna i zaszumiona,
+— Dysk jest akceptowalny jako chłodnia dla zainstalowanej zawartości, a nie jako częsta synchronizacja operacyjna.
 
-- game libraries are large,
-- frequent sync is too slow and noisy,
-- Drive is acceptable as cold storage for installed content, not as frequent operational sync.
+## Zalecana architektura
 
-## Recommended Architecture
+### Czas działania
 
-### Runtime
+- dysk startowy dla systemu operacyjnego, Dockera, skryptów startowych i środowiska wykonawczego hosta tymczasowego
+- jeden współdzielony dysk z danymi stanu aplikacji
+- `/opt/container-data/steam-headless/home` przechowywany na współdzielonym dysku z danymi
+- `/mnt/games` przechowywane na tym samym współdzielonym dysku z danymi
+- przywróć bramkowanie w oparciu o wyraźny zamiar świeżego tworzenia, a nie każdy zwykły rozruch
 
-- boot disk for the OS, Docker, bootstrap scripts, and transient host runtime
-- one shared data disk for application state
-- `/opt/container-data/steam-headless/home` stored on the shared data disk
-- `/mnt/games` stored on the same shared data disk
-- restore gating based on explicit fresh-create intent, not every ordinary boot
+### Układ dysku maszyny wirtualnej
 
-### VM Disk Layout
+Maszyna wirtualna powinna mieć łącznie 2 dyski:
 
-The VM should have 2 disks total:
-
-1. boot disk
-   - operating system
-   - Docker engine and packages
-   - startup/shutdown/persistence tooling
-   - transient machine-local runtime
-2. data disk
-   - mounted early in boot
-   - contains both:
+1. dysk rozruchowy
+   - system operacyjny
+   - Silnik Dockera i pakiety
+   - narzędzia do uruchamiania/zamykania/trwałości
+   - przejściowe lokalne środowisko wykonawcze komputera
+2. dysk z danymi
+   - montowany na początku bagażnika
+   - zawiera oba:
      - `/opt/container-data/steam-headless/home`
-     - `/mnt/games`
+     - `/mnt/gry`
 
-Lifecycle:
+Cykl życia:
 
-- `Create` creates and attaches a fresh shared data disk
-- first boot formats it if needed and mounts it deterministically
-- `Delete` removes the VM and its shared data disk only after backup succeeds
-- recovery source remains Google Drive, not the deleted disk
+- „Utwórz” tworzy i dołącza nowy, współdzielony dysk z danymi
+- pierwszy rozruch formatuje go w razie potrzeby i montuje deterministycznie
+- Opcja „Usuń” usuwa maszynę wirtualną i jej współdzielony dysk z danymi dopiero po pomyślnym wykonaniu kopii zapasowej
+- źródłem odzyskiwania pozostaje Dysk Google, a nie usunięty dysk
 
-Reasoning:
+Rozumowanie:
 
-- simpler provisioning than separate disks for home and games,
-- fewer moving parts during `Create`,
-- both paths represent app-state rather than base system state,
-- backup policy can still differ by directory even when both live on the same data disk.
+- prostsze zaopatrzenie niż osobne dyski dla domu i gier,
+- mniej ruchomych części podczas `Tworzenia`,
+- obie ścieżki reprezentują stan aplikacji, a nie stan systemu bazowego,
+- zasady tworzenia kopii zapasowych mogą nadal różnić się w zależności od katalogu, nawet jeśli oba znajdują się na tym samym dysku z danymi.
 
-### Backup Storage
+### Magazyn kopii zapasowych
 
-Google Drive rooted in the main account `mwodevelop@gmail.com`.
+Dysk Google zakorzeniony na głównym koncie `mwodevelop@gmail.com`.
 
-Proposed layout:
+Proponowany układ:
 
 - `steam-vm-state/home/home.tar.zst`
 - `steam-vm-state/home/manifest.json`
-- `steam-vm-state/games/archives/<timestamp>.tar.zst`
+- `steam-vm-state/games/archives/<znacznik czasu>.tar.zst`
 - `steam-vm-state/games/current.json`
 - `steam-vm-state/games/manifests/<timestamp>.json`
-- `steam-vm-state/manifest.json`
-- `steam-vm-state/version.txt`
+- `stan-VM Steam/manifest.json`
+- `stan-VM/wersja.txt`
 
-## Scope of Data to Preserve
+## Zakres danych do zachowania
 
-### Frequent backup scope
+### Częsty zakres kopii zapasowych
 
-- full `/opt/container-data/steam-headless/home`
+- pełne `/opt/container-data/steam-headless/home`
 
-### Delete-only archive scope
+### Zakres archiwum tylko do usuwania
 
-- full `/mnt/games`
+- pełne `/mnt/games`
 
-### Rebuildable runtime config
+### Konfiguracja środowiska wykonawczego z możliwością odbudowania
 
 - `/opt/container-services/steam-headless/.env`
-- generated startup metadata
-- temporary/cache files outside the persisted areas
-- disk attachment and mount configuration, which should be recreated deterministically during `Create`
-- filesystem creation on a blank shared data disk, which should be automated and idempotent
+- wygenerowane metadane startowe
+- pliki tymczasowe/pamięci podręcznej poza utrwalonymi obszarami
+- podłączenie dysku i konfiguracja montażu, która powinna zostać odtworzona w sposób deterministyczny podczas „Utwórz”.
+- utworzenie systemu plików na pustym dysku współdzielonym z danymi, który powinien być zautomatyzowany i idempotentny
 
-## Proposed Implementation Plan
+## Proponowany plan wdrożenia
 
-### Phase 1: Refine Storage Strategy
-
-1. Keep the existing `/home` backup path as-is.
-2. Remove `/mnt/games` from the frequent sync path.
-3. Make the VM disk model explicit:
-   - `boot disk` for system/runtime
-   - one shared `data disk` mounted for both persisted app-state paths
-4. Define mount strategy for the shared data disk, for example:
-   - mount disk at a stable root such as `/mnt/state`
-   - bind-mount or symlink:
+### Faza 1: Udoskonalenie strategii przechowywania1. Zachowaj istniejącą ścieżkę kopii zapasowej `/home` w niezmienionej postaci.
+2. Usuń `/mnt/games` ze ścieżki częstej synchronizacji.
+3. Wyraźnie określ model dysku maszyny wirtualnej:
+   - `dysk startowy` dla systemu/środowiska wykonawczego
+   - jeden współdzielony „dysk z danymi” zamontowany dla obu utrwalonych ścieżek stanu aplikacji
+4. Zdefiniuj strategię montowania dla udostępnionego dysku z danymi, na przykład:
+   - zamontuj dysk w stabilnym katalogu głównym, takim jak `/mnt/state`
+   - mocowanie powiązania lub dowiązanie symboliczne:
      - `/mnt/state/home` -> `/opt/container-data/steam-headless/home`
-     - `/mnt/state/games` -> `/mnt/games`
-   - or mount individual subdirectories in another deterministic way
-5. Define shared-data-disk lifecycle rules:
-   - `Create` creates a new blank disk of configured size/type
-   - startup formats the disk only when no filesystem exists yet
-   - startup mounts it through a stable device identity such as UUID, not an unstable device name
-   - `Delete` deletes the disk together with the VM after backup success
-6. Make the `/home` layout explicit and stable:
+     - `/mnt/stan/gry` -> `/mnt/gry`
+   - lub montuj poszczególne podkatalogi w inny deterministyczny sposób
+5. Zdefiniuj reguły cyklu życia współdzielonego dysku z danymi:
+   - `Utwórz` tworzy nowy pusty dysk o skonfigurowanym rozmiarze/typu
+   - startup formatuje dysk tylko wtedy, gdy nie istnieje jeszcze żaden system plików
+   - startup montuje go poprzez stabilną tożsamość urządzenia, taką jak UUID, a nie niestabilną nazwę urządzenia
+   - `Usuń` usuwa dysk razem z maszyną wirtualną po pomyślnym wykonaniu kopii zapasowej
+6. Ustaw układ `/home` jako przejrzysty i stabilny:
    - `steam-vm-state/home/home.tar.zst`
    - `steam-vm-state/home/manifest.json`
-   - keep this compatible with the current implementation unless migration is explicitly needed
-7. Define a dedicated games archive layout on Drive:
-   - immutable archive object: `steam-vm-state/games/archives/<timestamp>.tar.zst`
-   - immutable archive manifest: `steam-vm-state/games/manifests/<timestamp>.json`
-   - current pointer: `steam-vm-state/games/current.json`
-8. Define manifest content for the `/home` backup:
-   - timestamp
-   - archive object path
-   - source path
-   - backup format version
-9. Define manifest content for the games archive:
-   - timestamp
-   - archive object path
-   - source path
-   - compression format
-   - approximate size
-   - restore format version
-   - success marker / publication status
-10. Define retention policy for immutable archives:
-   - minimum: keep the latest published archive
-   - optional: keep the last `N` archives for rollback/debugging
+   - zachowaj zgodność z obecną implementacją, chyba że migracja jest wyraźnie potrzebna
+7. Zdefiniuj dedykowany układ archiwum gier na Dysku:
+   - niezmienny obiekt archiwum: `steam-vm-state/games/archives/<timestamp>.tar.zst`
+   - niezmienny manifest archiwum: `steam-vm-state/games/manifests/<timestamp>.json`
+   - bieżący wskaźnik: `steam-vm-state/games/current.json`
+8. Zdefiniuj zawartość manifestu dla kopii zapasowej `/home`:
+   - znacznik czasu
+   - ścieżka obiektu archiwum
+   - ścieżka źródłowa
+   - wersja formatu kopii zapasowej
+9. Zdefiniuj zawartość manifestu dla archiwum gier:
+   - znacznik czasu
+   - ścieżka obiektu archiwum
+   - ścieżka źródłowa
+   - format kompresji
+   - przybliżony rozmiar
+   - przywróć wersję formatu
+   - znacznik sukcesu / status publikacji
+10. Zdefiniuj politykę przechowywania niezmiennych archiwów:
+   - minimum: zachowaj najnowsze opublikowane archiwum
+   - opcjonalnie: zachowaj ostatnie `N` archiwów do wycofania/debugowania
 
-Deliverable:
+Możliwość dostarczenia:
 
-- final Drive layout for split persistence
+- ostateczny układ dysku dla podzielonej trwałości
 
-### Phase 2: Backup/Restore Tooling Changes
+### Faza 2: Zmiany w narzędziach tworzenia kopii zapasowych/przywracania1. Rozszerz `gcp-vm/persist-state.sh` o osobne ścieżki kodu:
+   - Kopia zapasowa/przywracanie `/home`
+   - Archiwizacja/przywracanie `/mnt/games`
+2. Dodaj pomocników, aby upewnić się, że udostępniony dysk z danymi jest zamontowany i że istnieją oczekiwane katalogi przed rozpoczęciem tworzenia kopii zapasowej lub przywracania.
+3. Dodaj pomocników do:
+   - wykryć, czy współdzielony dysk z danymi ma już system plików,
+   - utwórz system plików tylko przy pierwszym uruchomieniu,
+   - zamontuj za pomocą UUID lub równoważnego stabilnego identyfikatora.
+4. Zaimplementuj archiwum `/mnt/games` jako strumień, a nie tymczasowy lokalny plik tar:
+   - kopia zapasowa: `tar -C /mnt -cf - gry | zstd | rclone rcat .../archives/<znacznik czasu>.tar.zst`
+   - przywróć: `rclone cat .../archives/<timestamp>.tar.zst | zstd -d | tar -C /mnt -xf -`
+5. Upewnij się, że Steam/obciążenie zostało wyłączone przed utworzeniem kopii zapasowej `/home` i przed utworzeniem archiwum gier.
+6. Zachowaj własność, uprawnienia i oczekiwania dotyczące punktów montowania po przywróceniu.
+7. Odmów przywracania, jeśli `/mnt/games` nie jest pusty, chyba że przepływ jest jawnie w trybie świeżego tworzenia.
+8. Publikuj kopie zapasowe gier transakcyjnie:
+   - prześlij archiwum na niezmienną ścieżkę ze znacznikiem czasu,
+   - napisz manifest ze znacznikiem czasu,
+   - zaktualizuj `current.json` dopiero wtedy, gdy oba działania się powiodą.
+9. Przywróć gry poprzez katalog pomostowy, na przykład:
+   - wyodrębnij do `/mnt/games.restore.<token>`
+   - sprawdzić skuteczność ekstrakcji
+   - zastąp katalog docelowy atomowo, o ile pozwala na to system plików
+   - dopiero wtedy ujawnij przywrócone drzewo jako `/mnt/games`
+10. Jeśli kopia zapasowa `Usuń` nie powiedzie się po ustaniu obciążenia:
+   - nie usuwaj VM,
+   - na powierzchni wyraźny stan awaryjny,
+   - pozostawić operatora z możliwym do odzyskania stanem maszyny,
+   - opcjonalnie zrestartuj stos, jeśli wycofanie jest bezpieczne.
 
-1. Extend `gcp-vm/persist-state.sh` with separate code paths:
-   - `/home` backup/restore
-   - `/mnt/games` archive/restore
-2. Add helpers to ensure the shared data disk is mounted and expected directories exist before backup or restore starts.
-3. Add helpers to:
-   - detect whether the shared data disk already has a filesystem,
-   - create the filesystem on first boot only,
-   - mount by UUID or equivalent stable identifier.
-4. Implement `/mnt/games` archive as a stream, not a temporary local tarball:
-   - backup: `tar -C /mnt -cf - games | zstd | rclone rcat .../archives/<timestamp>.tar.zst`
-   - restore: `rclone cat .../archives/<timestamp>.tar.zst | zstd -d | tar -C /mnt -xf -`
-5. Ensure Steam/workload is quiesced before backing up `/home` and before creating the games archive.
-6. Preserve ownership, permissions, and mountpoint expectations on restore.
-7. Refuse restore if `/mnt/games` is non-empty unless the flow is explicitly in fresh-create mode.
-8. Publish games backup transactionally:
-   - upload archive to a timestamped immutable path,
-   - write timestamped manifest,
-   - update `current.json` only after both succeed.
-9. Restore games through a staging directory, for example:
-   - extract to `/mnt/games.restore.<token>`
-   - validate extraction success
-   - replace the target directory atomically as far as the filesystem allows
-   - only then expose the restored tree as `/mnt/games`
-10. If `Delete` backup fails after the workload has been quiesced:
-   - do not delete the VM,
-   - surface a clear failure state,
-   - leave the operator with a recoverable machine state,
-   - optionally restart the stack if rollback is safe.
+Możliwość dostarczenia:
 
-Deliverable:
+- skrypt dzielonego tworzenia kopii zapasowych/przywracania wielokrotnego użytku
 
-- reusable split backup/restore script
+### Faza 3: Integracja Bootstrap z maszyną wirtualną
 
-### Phase 3: VM Bootstrap Integration
+1. Zaktualizuj przebieg uruchamiania, aby przywracanie było kontrolowane przez wyraźną intencję świeżego utworzenia.
+2. Preferowany mechanizm:
+   - Cloud Run „Utwórz” zapisuje znacznik metadanych, taki jak „vm-restore-mode=create”
+   - startup zużywa go dokładnie raz
+   - uruchamianie usuwa go po pomyślnym przywróceniu lub po kontrolowanej ścieżce bez kopii zapasowej
+3. Sondowanie stanu pustego można stosować wyłącznie w celu sprawdzenia bezpieczeństwa, a nie jako głównego wyzwalacza.
+4. Przed rozpoczęciem przywracania upewnij się, że udostępniony dysk z danymi jest podłączony, zamontowany i przygotowany.
+5. Jeśli udostępniony dysk z danymi jest pusty:
+   - utwórz system plików,
+   - utwórz oczekiwany układ katalogów,
+   - następnie uruchom przywracanie.
+6. Przywróć `/home` przed `docker compose up -d` tylko wtedy, gdy bramka przywracania jest otwarta.
+7. Przywróć archiwum `/mnt/games` przed `docker compose up -d` tylko wtedy, gdy bramka przywracania jest otwarta i istnieje prawidłowy plik `current.json`.
+8. Pomiń przywracanie gier w sposób czysty, jeśli nie istnieje żadne archiwum.
+9. Wyczyść bramkę przywracania po pomyślnym pierwszym uruchomieniu, aby kolejne cykle `Stop`/`Start` nie powodowały ponownego importowania stanu.
+10. Bezpieczne niepowodzenie, jeśli archiwum gier jest uszkodzone:
+   - zaznacz stan przywracania,
+   - pozostaw maszynę wirtualną bootowalną,
+   - nie uruchamiaj stosu aplikacji na częściowo przywróconym pliku `/mnt/games`.
+11. Zachowaj idempotentny bootstrap.
 
-1. Update startup flow so restore is gated by explicit fresh-create intent.
-2. Preferred mechanism:
-   - Cloud Run `Create` writes a metadata marker such as `vm-restore-mode=create`
-   - startup consumes it exactly once
-   - startup clears it after successful restore or after a controlled no-backup path
-3. Empty-state probing may be used only as a safety check, not as the primary trigger.
-4. Ensure the shared data disk is attached, mounted, and prepared before any restore work begins.
-5. If the shared data disk is blank:
-   - create the filesystem,
-   - create the expected directory layout,
-   - then run restore.
-6. Restore `/home` before `docker compose up -d` only when the restore gate is open.
-7. Restore `/mnt/games` archive before `docker compose up -d` only when the restore gate is open and a valid `current.json` exists.
-8. Skip games restore cleanly when no archive exists.
-9. Clear the restore gate after successful first boot so subsequent `Stop`/`Start` cycles do not re-import state.
-10. Fail safely if the games archive is corrupt:
-   - mark restore status,
-   - leave the VM bootable,
-   - do not start the app stack against a partially restored `/mnt/games`.
-11. Keep bootstrap idempotent.
+Możliwość dostarczenia:
 
-Deliverable:
+- ścieżka startowa z automatycznym przywracaniem gier
 
-- startup path with automatic games restore
+### Faza 4: Integracja akcji mocy1. Zachowaj istniejące zachowanie dla `/home`:
+   - `Stop` -> kopia zapasowa `/home`
+   - `Uruchom ponownie` -> kopia zapasowa `/home`
+   - `Usuń` -> kopia zapasowa `/home`
+2. Dodaj zachowanie archiwum gier tylko do opcji „Usuń”:
+   - wyciszyć obciążenie pracą
+   - wykonaj kopię zapasową `/home`
+   - archiwum `/mnt/games`
+   - opublikuj `current.json`
+   - usuń maszynę wirtualną dopiero po pomyślnym wykonaniu obu operacji
+3. Zachowaj opcję „Utwórz” automatycznie:
+   - jeśli istnieje kopia zapasowa `/home`, przywróć ją
+   - jeśli archiwum gier istnieje, przywróć je
+   - w przeciwnym razie kontynuuj w stanie pustym
+4. W przypadku niepowodzenia „Usuń” po rozpoczęciu tworzenia kopii zapasowej:
+   - zwróć wynik nieudanego polecenia,
+   - nie usuwaj instancji,
+   - zachować wystarczający status, aby operator mógł ponowić próbę lub sprawdzić.
+5. Po pomyślnym „Usuń”:
+   - usuń maszynę wirtualną,
+   - usuń udostępniony dysk z danymi,
+   - Zachowaj artefakty Dysku jako jedyne źródło odzyskiwania.
 
-### Phase 4: Power Action Integration
+Możliwość dostarczenia:
 
-1. Keep existing behavior for `/home`:
-   - `Stop` -> backup `/home`
-   - `Restart` -> backup `/home`
-   - `Delete` -> backup `/home`
-2. Add games archive behavior only to `Delete`:
-   - quiesce workload
-   - back up `/home`
-   - archive `/mnt/games`
-   - publish `current.json`
-   - delete VM only after both succeed
-3. Keep `Create` automatic:
-   - if `/home` backup exists, restore it
-   - if games archive exists, restore it
-   - otherwise continue with empty state
-4. On `Delete` failure after backup starts:
-   - return a failed command result,
-   - do not delete the instance,
-   - preserve enough status for the operator to retry or inspect.
-5. On successful `Delete`:
-   - delete the VM,
-   - delete the shared data disk,
-   - preserve Drive artifacts as the only recovery source.
+- semantyka płaszczyzny kontrolnej dostosowana do nowego podziału
 
-Deliverable:
+### Faza 5: Zmiany w backendie i GUI
 
-- control-plane semantics aligned with the new split
+1. Zaktualizuj ładunek stanu API Cloud Run, aby udostępnić bezpieczne metadane trwałe:
+   - czas ostatniej kopii zapasowej `/home`
+   - czas archiwizacji ostatnich gier
+   - czy istnieje archiwum gier
+   - czy najnowsze archiwum gier jest opublikowane i możliwe do przywrócenia
+   - czy ostatnie przywracanie powiodło się, czy nie
+   - czy obecnie oczekuje na przywrócenie, ponieważ instancja została świeżo utworzona
+   - czy udostępniony dysk z danymi jest podłączony i zamontowany zgodnie z oczekiwaniami
+2. Zaktualizuj komunikaty GUI, aby operatorzy zrozumieli:
+   - `Stop` i `Restart` zapisują stan tylko dla `/home`
+   - `Usuń` wykonuje pełną kopię zapasową, łącznie z zainstalowanymi grami
+3. Zachowaj wyraźne potwierdzenie „Usuń”, ponieważ może to wymagać długiego etapu archiwizacji.
+4. Pokaż postęp ścieżki destrukcyjnej na ogólnym poziomie:
+   - łagodzenie obciążenia pracą
+   - powrót do domu
+   - archiwizacja gier
+   - usunięcie maszyny wirtualnej
+5. Wyświetl wskazówki dotyczące nieudanego usunięcia, jeśli faza tworzenia kopii zapasowej/archiwizacji nie powiodła się, a maszyna wirtualna została celowo zachowana.
 
-### Phase 5: Backend and GUI Changes
+Możliwość dostarczenia:
 
-1. Update Cloud Run API status payload to expose safe persistence metadata:
-   - last `/home` backup time
-   - last games archive time
-   - whether a games archive exists
-   - whether the latest games archive is published and restorable
-   - whether the last restore succeeded or failed
-   - whether restore is currently pending because the instance was freshly created
-   - whether the shared data disk is attached and mounted as expected
-2. Update GUI messaging so operators understand:
-   - `Stop` and `Restart` save state only for `/home`
-   - `Delete` performs the full backup including installed games
-3. Keep `Delete` confirmation explicit because it may run a long archive step.
-4. Show destructive-path progress at a coarse level:
-   - quiescing workload
-   - backing up home
-   - archiving games
-   - deleting VM
-5. Show failed-delete guidance if the backup/archive phase failed and the VM was intentionally kept.
+- status trwałości widoczny dla operatora
 
-Deliverable:
+### Faza 6: Walidacja
 
-- operator-visible persistence status
+Matryca testowa:
 
-### Phase 6: Validation
+1. Zalogowany Steam -> kopia zapasowa -> zniszcz VM -> odtwórz VM -> przywróć -> potwierdź, że sesja Steam przetrwa.
+2. Sunshine sparowany z klientem -> kopia zapasowa -> zniszcz maszynę wirtualną -> odtwórz maszynę wirtualną -> przywróć -> potwierdź, że parowanie przetrwało.
+3. Drzewo katalogów zainstalowanych gier znajduje się w `/mnt/games` -> `Usuń` -> `Utwórz` -> potwierdź zwrócenie struktury katalogów.
+4. Znana ścieżka zainstalowanej gry w `/mnt/games` powraca po przywróceniu.
+5. Przywróć całkowicie pusty dysk rozruchowy.
+6. Przywróć całkowicie pusty udostępniony dysk z danymi.
+7. Przerwane przesyłanie nie powoduje przeniesienia pliku „current.json” do częściowego archiwum.
+8. Brak archiwum gier nie blokuje uruchamiania.
+9. Uszkodzone archiwum gier ulega awarii i pojawia się jasny status.
+10. „Zatrzymaj” i „Uruchom ponownie” pozostają znacznie szybsze niż „Usuń”.
+11. Zwykłe `Stop` -> `Start` na istniejącej maszynie wirtualnej nie powoduje pełnego przywrócenia `/home` lub `/mnt/games`.
+12. Nieudane przywracanie do katalogu pomostowego nie powoduje zastąpienia wcześniej dobrego `/mnt/games`.
+13. Odtworzona maszyna wirtualna poprawnie tworzy, podłącza, w razie potrzeby formatuje i montuje udostępniony dysk z danymi przed rozpoczęciem przywracania.
+14. Pomyślne „Usuń” powoduje usunięcie udostępnionego dysku z danymi, zamiast pozostawiania osieroconej pamięci.
 
-Test matrix:
+Możliwość dostarczenia:
 
-1. Steam logged in -> backup -> destroy VM -> recreate VM -> restore -> confirm Steam session survives.
-2. Sunshine paired with a client -> backup -> destroy VM -> recreate VM -> restore -> confirm pairing survives.
-3. Installed game directory tree exists under `/mnt/games` -> `Delete` -> `Create` -> confirm directory structure returns.
-4. A known installed game path under `/mnt/games` returns after restore.
-5. Restore to a completely blank boot disk.
-6. Restore to a completely blank shared data disk.
-7. Interrupted upload does not advance `current.json` to a partial archive.
-8. Missing games archive does not brick startup.
-9. Corrupted games archive fails safely and surfaces a clear status.
-10. `Stop` and `Restart` stay materially faster than `Delete`.
-11. Ordinary `Stop` -> `Start` on an existing VM does not trigger a full restore of `/home` or `/mnt/games`.
-12. A failed restore into the staging directory does not overwrite a previously good `/mnt/games`.
-13. A recreated VM correctly creates, attaches, formats if needed, and mounts the shared data disk before restore begins.
-14. Successful `Delete` removes the shared data disk rather than leaving orphaned storage behind.
+- raport z odzyskiwania i testu cyklu życia
 
-Deliverable:
+## Sugerowana kolejność pracy1. Zdefiniuj i zaimplementuj cykl życia współdzielonego dysku z danymi oraz układ montowania
+2. Zrefaktoryzuj skrypt trwałości, aby podzielić `/home` i `/mnt/games`
+3. Dodaj obsługę archiwum gier przesyłanych strumieniowo
+4. Zintegruj przygotowanie dysku i przywracanie gier podczas uruchamiania
+5. Dostosuj operację „Usuń”, aby uwzględnić archiwum gier i usunięcie dysku
+6. Ujawnij status w zapleczu/interfejsie
+7. Uruchom pełną weryfikację odzyskiwania `Usuń -> Utwórz`
 
-- recovery and lifecycle test report
+## Ryzyko
 
-## Suggested Order of Work
+- archiwizacja/przywracanie gier może zająć dużo czasu w przypadku większych bibliotek
+- przerwane Opcja „Usuń” może pozostawić nieaktualne lub częściowe archiwum, jeśli zapisy nie są dokonywane w trybie transakcyjnym
+- przywrócenie bardzo dużego archiwum wydłuży działanie „Utwórz”.
+- W niektórych przypadkach zawartość Steam może nadal wymagać samodzielnej naprawy po przywróceniu
+- Przepustowość/przydział dysku może stać się czynnikiem ograniczającym w przypadku dużych bibliotek
+- przywracanie oparte na tar zachowuje pliki, ale nie tożsamość dysku na poziomie bloku; każde oprogramowanie oczekujące semantyki surowego obrazu dysku wymagałoby innego podejścia
+- współdzielony dysk z danymi zwiększa promień działania w porównaniu z oddzielnymi dyskami stanu aplikacji, więc poprawność montażu i układu kopii zapasowych ma większe znaczenie
+- jeśli identyfikacja dysku jest zaimplementowana niepoprawnie, nowa maszyna wirtualna może zamontować niewłaściwe urządzenie lub nie zamontować dysku z danymi; Montaż oparty na UUID jest zatem trudnym wymogiem
 
-1. Define and implement shared data-disk lifecycle and mount layout
-2. Refactor persistence script to split `/home` and `/mnt/games`
-3. Add streamed games archive support
-4. Integrate disk preparation and games restore into startup
-5. Adjust `Delete` flow to include the games archive and disk deletion
-6. Expose status in backend/UI
-7. Run full `Delete -> Create` recovery validation
+## Pierwszy zalecany następny krok
 
-## Risks
-
-- games archive/restore can take a long time for larger libraries
-- interrupted `Delete` can leave a stale or partial archive if writes are not made transactional
-- restoring a very large archive will lengthen `Create`
-- Steam content may still require self-repair after restore in some cases
-- Drive bandwidth/quota can become the limiting factor for large libraries
-- tar-based restore preserves files, but not block-level disk identity; any software expecting a raw disk image semantics would need a different approach
-- a shared data disk increases blast radius versus separate app-state disks, so correctness of mount and backup layout matters more
-- if disk identification is implemented incorrectly, a fresh VM can mount the wrong device or fail to mount the data disk; UUID-based mounting is therefore a hard requirement
-
-## First Recommended Next Step
-
-Modify the current persistence implementation so `/mnt/games` leaves the frequent sync path and becomes a `Delete`-only streamed archive with automatic `Create`-time restore. That keeps normal power actions fast and makes installed-game persistence explicit.
+Zmodyfikuj bieżącą implementację trwałości, tak aby `/mnt/games` opuścił częstą ścieżkę synchronizacji i stał się archiwum przesyłanym strumieniowo, dostępnym tylko za pomocą opcji `Usuń`, z automatycznym przywracaniem w czasie `Utwórz`. Dzięki temu normalne działanie mocy jest szybkie i wyraźnie widać trwałość zainstalowanej gry.

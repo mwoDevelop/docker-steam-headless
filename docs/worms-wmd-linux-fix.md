@@ -1,10 +1,10 @@
-# Worms W.M.D. Linux launch fix
+# Robaki W.M.D. Poprawka dotycząca uruchamiania Linuksa
 
 ## Problem
 
-`Worms W.M.D.` can install correctly in Steam, but the native Linux build may exit a few seconds after launch.
+`Worms W.M.D.` można poprawnie zainstalować na Steamie, ale natywna kompilacja Linuksa może zakończyć się kilka sekund po uruchomieniu.
 
-On the `steam-headless` container this was caused by incompatible legacy libraries bundled with the game:
+W kontenerze `steam-headless` było to spowodowane niekompatybilnymi starszymi bibliotekami dołączonymi do gry:
 
 ```text
 ./Worms W.M.Dx64: error while loading shared libraries: libidn.so.11: cannot open shared object file: No such file or directory
@@ -12,11 +12,11 @@ On the `steam-headless` container this was caused by incompatible legacy librari
 ./Worms W.M.Dx64: error while loading shared libraries: libwavpack.so.1: cannot open shared object file: No such file or directory
 ```
 
-The container runs Debian 12, which provides `libidn.so.12` and a newer system `libstdc++`. The game expects the older `libidn.so.11`, then loads its own old `libstdc++.so.6`, which conflicts with current system libraries. Steam's runtime can also fail to expose `libwavpack.so.1` to the game, even when the library is available in the container.
+Kontener działa na Debianie 12, który udostępnia `libidn.so.12` i nowszy system `libstdc++`. Gra oczekuje starszego `libidn.so.11`, po czym ładuje własne, stare `libstdc++.so.6`, które koliduje z bieżącymi bibliotekami systemowymi. Środowisko wykonawcze Steam może również nie udostępnić `libwavpack.so.1` grze, nawet jeśli biblioteka jest dostępna w kontenerze.
 
-## Fix on a running VM
+## Napraw działającą maszynę wirtualną
 
-Run this from the workstation with `gcloud` access to the VM:
+Uruchom to na stacji roboczej z dostępem `gcloud` do maszyny wirtualnej:
 
 ```bash
 gcloud compute ssh steam \
@@ -45,11 +45,11 @@ sudo docker exec "$CID" bash -lc "
 '
 ```
 
-After this, launch the game from Steam again.
+Następnie ponownie uruchom grę ze Steam.
 
-## Manual verification commands
+## Polecenia ręcznej weryfikacji
 
-To confirm the original issue:
+Aby potwierdzić pierwotny problem:
 
 ```bash
 gcloud compute ssh steam \
@@ -64,7 +64,7 @@ sudo docker exec "$CID" bash -lc "
 '
 ```
 
-To check whether the fix is already applied:
+Aby sprawdzić, czy poprawka została już zastosowana:
 
 ```bash
 gcloud compute ssh steam \
@@ -79,9 +79,9 @@ sudo docker exec "$CID" bash -lc "
 '
 ```
 
-## Reverting the fix
+## Przywracanie poprawki
 
-If needed:
+W razie potrzeby:
 
 ```bash
 gcloud compute ssh steam \

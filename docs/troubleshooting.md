@@ -1,27 +1,27 @@
-## Flatpaks not working
+## Flatpaki nie opublikowano
 
-Steam runs with Flatpak. These Flatpaks are instlled into the `default` user's home directory so they persist between container updates. Sometimes Flatpaks can get into a knot between major Steam Headless updates. In such cases, it may not work correctly. To fix this, just delete the Flatpak runtime in your `default` user's home directory a restart the container.
+Steam działa z Flatpakiem. Te pakiety Flatpak są zainstalowane w katalogu stworzonym przez użytkownika `default`, dzięki czemu pozostają zachowane pomiędzy aktualizacjami kontenera. Czasami Flatpaki mogą wpaść pomiędzy aktualizacjami Steam Headless. W takich przypadkach może wystąpić brak zabezpieczenia. Aby to zrobić, po prostu usunąć środowisko wykonawcze Flatpak z katalogu domowego użytkownika `default` i zrestartuj kontener.
 
-1) Stop the container.
-2) Delete the directory `<SteamHeadless Home>/.local/share/flatpak`
-3) Re-create the container. Don't just restart it. This will trigger an update of the required Flatpak runtimes in the home directory.
-4) Reinstall any missing Flatpaks from the Software app.
+1) Zatrzymaj pojemnik.
+2) Usuń katalog `<SteamHeadless Home>/.local/share/flatpak`
+3) Utwórz ponownie kontener. Nie uruchamiaj go ponownie. Spowoduje to konieczność stosowania urządzeń elektrycznych Flatpak w katalogu domowym.
+4) Zainstaluj ponownie wszystkie brakujące pakiety Flatpak z aplikacji.
 
-Once your Flatpak refresh is complete, everything should work correctly and your configuration for each application should have remained intact.
+Po aktualizacji Flatpak wszystko powinno zostać usunięte, a każda aplikacja jest niezależna.
 
-## An error occurred while installing <game>: "disk write error"
+## Wystąpił błąd podczas instalacji <gry>: „błąd zapisu na dysku”
 
 ![img.png](./images/disk_write_error.png)
 
-1) Stop the container
-2) Verify your mounted /mnt/games volume is owned by the executing UID/GID, and 777 permissions are set.
-3) Verify the `steamapps` directory exists within the library location. 
+1) Zatrzymaj pojemnik
+2) Sprawdź, czy zamontowany wolumen /mnt/games jest określone przez UID/GID i czy ustawiono własność 777.
+3) Sprawdź, czy katalog `steamapps` istnieje w lokalizacji biblioteki.
 
-> __Note__
+> __Uwaga__
 >
-> The directory in the below commands are the default /mnt/games library locations installed upon first execution of this container.
+> Katalog w poleceniach do lokalizacji bibliotek /mnt/games instalowane przy pierwszym uruchomieniu tego kontenera.
 > 
-> Depending on how you have installed this, the directory path may vary.
+> W zależności od sposobu działania, które może zostać podjęte.
 
 ```shell
 sudo mkdir /mnt/games/GameLibrary/SteamLibrary/steamapps

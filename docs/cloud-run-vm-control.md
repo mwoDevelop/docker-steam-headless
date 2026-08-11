@@ -1,78 +1,75 @@
-# Cloud Run VM Control
+# Kontrola maszyny wirtualnej Cloud Run
 
-This setup replaces the browser-stored GitHub PAT flow with:
+Ta konfiguracja zastępuje przepływ PAT przechowywany w przeglądarce GitHub:
 
-1. a static frontend on GitHub Pages,
-2. Google sign-in in the browser,
-3. a Cloud Run API that controls the GCE VM directly.
+1. statyczny frontend na GitHub Pages,
+2. logowanie Google w przeglądarce,
+3. API Cloud Run, które bezpośrednio kontroluje maszynę wirtualną GCE.
 
-The browser never needs a GitHub token in this mode.
+W tym trybie przeglądarka nigdy nie potrzebuje tokena GitHub.
 
-## Architecture
+## Architektura
 
-- GitHub Pages serves the UI from `docs/vm-control/`
-- Google Identity Services signs the user in
-- the browser sends a Google ID token to the backend
-- Cloud Run verifies the token and checks an allowlist
-- Cloud Run uses its runtime service account to control the VM
+- GitHub Pages obsługuje interfejs użytkownika z `docs/vm-control/`
+- Usługi tożsamości Google logują użytkownika
+- przeglądarka wysyła token Google ID do backendu
+- Cloud Run weryfikuje token i sprawdza listę dozwolonych
+- Cloud Run używa konta usługi wykonawczej do kontrolowania maszyny wirtualnej
 
-## Files
+## Pliki
 
 - Frontend: [`docs/vm-control/`](./vm-control/index.html)
-- Backend: [`cloud-run-vm-control/`](../cloud-run-vm-control/app.py)
-- Deploy script: [`cloud-run-vm-control/deploy.sh`](../cloud-run-vm-control/deploy.sh)
+- Zaplecze: [`cloud-run-vm-control/`](../cloud-run-vm-control/app.py)
+- Wdróż skrypt: [`cloud-run-vm-control/deploy.sh`](../cloud-run-vm-control/deploy.sh)
 
-## What The Backend Controls
+## Co kontroluje backend
 
-The backend targets the single GCE VM configured by:
+Zaplecze zarządza zarejestrowanymi punktami końcowymi maszyn wirtualnych, a nie jedną stałą maszyną wirtualną. Każdy
+punkt końcowy ma hosta DuckDNS i można mu przypisać profil maszyny wirtualnej zdefiniowany przez
+sprzęt i strefa. Panel administratora udostępnia akcje cyklu życia,
+kopie zapasowe, zarządzanie punktami końcowymi/IP, skanowanie wydajności GPU, wybór obrazu w czasie wykonywania,
+Dane uwierzytelniające Sunshine, instalacja aplikacji, zarządzanie Minecraftem i
+dowód zgodności.
 
-- `GCP_PROJECT`
-- `GCP_ZONE`
-- `GCE_NAME`
+Zwykła strona kontroli maszyny wirtualnej jest celowo przeznaczona tylko do odczytu, z wyjątkiem dostępu na żywo
+spinki do mankietów. Administracja wymaga konta Google znajdującego się na liście dozwolonych; uprzywilejowany
+Dostęp do Minecrafta można przyznać osobno dla każdego użytkownika.
 
-It supports:
+Aktualnie wybrany punkt końcowy określa każde żądanie cyklu życia. Tworzenie
+lub uruchomienie maszyny wirtualnej sprawdza również, czy inna zarządzana maszyna wirtualna nie jest już uruchomiona,
+ponieważ w przeciwnym razie porty świadczące usługi publiczne powodowałyby konflikt.
 
-- `status`
-- `start`
-- `stop`
-- `restart`
+## Wymagana konfiguracja Google Cloud
 
-On `start` and `restart`, it can also refresh DuckDNS if:
+### 1. Utwórz identyfikator klienta Google OAuth
 
-- `DUCKDNS_DOMAINS` is set
-- `DUCKDNS_TOKEN` is available
+Utwórz **aplikację internetową** klienta OAuth w Google Cloud Console.
 
-## Required Google Cloud Setup
-
-### 1. Create a Google OAuth client ID
-
-Create a **Web application** OAuth client in Google Cloud Console.
-
-Set **Authorized JavaScript origins** to include at least:
+Ustaw **Autoryzowane źródła JavaScript** tak, aby zawierało co najmniej:
 
 - `https://mwodevelop.github.io`
 
-If you host the page elsewhere, add that origin too.
+Jeśli hostujesz stronę w innym miejscu, dodaj także to źródło.
 
-Save the generated **Client ID**. The frontend needs it, and the backend verifies tokens against it.
+Zapisz wygenerowany **ID klienta**. Frontend tego potrzebuje, a backend weryfikuje pod tym kątem tokeny.
 
-### 2. Choose who is allowed to control the VM
+### 2. Wybierz, kto może kontrolować maszynę wirtualną
 
-Set one of:
+Ustaw jedno z:
 
 - `ALLOWED_GOOGLE_EMAILS`
 - `ALLOWED_GOOGLE_DOMAINS`
 
-Examples:
+Przykłady:
 
 - `ALLOWED_GOOGLE_EMAILS=mwodevelop@gmail.com`
 - `ALLOWED_GOOGLE_DOMAINS=example.com`
 
-### 3. Deploy the backend
+### 3. Wdróż backend
 
-The deploy script loads `gcp-vm/.env` and `gcp-vm/.env.secrets`, then deploys a public Cloud Run service protected by Google login at the application layer.
+Skrypt wdrażania ładuje `gcp-vm/.env` i `gcp-vm/.env.secrets`, a następnie wdraża publiczną usługę Cloud Run chronioną logowaniem Google w warstwie aplikacji.
 
-Example:
+Przykład:
 
 ```bash
 cd /path/to/docker-steam-headless
@@ -83,36 +80,40 @@ ALLOWED_ORIGINS="https://mwodevelop.github.io" \
 ./cloud-run-vm-control/deploy.sh
 ```
 
-What the script does:
+Co robi skrypt:
 
-- enables required APIs
-- creates a dedicated runtime service account if needed
-- grants `roles/compute.instanceAdmin.v1` and a minimal project role for short-lived GPU capacity reservations
-- stores `DUCKDNS_TOKEN` in Secret Manager if present locally
-- deploys the Cloud Run service from source
+- włącza wymagane API
+- w razie potrzeby tworzy dedykowane konto usługi wykonawczej
+- przyznaje `roles/compute.instanceAdmin.v1` i minimalną rolę w projekcie dla krótkotrwałych rezerwacji mocy GPU
+- przechowuje `DUCKDNS_TOKEN` w Secret Managerze, jeśli jest obecny lokalnie
+- wdraża usługę Cloud Run ze źródła
 
-After deploy, it prints the backend URL.
+Po wdrożeniu drukuje adres URL zaplecza.
 
-## Using The Page
+## Korzystanie ze strony
 
-1. Open:
-   - `https://mwodevelop.github.io/docker-steam-headless/vm-control/`
-2. Paste the Cloud Run backend URL once
-3. Click `Connect API`
-4. Sign in with Google
-5. Use `Start`, `Stop`, `Restart`, or `Status`
+1. Otwórz:
+- `https://mwodevelop.github.io/docker-steam-headless/vm-control/`
+2. Wklej raz adres URL backendu Cloud Run
+3. Kliknij `Connect API`
+4. Zaloguj się za pomocą Google
+5. Otwórz **Administracja** dla cyklu życia maszyny wirtualnej i operacji oprogramowania
+6. Użyj opcji **Kontrola maszyny wirtualnej**, aby wybrać punkt końcowy, profil sprzętowy i strefę
 
-The page stores:
+Panel administratora to także miejsce, w którym sprawdzana jest pojemność procesora graficznego przed utworzeniem,
+i gdzie wyniki zgodności są rejestrowane po prawdziwym teście Sunshine.
 
-- backend URL in `localStorage`
-- a short-lived Google session token in `sessionStorage`
-- local action history in `localStorage`
+Strona przechowuje:
 
-It does not store any GitHub token.
+- URL backendu w `localStorage`
+- krótkotrwały token sesji Google w `sessionStorage`
+- lokalna historia akcji w `localStorage`
 
-## Runtime Environment Variables
+Nie przechowuje żadnego tokena GitHub.
 
-The backend reads:
+## Zmienne środowiskowe środowiska wykonawczego
+
+W backendzie czytamy:
 
 - `GCP_PROJECT`
 - `GCP_ZONE`
@@ -127,9 +128,9 @@ The backend reads:
 - `VM_NOVNC_PORT`
 - `VM_SUNSHINE_PORT`
 
-## Notes
+## Notatki
 
-- This mode is for the single-VM `gcp-vm` flow, not `gcp-v8s`.
-- The Cloud Run service is public, but control endpoints require a valid Google ID token from an allowed account.
-- CORS is restricted by `ALLOWED_ORIGINS`, but real authorization is enforced by token verification and the allowlist.
-- If the VM changes public IP on start, DuckDNS can keep the DNS hostname current without reserving a static IP.
+- Ten tryb dotyczy przepływu GCE `gcp-vm`, a nie `gcp-v8s`.
+- Usługa Cloud Run jest publiczna, ale kontrolne punkty końcowe wymagają ważnego tokena identyfikatora Google z dozwolonego konta.
+- CORS jest ograniczony przez `ALLOWED_ORIGINS`, ale prawdziwa autoryzacja jest wymuszana przez weryfikację tokena i listę dozwolonych.
+- Jeśli maszyna wirtualna zmieni publiczny adres IP przy uruchomieniu, DuckDNS może zachować aktualną nazwę hosta DNS bez rezerwowania statycznego adresu IP.

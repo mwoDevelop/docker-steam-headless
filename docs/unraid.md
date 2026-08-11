@@ -1,50 +1,50 @@
 # Unraid
 
-Follow these instructions to install Steam Headless on Unraid
+Postępuj zgodnie z tymi instrukcjami, aby sprawdzić Steam Headless na Unraid
 
-## CONTAINER TEMPLATE:
+## SZABLOŃ KONTENERA:
 
-1. Navigate to "**APPS**" tab.
-2. Search for "*steam-headless*"
-3. Select either **Install** or **Actions > Install** from the search result.
+1. Przejdź do zakładek „**APLIKACJE**”.
+2. Wyszukaj „*bezgłowy Steam*”
+3. Z wyników wyszukiwania wybierz opcję **Zainstaluj** lub **Działania > Wykonaj**.
 ![](./images/install-steam-headless-unraid-ca.png)
-4. Configure the template as required.
+4. Skonfiguruj szablon zgodnie z wymaganiami.
 
 
-## GPU CONFIGURATION:
+## KONFIGURACJA GPU:
 
-This container can use your dedicated GPU. 
-In order for it to do this you need to have either the Nvidia-Driver or Radeon-Top plugin installed.
+Ten kontener może być dostępny z dedykowanym wyposażeniem graficznym.
+Aby to zrobić, musisz mieć zainstalowaną wtyczkę Nvidia-Driver lub Radeon-Top.
 
 ### NVIDIA
 
-1. Install the [Nvidia-Driver Plugin](https://forums.unraid.net/topic/98978-plugin-nvidia-driver/) by [ich777](https://forums.unraid.net/profile/72388-ich777/). This will maintain an up-to-date NVIDIA driver installation on your Unraid server.
+1. Zainstaluj moduł [Nvidia-Driver Plugin](https://forums.unraid.net/topic/98978-plugin-nvidia-driver/) firmy [ich777](https://forums.unraid.net/profile/72388-ich777/). Spowoduje to utrzymanie aktualnej instalacji sterownika NVIDIA na urządzeniu Unraid.
 ![](./images/unraid-nvidia-plugin.png)
-2. Toggle the steam-headless Docker Container template editor to "**Advanced View**".
-3. In the "**Extra Parameters**" field, ensure that you have the "--runtime=nvidia" parameter added.
+2. przełącznik bezobsługowego edytora szablonów Docker Container na Steam na „**Widok zaawansowany**”.
+3. zastosowanie się, że w polu „**Dodatkowe parametry**” dodano parametr „--runtime=nvidia”.
 ![](./images/unraid-steam-headless-template-nvidia-extra-params.png)
-4. (Optional - This step is only necessary if you only multiple NVIDIA GPUs. If you have a single GPU, then leaving this as "all" is fine.) Expand the **Show more settings...** section near the bottom of the template. In the **Nvidia GPU UUID**: (NVIDIA_VISIBLE_DEVICES) variable, copy your GPU UUID (can be found in the Unraid Nvidia Plugin. See that forum thread for details).
+4. (Opcjonalnie — ten krok jest konieczny tylko w przypadku wielu procesorów graficznych NVIDIA. Jeśli masz określony procesor, to odpadnie to jako „wszystko” jest w porządku.) Rozwiń sekcję **Pokaż więcej rozwiązań...** w zastosowaniu części szablonu. W zmiennej **Nvidia GPU UUID**: (NVIDIA_VISIBLE_DEVICES) skopiuj identyfikator UUID szczegółowego wykresu (można go znaleźć we wtyczce Unraid Nvidia. Szczegóły znajdziesz w tym dokumencie na forum).
 
 ### AMD
 
-1. Install the [Radeon-Top Plugin](https://forums.unraid.net/topic/92865-support-ich777-amd-vendor-reset-coraltpu-hpsahba/) by [ich777](https://forums.unraid.net/profile/72388-ich777/).
+1. Zainstaluj moduł [Radeon-Top Plugin](https://forums.unraid.net/topic/92865-support-ich777-amd-vendor-reset-coraltpu-hpsahba/) firmy [ich777](https://forums.unraid.net/profile/72388-ich777/).
 ![](./images/unraid-amd-plugin.png)
-2. Profit
+2. Zysk
 
 
-## ADDING CONTROLLER SUPPORT:
+## DODAWANIE OBSŁUGI KONTROLERA:
 
-Unraid's Linux kernel by default does not have the modules required to support controller input. Steam requires these modules to be able to create the virtual "Steam Input Gamepad Emulation" device that it can then map buttons to.
+Jądro Linux Unraid urządzenia nie wymagające obsługi wejścia kontrolera. Steam wymaga tych urządzeń, aby możliwe było wirtualne urządzenie „emulacja gamepada odprowadzago Steam”, które może następnie zostać przypisane.
 
-[ich777](https://forums.unraid.net/profile/72388-ich777/) has kindly offered to build and maintain the required modules for the Unraid kernel as he already has a CI/CD pipeline in place and a small number of other kernel modules that he is maintaining for other projects. So a big thanks to him for that!
+[ich777](https://forums.unraid.net/profile/72388-ich777/) uprzejmie zaoferował zbudowanie i utrzymanie wymaganych zastosowań dla jądra Unraid, ponieważ ma już gotowy potok CI/CD i obejmuje inne jednostki napędowe, które są wykorzystywane do innych zastosowań. wielkie dzięki mu za to!
 
-> __Note__
+> __Uwaga__
 >
-> This may no longer be required with Unraid v6.11 release (TBD). The required uinput module should be added to the kernel for that release.
+> Może to nie być już wymagane w wersji Unraid v6.11 (do wydania). Wymagany moduł wejściowy powinien zostać dodany do jądra dla tej wersji.
 
-1. Install the **uinput** plugin from the **Apps** tab.
+1. Instalacja wtyczki **uinput** z zakładkami **Aplikacje**.
 ![](./images/unraid-steam-headless-install-uinput-plugin.png)
-2. The container will not be able to receive kernel events from the host unless the **Network Type:** is set to "*host*". Ensure that you container is configured this way.
+2. Kontener nie będzie mógł odebrać zdarzenia jądra od hosta, chyba **Typ sieci:** jest podłączony na „*host*”. może się zdarzyć, że kontener jest skonfigurowany w dziesięć sposobów.
 ![](./images/unraid-steam-headless-configure-network-as-host.png)
 
     > __Warning__
@@ -55,4 +55,4 @@ Unraid's Linux kernel by default does not have the modules required to support c
     - PORT_NOVNC_WEB (Default: 8083)
     - WEB_UI_MODE (Default: 'vnc' - Set to 'none' to disable the WebUI)
 
-3. No server restart is required, however. Ensure that the **steam-headless** Docker container is recreated after installing the **uinput** plugin for it to be able to detect the newly added module.
+3. Nie jest wymagane uruchomienie serwera. efekt się, że **steam-headless** kontener Docker został odtworzony po zainstalowaniu wtyczki **uinput**, aby móc zainstalować nowo dodany moduł.

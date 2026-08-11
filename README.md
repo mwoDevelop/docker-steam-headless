@@ -1,76 +1,98 @@
-# Headless Steam Service
+# Bezgłowy serwis parowy
 
 ![](./images/banner.jpg)
 
-Remote Game Streaming Server.
+Zdalny serwer strumieniowego przesyłania gier.
 
-Play your games either in the browser with audio or via Steam Link or Moonlight. Play from another Steam Client with Steam Remote Play.
+Graj w swoje gry w przeglądarce z dźwiękiem lub poprzez Steam Link lub Moonlight. Graj z innego klienta Steam za pomocą Steam Remote Play.
 
-Easily deploy a Steam Docker instance in seconds.
+Z łatwością wdróż instancję Steam Docker w ciągu kilku sekund.
 
-## Features:
-- Steam Client configured for running on Linux with Proton
-- Moonlight compatible server for easy remote desktop streaming
-- Easy installation of EmeDeck, Heroic and Lutris via Flatpak
-- Full video/audio noVNC web access to a Xfce4 Desktop
-- NVIDIA, AMD and Intel GPU support
-- Full controller support
-- Support for Flatpak and Appimage installation
-- Root access
-- Based on Debian Trixie
+## Dokumentacja
+
+To repozytorium zawiera nadrzędny kontener Steam Headless i specyficzny dla forka
+Kontrola maszyny wirtualnej Google Cloud. Zacznij od [documentation index](./docs/README.md).
+
+### Kontrola maszyny wirtualnej Google Cloud
+
+- [Open VM Control](https://mwodevelop.github.io/docker-steam-headless/vm-control/)
+- [Administrator panel](https://mwodevelop.github.io/docker-steam-headless/vm-control/admin.html)
+- [Architecture and deployment](./docs/cloud-run-vm-control.md)
+- [Minecraft management](./docs/minecraft-management.md)
+- [Troubleshooting](./docs/troubleshooting.md)
+
+Panel administratora zarządza cyklem życia maszyny wirtualnej, przypisaniem punktów końcowych, kopiami zapasowymi,
+obrazy wykonawcze, aplikacje, serwery Minecraft i dowody zgodności.
+Zwykli użytkownicy mają informacje o instancji tylko do odczytu i łącza dostępu na żywo.
+
+### Instalacja kontenera nadrzędnego
+
+- [Docker Compose](./docs/docker-compose.md)
+- [Unraid](./docs/unraid.md)
+- [Ubuntu Server](./docs/ubuntu-server.md)
+- [Kubernetes](./docs/k8s.md)
+
+## Cechy:
+- Klient Steam skonfigurowany do działania w systemie Linux z Protonem
+- Serwer kompatybilny z Moonlight do łatwego przesyłania strumieniowego na zdalny pulpit
+- Łatwa instalacja EmeDeck, Heroic i Lutris poprzez Flatpak
+- Pełny dostęp wideo/audio przez Internet noVNC do pulpitu Xfce4
+- Obsługa procesorów graficznych NVIDIA, AMD i Intel
+- Pełna obsługa kontrolera
+- Wsparcie dla instalacji Flatpak i Appimage
+- Dostęp do roota
+- Oparty na Debianie Trixie
 
 ---
-## Notes:
+## Uwagi:
 
-### ADDITIONAL SOFTWARE:
-If you wish to install additional applications, you can generate a script inside the `~/init.d` directory ending with ".sh".
-This will be executed on the container startup.
+### OPROGRAMOWANIE DODATKOWE:
+Jeśli chcesz zainstalować dodatkowe aplikacje, możesz wygenerować skrypt w katalogu `~/init.d` kończący się na ".sh".
+Zostanie to wykonane podczas uruchamiania kontenera.
 
-Also, you can install applications using the WebUI under **Applications > System > Software**. There you can install other game launchers like Lutris, Heroic or EmuDeck.
+Możesz także instalować aplikacje za pomocą interfejsu WebUI w obszarze **Aplikacje > System > Oprogramowanie**. Tam możesz zainstalować inne programy uruchamiające gry, takie jak Lutris, Heroic lub EmuDeck.
 
-### STORAGE PATHS:
-Everything that you wish to save in this container should be stored in the home directory or a docker container mount that you have specified. 
-All files that are store outside your home directory are not persistent and will be wiped if there is an update of the container or you change something in the template.
+### ŚCIEŻKI PRZECHOWYWANIA:
+Wszystko, co chcesz zapisać w tym kontenerze, powinno być przechowywane w katalogu domowym lub w określonym miejscu montażu kontenera dokowanego.
+Wszystkie pliki przechowywane poza Twoim katalogiem domowym nie są trwałe i zostaną usunięte, jeśli nastąpi aktualizacja kontenera lub zmienisz coś w szablonie.
 
-### GAMES LIBRARY:
-It is recommended that you mount your games library to `/mnt/games` and configure Steam to add that path.
+### BIBLIOTEKA GIER:
+Zalecane jest zamontowanie biblioteki gier na `/mnt/games` i skonfigurowanie Steam tak, aby dodała tę ścieżkę.
 
-### AUTO START APPLICATIONS:
-In this container, Steam is configured to automatically start. If you wish to add additional services to automatically start, 
-add them under **Applications > Settings > Session and Startup** in the WebUI.
+### APLIKACJE AUTOSTARTU:
+W tym kontenerze Steam jest skonfigurowany do automatycznego uruchamiania. Jeśli chcesz dodać dodatkowe usługi, które będą uruchamiane automatycznie,
+dodaj je w obszarze **Aplikacje > Ustawienia > Sesja i uruchamianie** w interfejsie WebUI.
 
-### NETWORK MODE:
-If you want to use the container as a Steam Remote Play (previously "In Home Streaming") host device you should create a custom network and assign this container it's own IP, if you don't do this the traffic will be routed through the internet since Steam thinks you are on a different network.
+### TRYB SIECIOWY:
+Jeśli chcesz używać kontenera jako urządzenia hosta Steam Remote Play (wcześniej „In Home Streaming”), powinieneś utworzyć niestandardową sieć i przypisać temu kontenerowi jego własny adres IP. Jeśli tego nie zrobisz, ruch będzie kierowany przez Internet, ponieważ Steam będzie myślał, że jesteś w innej sieci.
 
-### USING HOST X SERVER:
-If your host is already running X, you can just use that. To do this, be sure to configure:
-  - DISPLAY=:0    
+### KORZYSTANIE Z SERWERA HOSTA X:
+Jeśli Twój host już korzysta z X, możesz po prostu z niego skorzystać. Aby to zrobić, skonfiguruj:
+- WYŚWIETLACZ=:0
     **(Variable)** - *Configures the sceen to use the primary display. Set this to whatever your host is using*
-  - MODE=secondary    
+- TRYB=wtórny
     **(Variable)** - *Configures the container to not start an X server of its own*
-  - HOST_DBUS=true    
+- HOST_DBUS=prawda
     **(Variable)** - *Optional - Configures the container to use the host dbus process*
-  - /run/dbus:/run/dbus:ro    
+- /run/dbus:/run/dbus:ro
     **(Mount)**  - *Optional - Configures the container to use the host dbus process*
 
 
 ---
-## Installation:
-- [Docker Compose](./docs/docker-compose.md)
-- [Unraid](./docs/unraid.md)
-- [Ubuntu Server](./docs/ubuntu-server.md)
+## Instalacja:
+- [Choose an installation guide](./docs/README.md#upstream-container-installation)
 
 
 ---
-## Running locally:
+## Działa lokalnie:
 
-For a development environment, I have created a script in the devops directory.
+Dla środowiska programistycznego utworzyłem skrypt w katalogu devops.
 
 
 ---
-## TODO:
-- Remove SSH
-- Require user to enter password for sudo
-- Document how to run this container:
+## ZROBIĆ:
+- Usuń SSH
+- Wymagaj od użytkownika wprowadzenia hasła do sudo
+- Dokument, jak uruchomić ten kontener:
     - Other server OS
     - TrueNAS Scale 

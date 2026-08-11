@@ -1,26 +1,26 @@
-# Ubuntu Server Setup
+# Konfiguracja serwera Ubuntu
 
-Use these instructions to install **Steam Headless** on an Ubuntu Server system.
+Zastosowanie z tych urządzeń, aby sprawdzić **Steam Headless** w systemie Ubuntu Server.
 
-> ⚠️ **Note**
+> ⚠️ **Uwaga**
 >
-> These steps assume you are running a minimal **Ubuntu Server** installation **without any desktop environment**.
-> This setup **will not work** on Ubuntu Desktop.
+> W tych krokach za skomplikowanych, że uruchamiasz minimalną instalację **Serwera Ubuntu** **bez żadnego środowiska graficznego**.
+> Ta opcja będzie **nie będzie** na Ubuntu Desktop.
 
 ---
 
-## INSTALL NVIDIA DRIVER:
+## ZAINSTALUJ STEROWNIK NVIDIA:
 
-Although you're on a server system, using the `-server` variant of the NVIDIA driver can cause compatibility issues.  
-Instead, install the standard driver **without recommended extras**:
+Dostępny jest system serwerowy, wykorzystujący wariant sterownika NVIDIA `-server`, który może powodować problemy ze zgodnością.
+Zamiast tego zainstaluj standardowy sterownik **bez zalecanych dodatków**:
 
 ```bash
 apt install --no-install-recommends nvidia-driver-570
 ```
 
-> 🔍 Feel free to `570` with the latest available version.
+> 🔍 Zapraszam do `570` z najnowszym dostępem do wyposażenia.
 
-To find the latest version of the standard (non-`-server`, non-`-open`) drivers, run:
+Aby znaleźć najnowsze wersje programów (innych niż `-server`, innych niż `-open`), uruchom:
 
 ```bash
 apt-cache search ^nvidia-driver- | awk '{print $1}' | grep -vE '(-server|-open)' | xargs -n1 apt-cache policy | awk '/^nvidia-driver-/{driver=$1} /Candidate:/ {print driver, $2}'
@@ -28,30 +28,30 @@ apt-cache search ^nvidia-driver- | awk '{print $1}' | grep -vE '(-server|-open)'
 
 ---
 
-## INSTALL DOCKER:
+## ZAINSTALUJ DOKER:
 
-Install `docker-ce` on your Ubuntu server by following the [official Docker instructions](https://docs.docker.com/engine/install/ubuntu/).
+Zainstaluj `docker-ce` na swoim urządzeniu Ubuntu, postępując zgodnie z [official Docker instructions](https://docs.docker.com/engine/install/ubuntu/).
 
-Make sure you also install the `docker-compose-plugin` as noted in the Docker documentation.
+Instalacja została zainstalowana także `docker-compose-plugin` zgodnie z dokumentacją Dockera.
 
 ---
 
-## INSTALL NVIDIA CONTAINER TOOLKIT
+## ZAINSTALUJ ZESTAW NARZĘDZI KONTENERÓW NVIDIA
 
-To enable GPU support inside Docker containers, install the [NVIDIA Container Toolkit](https://github.com/NVIDIA/nvidia-container-toolkit?tab=readme-ov-file).
+Aby włączyć obsługę elektryczną w kontenerach Docker, zainstaluj [NVIDIA Container Toolkit](https://github.com/NVIDIA/nvidia-container-toolkit?tab=readme-ov-file).
 
-Follow the [APT-based installation steps](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html#installing-with-apt) provided in the official documentation.
+Postępowanie zgodnie z [APT-based installation steps](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html#installing-with-apt), które można zastosować w dokumentacji.
 
-Once installed, configure Docker to use the NVIDIA runtime by default:
+Po zainstalowaniu konfiguracji Dockera tak, aby korzystać z oprogramowania ze środowiska wykonawczego NVIDIA:
 
 ```bash
 sudo nvidia-ctk runtime configure --runtime=docker
 ```
 
-> 💡 You *can* also run the container without the NVIDIA runtime by manually uncommenting the `/dev/nvidia*` device entries in the Compose file — but this approach is **not recommended**.
+> 💡 *Możesz* także kontener bez środowiska wykonawczego NVIDIA, usuwając komentarz do urządzenia `/dev/nvidia*` w pliku Compose — ale takie rozwiązanie nie jest **nie**.
 
 ---
 
-## CONFIGURE DOCKER COMPOSE:
+## KONFIGURUJ KOMPOZYCJĘ DOCKERA:
 
-After installing Docker, proceed to the [Compose Files](./docker-compose.md) section and select the appropriate configuration for your hardware setup.
+Po zainstalowaniu Dockera przejdź do sekcji [Compose Files](./docker-compose.md) i wybierz opcję konfiguracji dla posiadanego sprzętu.

@@ -1,60 +1,60 @@
-# Docker Compose
+# Tworzenie Dockera
 
-Follow these instructions to configure a docker-compose.yml for your system.
+Postępuj zgodnie z poniższymi instrukcjami, aby skonfigurować plik docker-compose.yml dla swojego systemu.
 
-> __Note__
+> __Uwaga__
 >
-> These instructions assume that you have docker and docker-compose installed for your system.
+> W tych instrukcjach założono, że w systemie zainstalowano programy docker i docker-compose.
 > 
-> Depending on how you have installed this, the commands to execute docker compose may vary.
+> W zależności od tego, jak to zainstalowałeś, polecenia umożliwiające wykonanie docker compose mogą się różnić.
 
 
-## PREPARE DIRECTORIES:
+## PRZYGOTUJ KATALOGI:
 
-> __Warning__
+> __Ostrzeżenie__
 >
-> These commands are meant to be run as your user. Do not run them as root.
+> Te polecenia należy uruchamiać jako użytkownik. Nie uruchamiaj ich jako root.
 > 
-> If you do run these commands as root, you may need to manually fix the permissions and ownership after.
+> Jeśli uruchomisz te polecenia jako root, może być konieczne ręczne naprawienie uprawnień i własności.
 
-Create a directory for your service:
+Utwórz katalog dla swojej usługi:
 ```shell
 sudo mkdir -p /opt/container-services/steam-headless
 sudo chown -R $(id -u):$(id -g) /opt/container-services/steam-headless
 ```
 
-Create a directory for your service config data:
+Utwórz katalog dla danych konfiguracyjnych usługi:
 ```shell
 sudo mkdir -p /opt/container-data/steam-headless/{home,.X11-unix,pulse}
 sudo chown -R $(id -u):$(id -g) /opt/container-data/steam-headless
 ```
 
-(Optional) Create a directory for your game install location:
+(Opcjonalnie) Utwórz katalog dla miejsca instalacji gry:
 ```shell
 sudo mkdir /mnt/games
 sudo chmod -R 777 /mnt/games
 sudo chown -R $(id -u):$(id -g) /mnt/games
 ```
 
-Create a Steam Headless `/opt/container-services/steam-headless/docker-compose.yml` file.
+Utwórz plik Steam Headless `/opt/container-services/steam-headless/docker-compose.yml`.
 
-Populate this file with the contents of the default Docker Compose File
+Wypełnij ten plik zawartością domyślnego pliku tworzenia platformy Docker
 
 ### AMD/Intel:
 - [AMD and Intel GPUs](./compose-files/docker-compose.amd+intel.yml).
-- [Privileged AMD and Intel GPUs Docker Compose Template](./compose-files/docker-compose.amd+intel.privileged.yml) (grants full access to host devices).
+- [Privileged AMD and Intel GPUs Docker Compose Template](./compose-files/docker-compose.amd+intel.privileged.yml) (zapewnia pełny dostęp do urządzeń hosta).
 
-#### Multipl AMD or Intel GPUs
+#### Wiele procesorów graficznych AMD lub Intel
 
-If you have multiple AMD or Intel GPUs and you wish to isolate them, then follow these steps to determine the card to passthrough in the docker compose file. This requires that you do not use the privileged compose template.
-1) List the PCI devices and get their IDs `lspci | grep -E 'VGA|3D'`
+Jeśli masz wiele procesorów graficznych AMD lub Intel i chcesz je odizolować, wykonaj poniższe kroki, aby określić kartę do przejścia w pliku tworzenia okna dokowanego. Wymaga to, aby nie używać uprzywilejowanego szablonu tworzenia wiadomości.
+1) Wymień urządzenia PCI i uzyskaj ich identyfikatory `lspci | grep -E 'VGA|3D'`
 ```
 00:02.0 VGA compatible controller: Intel Corporation TigerLake-LP GT2 [Iris Xe Graphics] (rev 01)
 06:00.0 VGA compatible controller: Advanced Micro Devices, Inc. [AMD/ATI] Cezanne [Radeon Vega Series / Radeon Vega Mobile Series] (rev c6)
 ```
-In this example, the Intel GPU has an ID of `00:02.0` and the AMD GPU has an ID of `06:00.0`.
+W tym przykładzie procesor graficzny Intel ma identyfikator `00:02.0`, a procesor graficzny AMD ma identyfikator `06:00.0`.
 
-2) Discover which `/dev/dri/card*` and `/dev/dri/renderD12*` references the `00:02.0` Intel GPU (or whatever your output was). To do this, run the commands `ls -la /sys/class/drm/card*` and `ls -l /sys/class/drm/renderD*`.
+2) Dowiedz się, które `/dev/dri/card*` i `/dev/dri/renderD12*` odwołują się do procesora graficznego Intel `00:02.0` (lub dowolnego innego procesora graficznego). Aby to zrobić, uruchom polecenia `ls -la /sys/class/drm/card*` i `ls -l /sys/class/drm/renderD*`.
 ```
 lrwxrwxrwx. 1 root root 0 May  8 15:44 /sys/class/drm/card1 -> ../../devices/pci0000:00/0000:00:02.0/drm/card1
 lrwxrwxrwx. 1 root root 0 May  8 15:44 /sys/class/drm/card1-DP-1 -> ../../devices/pci0000:00/0000:00:02.0/drm/card1/card1-DP-1
@@ -67,31 +67,31 @@ lrwxrwxrwx. 1 root root 0 May  8 15:44 /sys/class/drm/renderD128 -> ../../device
 lrwxrwxrwx. 1 root root 0 May  8 15:44 /sys/class/drm/renderD129 -> ../../devices/pci0000:00/0000:06:00.0/drm/renderD129
 ```
 
-From this example output we can see that the Intel GPU is `/dev/dri/card1` and `/dev/dri/renderD128`.
+Z tego przykładowego wyniku widzimy, że procesor graficzny Intel to `/dev/dri/card1` i `/dev/dri/renderD128`.
 
 ### NVIDIA:
 - [NVIDIA GPUs Docker Compose Template](./compose-files/docker-compose.nvidia.yml).
-- [Privileged NVIDIA GPUs Docker Compose Template](./compose-files/docker-compose.nvidia.yml) (grants full access to host devices).
+- [Privileged NVIDIA GPUs Docker Compose Template](./compose-files/docker-compose.nvidia.yml) (zapewnia pełny dostęp do urządzeń hosta).
 
-## CONFIGURE ENV:
+## KONFIGURUJ ŚRODOWISKO:
 
-Create a Steam Headless `/opt/container-services/steam-headless/.env` file by copying this example [Environment File](./compose-files/.env.example).
+Utwórz plik Steam Headless `/opt/container-services/steam-headless/.env`, kopiując ten przykład [Environment File](./compose-files/.env.example).
 
-Keep real passwords only in your local `.env` file and do not commit that file into git.
+Trzymaj prawdziwe hasła tylko w lokalnym pliku `.env` i nie udostępniaj tego pliku w git.
 
-Edit these variables as required.
+Edytuj te zmienne według potrzeb.
 
-## EXECUTE:
+## WYKONAĆ:
 
-Navigate to your compose location and execute it.
+Przejdź do lokalizacji tworzenia i wykonaj ją.
 ```shell
 cd /opt/container-services/steam-headless
 sudo docker-compose up -d --force-recreate
 ```
 
-After container executes successfully, navigate to your docker host URL in your browser on port 8083 and click connect.
+Po pomyślnym wykonaniu kontenera przejdź do adresu URL hosta dokowanego w przeglądarce na porcie 8083 i kliknij Połącz.
 `http://<host-ip>:8083/`
 ![img.png](./images/web_connect.png)
 
-## Troubleshooting
+## Rozwiązywanie problemów
 [Troubleshooting Docs](./troubleshooting.md)

@@ -1,108 +1,108 @@
-# GitHub Pages VM Control (Legacy GitHub Actions Mode)
+# Kontrola wirtualnej gry GitHub Pages (starszy tryb akcji GitHub)
 
-This document describes the older browser-to-GitHub-Actions flow that uses a GitHub token in the browser.
+W tym udostępnieniu starszego przepływu akcji z ustawieniami do GitHub, który używa tokenu GitHub w zasilaniu.
 
-For the recommended setup with Google login and a Cloud Run backend, use [Cloud Run VM Control](./cloud-run-vm-control.md).
+W przypadku konfiguracji z logowaniem Google i bazy Cloud Run urządzenia [Cloud Run VM Control](./cloud-run-vm-control.md).
 
-This repo now contains a static control panel under [`docs/vm-control/`](./vm-control/index.html) and a matching GitHub Actions workflow in [`.github/workflows/vm-control.yml`](../.github/workflows/vm-control.yml).
+W repozytorium znajduje się teraz statyczny panel sterowania w [`docs/vm-control/`](./vm-control/index.html) i pasujący przepływ pracy GitHub Actions w [`.github/workflows/vm-control.yml`](../.github/workflows/vm-control.yml).
 
-The page does not talk to GCP directly. Instead:
+Strona nie komunikuje się bezpośrednio z GCP. Zamiast:
 
-1. the browser calls the GitHub Actions API with your GitHub token,
-2. GitHub Actions authenticates to Google Cloud with a repository secret,
-3. the workflow runs `status`, `start`, `stop`, or `restart` against one GCE VM.
+1. przeglądarka internetowa GitHub Actions API z tokenem GitHub,
+2. GitHub Actions uwierzytelnia się w Google Cloud za pomocą sekretu repozytorium,
+3. przepływ pracy uruchamiający `status`, `start`, `stop` lub `restart` na jednej maszynie wirtualnej GCE.
 
-## What It Controls
+## Co kontrola
 
-This setup is for the **single-VM GCE flow** in [`gcp-vm/`](../gcp-vm/).
+Ta dotyczy **przepływu GCE z jedną maszyną wirtualną** w [`gcp-vm/`](../gcp-vm/).
 
-It does **not** control the `gcp-v8s` GKE cluster lifecycle.
+**Nie** kontroluje cykle życia klastra `gcp-v8s` GKE.
 
-## Required Repository Setup
+## Wymagana repozytorium
 
-Set these **repository variables** in GitHub:
+Ustaw te **zmienne repozytorium** w GitHub:
 
-- `GCP_PROJECT` – target Google Cloud project
-- `GCP_ZONE` – target VM zone, for example `europe-central2-b`
-- `GCE_NAME` – VM name, for example `steam`
+- `GCP_PROJECT` – usunięte projekt Google Cloud
+- `GCP_ZONE` – docelowa strefa VM, np. `europe-central2-b`
+- `GCE_NAME` – nazwa maszyny wirtualnej, np. `steam`
 
-Set this **repository secret** in GitHub:
+Ustaw dziesięć **tajnego repozytorium** w GitHub:
 
-- `GCP_SA_KEY` – full JSON key for a Google Cloud service account
+- `GCP_SA_KEY` – pełny klucz JSON dla kont usług Google Cloud
 
-Recommended minimum GitHub workflow config:
+Zalecana minimalna konfiguracja systemu GitHub:
 
-- keep the workflow file name as `vm-control.yml`
-- keep the default branch name in the page config aligned with your real default branch
+- pozostałości pozostałości pracy jako `vm-control.yml`
+- zachowaj domyślną substancję w utrzymaniu strony zgodną z domyślną gałęzią
 
-## Google Cloud Service Account
+## Konto usług Google Cloud
 
-The workflow needs a service account that can inspect and power-cycle the VM.
+Przepływ pracy wymaga kont usług, które mogą wyłączyć i wyłączyć maszynę wirtualną.
 
-Simplest option:
+Najprostsza opcja:
 
-- grant the service account `Compute Instance Admin (v1)` on the project or on the specific VM
+- przyznaj konto usługi `Compute Instance Admin (v1)` w aplikacji lub na konkretnej maszynie wirtualnej
 
-If you want a tighter setup, create a custom role containing at least:
+Jeśli chcesz zastosować bardziej szczegółowe rozwiązanie, utwórz niestandardową wersję zawierającą co najmniejsze:
 
 - `compute.instances.get`
 - `compute.instances.start`
 - `compute.instances.stop`
 - `compute.instances.reset`
-- permissions required to read the corresponding compute operations
+- wymagane do odczytu operacji obliczeniowych
 
-## Enable GitHub Pages
+## Włącz strony GitHub
 
-The static page lives in `docs/`, so the simple Pages setup is:
+Strona statyczna znajduje się w `docs/`, więc prosta strona jest następująca:
 
-1. Open repository `Settings -> Pages`
-2. Set `Source` to `Deploy from a branch`
-3. Choose your default branch
-4. Choose folder `/docs`
-5. Save
+1. Otwórz repozytorium `Settings -> Pages`
+2. Ustaw `Source` na `Deploy from a branch`
+3. Wybierz domyślną funkcję
+4. Wybierz folder `/docs`
+5. Zapisz
 
-After Pages is enabled, the panel will be available under something like:
+Po podłączeniu panelu Pages będzie dostępny pod adresem:
 
 - `https://<owner>.github.io/<repo>/vm-control/`
 
-## GitHub Token For The Browser
+## Token GitHub dla ustawień
 
-The page requires a GitHub token because GitHub Pages is static and has no backend.
+Strona wymaga tokena GitHub, ponieważ strony GitHub są statyczne i nie mają zaplecza.
 
-Recommended token:
+Zalecany token:
 
-- fine-grained personal access token
-- repository access limited to this repo
-- permissions:
-  - `Actions: Read and write`
-  - `Contents: Read-only`
+- drobnoziarnisty token dostępu osobistego
+- dostęp do repozytorium niskiego do tego repozytorium
+- pozwolenie:
+- `Actions: Read and write`
+- `Contents: Read-only`
 
-Do not hardcode the token into the page. Enter it in the form when you use the panel.
+Nie koduj tokena na stałe na stronie. Wpisz go w formularzu podczas korzystania z panelu.
 
-By default the page stores the token only in browser session storage. If you enable `Remember token on this device`, it moves to local storage on that machine.
+Domyślnie strona przechowuje token tylko w pamięci sesji. Jeśli włączysz `Remember token on this device`, zostaniesz przeniesiony do pamięci na tym komputerze.
 
-## How To Use
+## Jak urzędowy
 
-1. Open the Pages URL
-2. Fill in:
-   - GitHub token
-   - owner
-   - repository
-   - branch/ref
-   - workflow file name, usually `vm-control.yml`
-3. Leave GCP overrides blank if repository variables are already set
-4. Use `Start`, `Stop`, `Restart`, or `Status`
+1. Otwórz adres URL stron
+2. Wypełnij:
+- Token GitHuba
+- właściciel
+- repozytorium
+- oddział/ref
+- nazwa pliku roboczego, zwykle `vm-control.yml`
+3. możliwe puste pole GCP, jeśli zmienne repozytorium są już gotowe
+4. zużycie `Start`, `Stop`, `Restart` lub `Status`
 
-The panel lists recent workflow runs and tries to extract:
+Panel wyświetlający końcowy przebieg wyłączenia i wyodrębniony:
 
-- final VM power state
-- external IP
-- prominent access links for noVNC and Sunshine when the VM is running
-- host/IP guidance for Moonlight, Sunshine clients, and Steam Remote Play
-- the failed workflow step when the latest run does not complete successfully
+- końcowy stan zasilania maszyny wirtualnej
+- zewnętrzne IP
+- pokaż łącza dostępowe dla noVNC i Sunshine, gdy maszyna wirtualna jest uruchomiona
+- oznaczenia dotyczące hosta/adresu IP dla klientów Moonlight, Sunshine i Steam Remote Play
+- nieudany etap zakończenia pracy, gdy ostatnie wydanie nie nastąpi pomyślnie
 
-## Notes
+## Notatki
 
-- The `Status` button does not call GCP from the browser. It runs the same workflow in read-only mode.
-- If your repo default branch is `main`, change the page field from `master` to `main`.
-- If you want to control a different VM temporarily, fill the override fields for project/zone/instance before dispatching the workflow.
+- Przycisk `Status` nie dotyczy GCP z ustawieniami. Uruchamia ten sam przepływ pracy w tylko do odczytu.
+- Jeśli domyślna zostanie dodana repozytorium do `main`, zmień pole strony z `master` na `main`.
+- Jeśli chcesz kontrolować inną maszynę wirtualną, zastosuj opcję zastąpienia projektu/strefy/instancji przed wystąpieniem działania.
