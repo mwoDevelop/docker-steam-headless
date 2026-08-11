@@ -76,6 +76,7 @@ body::before {
   pointer-events: auto;
 }
 
+#page-loader.embedded-page-loader.is-active,
 .admin-page-loader {
   display: flex;
   flex-direction: column;
