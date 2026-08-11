@@ -125,7 +125,8 @@ zakończyć się prawdziwym błędem pojemności GCE.
 6. **Nowa karta i sesja:** `sessionStorage` jest izolowane między kartami.
    Link Scan & Create musi więc jednorazowo pobrać sesję przez
    `window.opener.postMessage`, wyłącznie przy zgodnym originie, zanim załaduje
-   kontrolki; token nie może trafić do URL ani `localStorage`.
+   kontrolki. Link do własnego originu używa jawnego `rel="opener"`; token nie
+   może trafić do URL ani `localStorage`.
 
 ## Fazy implementacji
 

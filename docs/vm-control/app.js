@@ -1347,7 +1347,7 @@
       }
       const endpoint = candidate.endpoint || {};
       const link = scanCreateLink(candidate);
-      return `<article class="scan-create-result"><strong>${profile} in ${zone}: ready for Create</strong><span>Endpoint: ${escapeHtml(String(endpoint.domain || endpoint.id || ""))}</span><a href="${escapeHtml(link)}" target="_blank" rel="noopener noreferrer">Open prepared VM Control</a></article>`;
+      return `<article class="scan-create-result"><strong>${profile} in ${zone}: ready for Create</strong><span>Endpoint: ${escapeHtml(String(endpoint.domain || endpoint.id || ""))}</span><a href="${escapeHtml(link)}" target="_blank" rel="opener">Open prepared VM Control</a></article>`;
     }).join("");
   }
 
