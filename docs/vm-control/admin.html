@@ -130,16 +130,34 @@
             <p id="endpoint-status">Each endpoint has a separate DuckDNS name and regional external IP address.</p>
 
             <div class="hardware-zone-actions">
-              <label>
-                <span>Hardware</span>
-                <select id="hardware-select" name="hardware-select"><option value="">Connect and sign in to load hardware</option></select>
-              </label>
-              <label>
-                <span>Zone</span>
-                <select id="zone-select" name="zone-select"><option value="">Select hardware first</option></select>
-              </label>
-              <div class="control-row single-zone-gpu-scan-row">
-                <button id="scan-selected-gpu" class="ghost" type="button">Scan All GPUs in Selected Zone</button>
+              <div class="hardware-scan-row">
+                <label>
+                  <span>Hardware</span>
+                  <select id="hardware-select" name="hardware-select"><option value="">Connect and sign in to load hardware</option></select>
+                </label>
+                <label>
+                  <span>GPU scan scope</span>
+                  <select id="gpu-scan-scope" name="gpu-scan-scope">
+                    <option value="all">All regions</option>
+                    <option value="europe">Europe</option>
+                    <option value="americas">Americas</option>
+                    <option value="asia-pacific">Asia Pacific</option>
+                    <option value="middle-east">Middle East</option>
+                    <option value="africa">Africa</option>
+                  </select>
+                </label>
+                <div class="control-row">
+                  <button id="refresh-hardware" class="ghost" type="button">Scan All Compatible GPU Zones</button>
+                </div>
+              </div>
+              <div class="zone-gpu-scan-row">
+                <label>
+                  <span>Zone</span>
+                  <select id="zone-select" name="zone-select"><option value="">Select hardware first</option></select>
+                </label>
+                <div class="control-row single-zone-gpu-scan-row">
+                  <button id="scan-selected-gpu" class="ghost" type="button">Scan All GPUs in Selected Zone</button>
+                </div>
               </div>
             </div>
             <p class="gpu-compatibility-legend">
@@ -147,21 +165,6 @@
               <span class="sunshine-incompatible">Red: tested and fails with Sunshine</span>
               <span class="sunshine-untested">Yellow: not tested with Sunshine</span>
             </p>
-            <fieldset class="gpu-scan-scope-group">
-              <legend>Selected GPU - geographic scan</legend>
-              <label>
-                <span>GPU scan scope</span>
-                <select id="gpu-scan-scope" name="gpu-scan-scope">
-                  <option value="all">All regions</option>
-                  <option value="europe">Europe</option>
-                  <option value="americas">Americas</option>
-                  <option value="asia-pacific">Asia Pacific</option>
-                  <option value="middle-east">Middle East</option>
-                  <option value="africa">Africa</option>
-                </select>
-              </label>
-              <div class="control-row"><button id="refresh-hardware" class="ghost" type="button">Scan All Compatible GPU Zones</button></div>
-            </fieldset>
             <div id="hardware-price-estimate" class="hardware-price-card" data-tone="neutral">Select hardware and zone to load estimated price.</div>
             <p id="hardware-options-status">Hardware and zone availability is loaded from Compute Engine.</p>
           </div>
