@@ -552,6 +552,32 @@ select {
   text-decoration: line-through;
 }
 
+.scan-create-results {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.scan-create-result {
+  display: grid;
+  gap: 5px;
+  padding: 12px 14px;
+  border: 1px solid rgba(106, 228, 208, 0.32);
+  border-radius: 12px;
+  background: rgba(106, 228, 208, 0.08);
+}
+
+.scan-create-result[data-tone="warning"] {
+  border-color: rgba(242, 198, 109, 0.48);
+  background: rgba(242, 198, 109, 0.08);
+}
+
+.scan-create-result a {
+  width: fit-content;
+  color: var(--accent);
+  font-weight: 700;
+}
+
 .hardware-picker-scan-toggle {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);

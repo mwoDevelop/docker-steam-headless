@@ -174,6 +174,8 @@ CONFIG = {
 SUNSHINE_HEALTHCHECK_TIMEOUT_SECONDS: Final = 8
 SESSION_TOKEN_PREFIX: Final = "vmcs1"
 SESSION_TOKEN_TTL_SECONDS: Final = 12 * 60 * 60
+SCAN_CREATE_TOKEN_PREFIX: Final = "vmcsp1"
+SCAN_CREATE_TOKEN_TTL_SECONDS: Final = 10 * 60
 
 AUTO_STOP_METADATA_KEY = "vm-auto-shutdown-hours"
 AUTO_STOP_AT_METADATA_KEY = "vm-auto-shutdown-at"
@@ -1742,6 +1744,30 @@ def endpoint_public_payload(endpoint: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def endpoint_available_for_scan_create(endpoint: dict[str, Any], zone: str) -> bool:
+    """Return whether an endpoint can be selected for a new Scan & Create link."""
+    if str(endpoint.get("instanceName", "") or "") or str(endpoint.get("zone", "") or ""):
+        return False
+    if endpoint_has_manual_static_ip(endpoint) and str(endpoint.get("region", "") or "") != zone_region(zone):
+        return False
+    return True
+
+
+def first_free_endpoint_for_scan_create(zone: str) -> dict[str, Any]:
+    records = reconcile_endpoint_instance_bindings()
+    candidates = sorted(
+        (endpoint for endpoint in records if endpoint_available_for_scan_create(endpoint, zone)),
+        key=lambda endpoint: int(str(endpoint["id"]).removeprefix("mwo-vm")),
+    )
+    if not candidates:
+        raise ApiError(
+            "NO_FREE_ENDPOINT: No free managed DuckDNS endpoint is available for this zone. "
+            "Delete a VM and free an endpoint, or add another endpoint in Administration.",
+            409,
+        )
+    return candidates[0]
+
+
 LIVE_ACCESS_PROBE_TIMEOUT_SECONDS: Final = 5
 
 
@@ -3254,6 +3280,7 @@ def handle_unexpected_error(error: Exception):
 @app.route("/api/capacity-reservations/scan", methods=["POST", "OPTIONS"])
 @app.route("/api/capacity-reservations/scan-zone", methods=["POST", "OPTIONS"])
 @app.route("/api/capacity-reservations/release", methods=["POST", "OPTIONS"])
+@app.route("/api/scan-create/prepare", methods=["POST", "OPTIONS"])
 @app.route("/api/internal/capacity-reservations/cleanup", methods=["POST", "OPTIONS"])
 @app.route("/api/me", methods=["GET", "OPTIONS"])
 @app.route("/api/status", methods=["GET", "OPTIONS"])
@@ -3548,6 +3575,11 @@ def options_passthrough():
         require_admin_user()
         return jsonify(release_managed_capacity_reservations())
 
+    if request.path == "/api/scan-create/prepare":
+        user = require_admin_user()
+        payload = request.get_json(silent=True) or {}
+        return jsonify(prepare_scan_create_target(payload, user))
+
     if request.path == "/api/internal/capacity-reservations/cleanup":
         require_capacity_cleanup_token()
         result = release_managed_capacity_reservations(expired_only=True)
@@ -3698,6 +3730,93 @@ def authenticated_session_user(token: str) -> dict[str, Any]:
         "hd": normalize_email(str(payload.get("hd", ""))),
         "email_domain": email.split("@", 1)[1] if "@" in email else "",
     }
+
+
+def create_scan_create_token(*, user: dict[str, Any], endpoint_id: str, hardware_id: str, zone: str) -> tuple[str, int]:
+    now = int(time.time())
+    expires_at = now + SCAN_CREATE_TOKEN_TTL_SECONDS
+    payload = {
+        "email": normalize_email(str(user.get("email", ""))),
+        "endpointId": endpoint_id,
+        "hardwareId": hardware_id,
+        "zone": zone,
+        "iat": now,
+        "exp": expires_at,
+    }
+    encoded_payload = base64url_encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8"))
+    signed_data = f"{SCAN_CREATE_TOKEN_PREFIX}.{encoded_payload}".encode("ascii")
+    signature = base64url_encode(hmac.new(session_signing_secret(), signed_data, hashlib.sha256).digest())
+    return f"{SCAN_CREATE_TOKEN_PREFIX}.{encoded_payload}.{signature}", expires_at
+
+
+def decode_scan_create_token(raw_token: Any) -> dict[str, Any]:
+    token = str(raw_token or "").strip()
+    parts = token.split(".")
+    if len(parts) != 3 or parts[0] != SCAN_CREATE_TOKEN_PREFIX:
+        raise ApiError("Invalid Scan & Create preparation link. Start a new capacity scan.", 400)
+    _, encoded_payload, encoded_signature = parts
+    signed_data = f"{SCAN_CREATE_TOKEN_PREFIX}.{encoded_payload}".encode("ascii")
+    expected_signature = hmac.new(session_signing_secret(), signed_data, hashlib.sha256).digest()
+    try:
+        supplied_signature = base64url_decode(encoded_signature)
+        payload = json.loads(base64url_decode(encoded_payload).decode("utf-8"))
+    except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
+        raise ApiError("Invalid Scan & Create preparation link. Start a new capacity scan.", 400) from None
+    if not hmac.compare_digest(supplied_signature, expected_signature) or not isinstance(payload, dict):
+        raise ApiError("Invalid Scan & Create preparation link. Start a new capacity scan.", 400)
+    try:
+        expires_at = int(payload.get("exp", 0))
+    except (TypeError, ValueError):
+        expires_at = 0
+    if expires_at <= int(time.time()):
+        raise ApiError("Scan & Create preparation expired. Run a new capacity scan.", 409)
+    return payload
+
+
+def prepare_scan_create_target(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
+    profile = gpu_hardware_profile(str(payload.get("hardwareId", "")))
+    zone = str(payload.get("zone", "")).strip()
+    compatible_zones = [str(value) for value in profile.get("zones", []) if str(value)]
+    if not zone or zone not in compatible_zones:
+        raise ApiError("The selected GPU and zone are no longer a compatible Scan & Create target.", 400)
+    endpoint = first_free_endpoint_for_scan_create(zone)
+    token, expires_at = create_scan_create_token(
+        user=user,
+        endpoint_id=endpoint["id"],
+        hardware_id=str(profile["id"]),
+        zone=zone,
+    )
+    return {
+        "endpoint": endpoint_public_payload(endpoint),
+        "target": {
+            "endpointId": endpoint["id"],
+            "hardwareId": str(profile["id"]),
+            "machineType": str(profile["machineType"]),
+            "gpuType": str(profile["gpuType"]),
+            "gpuCount": int(profile["gpuCount"]),
+            "acceleratorMode": str(profile.get("acceleratorMode", "attached")),
+            "zone": zone,
+        },
+        "preparationToken": token,
+        "expiresAt": datetime.fromtimestamp(expires_at, timezone.utc).isoformat(),
+    }
+
+
+def validate_scan_create_preparation(payload: dict[str, Any], user: dict[str, Any]) -> None:
+    raw_token = payload.get("scanCreateToken")
+    if not raw_token:
+        return
+    prepared = decode_scan_create_token(raw_token)
+    if normalize_email(str(prepared.get("email", ""))) != normalize_email(str(user.get("email", ""))):
+        raise ApiError("Scan & Create preparation belongs to a different user.", 403)
+    if (
+        str(prepared.get("endpointId", "")) != selected_endpoint_id()
+        or str(prepared.get("hardwareId", "")) != selected_hardware_id()
+        or str(prepared.get("zone", "")) != selected_zone()
+    ):
+        raise ApiError("Scan & Create preparation no longer matches the selected endpoint, hardware and zone.", 409)
+    if not endpoint_available_for_scan_create(selected_endpoint(), selected_zone()):
+        raise ApiError("The prepared endpoint is no longer free. Start a new capacity scan.", 409)
 
 
 def authenticated_google_user(token: str | None = None) -> dict[str, Any]:
@@ -7055,6 +7174,7 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
     require_no_active_power_action(current_instance, command)
 
     if command == "create":
+        validate_scan_create_preparation(payload, user)
         if selected_gpu_count() > 0:
             gpu_hardware_profile(selected_hardware_id())
         auto_stop_hours = parse_auto_stop_hours(payload)

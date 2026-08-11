@@ -1,6 +1,7 @@
 (function () {
   const defaultBackendUrl = "https://steam-vm-control-api-w2urpq2xlq-lm.a.run.app";
   const defaultAutoStopHours = "3";
+  const scanCreateUrlParams = new URLSearchParams(window.location.search);
 
   const storageKeys = {
     config: "vm-control-cloudrun-config",
@@ -148,6 +149,7 @@
     zoneSelect: document.querySelector("#zone-select"),
     gpuScanScope: document.querySelector("#gpu-scan-scope"),
     gpuScanProfiles: document.querySelector("#hardware-picker-options"),
+    scanCreateResults: document.querySelector("#scan-create-results"),
     gpuScanProfilesSummary: document.querySelector("#hardware-picker-summary"),
     refreshHardware: document.querySelector("#refresh-hardware"),
     scanSelectedGpu: document.querySelector("#scan-selected-gpu"),
@@ -269,6 +271,13 @@
 
   function loadConfig() {
     const saved = JSON.parse(window.localStorage.getItem(storageKeys.config) || "{}");
+    const scanCreateEndpointId = String(scanCreateUrlParams.get("endpointId") || "").trim();
+    const scanCreateHardwareId = String(scanCreateUrlParams.get("hardwareId") || "").trim();
+    const scanCreateZone = String(scanCreateUrlParams.get("zone") || "").trim();
+    const scanCreateToken = String(scanCreateUrlParams.get("scanCreateToken") || "").trim();
+    state.scanCreatePreparation = scanCreateToken && scanCreateEndpointId && scanCreateHardwareId && scanCreateZone
+      ? { endpointId: scanCreateEndpointId, hardwareId: scanCreateHardwareId, zone: scanCreateZone, token: scanCreateToken }
+      : null;
     state.backendUrl = saved.backendUrl || defaultBackendUrl;
     state.token = window.sessionStorage.getItem(storageKeys.sessionToken) || "";
     state.tokenExpiresAt = Math.max(
@@ -280,11 +289,14 @@
     elements.autoStopHours.value = Object.prototype.hasOwnProperty.call(saved, "autoStopHours")
       ? String(saved.autoStopHours || "")
       : defaultAutoStopHours;
-    if (elements.hardwareSelect && saved.hardwareId) {
-      elements.hardwareSelect.dataset.savedValue = String(saved.hardwareId);
+    if (elements.hardwareSelect && (scanCreateHardwareId || saved.hardwareId)) {
+      elements.hardwareSelect.dataset.savedValue = scanCreateHardwareId || String(saved.hardwareId);
     }
-    if (elements.endpointSelect && saved.endpointId) {
-      elements.endpointSelect.dataset.savedValue = String(saved.endpointId);
+    if (elements.endpointSelect && (scanCreateEndpointId || saved.endpointId)) {
+      elements.endpointSelect.dataset.savedValue = scanCreateEndpointId || String(saved.endpointId);
+    }
+    if (elements.zoneSelect && scanCreateZone) {
+      elements.zoneSelect.dataset.savedValue = scanCreateZone;
     }
     if (elements.minecraftVersionSelect && saved.minecraftVersion) {
       elements.minecraftVersionSelect.dataset.savedValue = String(saved.minecraftVersion);
@@ -1260,7 +1272,7 @@
     if (!profile || !zone) {
       return { endpointId: selectedEndpointId() };
     }
-    return {
+    const target = {
       endpointId: selectedEndpointId(),
       hardwareId: String(profile.id || ""),
       zone,
@@ -1269,6 +1281,66 @@
       gpuCount: Number(profile.gpuCount || 0),
       acceleratorMode: String(profile.acceleratorMode || "none"),
     };
+    const preparation = state.scanCreatePreparation;
+    if (preparation
+      && preparation.endpointId === target.endpointId
+      && preparation.hardwareId === target.hardwareId
+      && preparation.zone === target.zone) {
+      target.scanCreateToken = preparation.token;
+    }
+    return target;
+  }
+
+  function scanCreateLink(candidate) {
+    const target = candidate && candidate.target ? candidate.target : null;
+    if (!target || !candidate.preparationToken) return "";
+    const url = new URL(window.location.href);
+    url.search = "";
+    url.hash = "#vm-control";
+    url.searchParams.set("endpointId", String(target.endpointId || ""));
+    url.searchParams.set("hardwareId", String(target.hardwareId || ""));
+    url.searchParams.set("zone", String(target.zone || ""));
+    url.searchParams.set("scanCreateToken", String(candidate.preparationToken));
+    return url.toString();
+  }
+
+  function renderScanCreateResults(run) {
+    const container = elements.scanCreateResults;
+    if (!container) return;
+    const candidates = Array.isArray(run && run.scanCreateCandidates) ? run.scanCreateCandidates : [];
+    if (!candidates.length) {
+      container.hidden = true;
+      container.innerHTML = "";
+      return;
+    }
+    container.hidden = false;
+    container.innerHTML = candidates.map((candidate) => {
+      const profile = escapeHtml(String(candidate.hardwareLabel || "GPU"));
+      const zone = escapeHtml(zoneDisplayLabel(String(candidate.zone || "")));
+      if (candidate.error) {
+        return `<article class="scan-create-result" data-tone="warning"><strong>${profile} in ${zone}: capacity found</strong><span>${escapeHtml(candidate.error)}</span></article>`;
+      }
+      const endpoint = candidate.endpoint || {};
+      const link = scanCreateLink(candidate);
+      return `<article class="scan-create-result"><strong>${profile} in ${zone}: ready for Create</strong><span>Endpoint: ${escapeHtml(String(endpoint.domain || endpoint.id || ""))}</span><a href="${escapeHtml(link)}" target="_blank" rel="noopener noreferrer">Open prepared VM Control</a></article>`;
+    }).join("");
+  }
+
+  async function appendScanCreateCandidate(run, profile, zone) {
+    if (!run || !profile || !zone) return;
+    const candidate = { hardwareLabel: String(profile.label || profile.id || "GPU"), zone: String(zone) };
+    try {
+      const prepared = await fetchApi("/api/scan-create/prepare", {
+        method: "POST",
+        body: JSON.stringify({ hardwareId: String(profile.id || ""), zone: String(zone) }),
+      });
+      Object.assign(candidate, prepared || {});
+    } catch (error) {
+      candidate.error = formatErrorMessage(error);
+    }
+    if (!Array.isArray(run.scanCreateCandidates)) run.scanCreateCandidates = [];
+    run.scanCreateCandidates.push(candidate);
+    renderScanCreateResults(run);
   }
 
   function selectedTargetKey() {
@@ -1567,6 +1639,7 @@
       completed: 0,
       currentZone: "",
       availableZones: [],
+      scanCreateCandidates: [],
       cleanupFailures: [],
       cancelRequested: false,
       finished: false,
@@ -1590,6 +1663,7 @@
           });
           if (data && data.available) {
             run.availableZones.push(zone);
+            await appendScanCreateCandidate(run, profile, zone);
           }
           if (data && data.cleanupFailure) {
             run.cleanupFailures.push({ zone, error: String(data.cleanupFailure) });
@@ -1678,6 +1752,7 @@
       completed: 0,
       currentTarget: null,
       availableZonesByHardwareId: {},
+      scanCreateCandidates: [],
       availablePairCount: 0,
       cleanupFailures: [],
       cancelRequested: false,
@@ -1706,6 +1781,7 @@
             zones.push(String(target.zone));
             run.availableZonesByHardwareId[hardwareId] = zones;
             run.availablePairCount += 1;
+            await appendScanCreateCandidate(run, target.profile, target.zone);
           }
           if (data && data.cleanupFailure) {
             run.cleanupFailures.push({ target, error: String(data.cleanupFailure) });
@@ -1779,6 +1855,7 @@
       completed: 0,
       currentProfile: null,
       availableHardwareIds: [],
+      scanCreateCandidates: [],
       cleanupFailures: [],
       cancelRequested: false,
       finished: false,
@@ -1802,6 +1879,7 @@
           });
           if (data && data.available) {
             run.availableHardwareIds.push(String(profile.id));
+            await appendScanCreateCandidate(run, profile, zone);
           }
           if (data && data.cleanupFailure) {
             run.cleanupFailures.push({ profile, error: String(data.cleanupFailure) });
@@ -1876,6 +1954,7 @@
       completed: 0,
       currentTarget: null,
       availableZonesByHardwareId: {},
+      scanCreateCandidates: [],
       availablePairCount: 0,
       cleanupFailures: [],
       cancelRequested: false,
@@ -1904,6 +1983,7 @@
             zones.push(target.zone);
             run.availableZonesByHardwareId[hardwareId] = zones;
             run.availablePairCount += 1;
+            await appendScanCreateCandidate(run, target.profile, target.zone);
           }
           if (data && data.cleanupFailure) {
             run.cleanupFailures.push({ target, error: String(data.cleanupFailure) });

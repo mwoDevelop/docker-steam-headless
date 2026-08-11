@@ -26,6 +26,8 @@ procedura operacyjna.
 
 - [Follow-up risk remediation plan](./follow-up-risk-remediation-plan.md):
 zaległości w implementacji i kryteria akceptacji, a nie element Runbook.
+- [Scan & Create plan](./scan-and-create-plan.md): projekt szybkiego przejścia
+od znalezionej pojemności GPU do tworzenia VM z wolnym endpointem.
 
 ## Instalacja kontenera nadrzędnego
 
