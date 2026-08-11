@@ -1729,6 +1729,14 @@ def selected_endpoint_domains() -> list[str]:
     return [domain] if domain else []
 
 
+def sunshine_csrf_allowed_origins() -> str | None:
+    origins = [
+        f"https://{domain}:{CONFIG['sunshine_port']}"
+        for domain in selected_endpoint_domains()
+    ]
+    return ",".join(origins) or None
+
+
 def endpoint_public_payload(endpoint: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": endpoint["id"],
@@ -4656,13 +4664,7 @@ def start_metadata_updates(
         "vm-power-action-script": decode_config_b64("vm_power_action_script_b64"),
         "vm-data-disk-device-name": data_disk_device_name(),
         "vm-data-disk-mount-root": CONFIG["data_disk_mount_root"],
-        "vm-sunshine-csrf-allowed-origins": (
-            ",".join(
-                f"https://{domain}:{CONFIG['sunshine_port']}"
-                for domain in selected_endpoint_domains()
-            )
-            or None
-        ),
+        "vm-sunshine-csrf-allowed-origins": sunshine_csrf_allowed_origins(),
         GPU_COUNT_METADATA_KEY: str(selected_gpu_count()),
         "vm-gpu-type": selected_gpu_type(),
         STEAM_ENV_METADATA_KEY: build_steam_env_value(
@@ -5222,6 +5224,7 @@ def build_instance_metadata_items(
         {"key": "vm-power-action-script", "value": decode_config_b64("vm_power_action_script_b64")},
         {"key": "vm-data-disk-device-name", "value": data_disk_device_name()},
         {"key": "vm-data-disk-mount-root", "value": CONFIG["data_disk_mount_root"]},
+        {"key": "vm-sunshine-csrf-allowed-origins", "value": sunshine_csrf_allowed_origins() or ""},
         {"key": "vm-control-endpoint-id", "value": selected_endpoint_id()},
         {"key": "vm-gpu-count", "value": str(selected_gpu_count())},
         {"key": "vm-gpu-type", "value": selected_gpu_type()},

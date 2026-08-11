@@ -599,6 +599,13 @@ select {
   font-weight: 700;
 }
 
+.scan-create-link.is-disabled {
+  color: var(--muted);
+  font-weight: 700;
+  cursor: not-allowed;
+  text-decoration: line-through;
+}
+
 .hardware-picker-scan-toggle {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);

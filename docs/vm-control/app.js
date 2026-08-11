@@ -210,6 +210,7 @@
     history: [],
     isPageLoading: true,
     pageLoadingToken: 0,
+    scanCreateResultRun: null,
     scrolledInitialHash: "",
   };
 
@@ -1261,7 +1262,7 @@
       ? run.currentProfile ? ` Current GPU: ${String(run.currentProfile.label || run.currentProfile.id || "GPU")}.` : ""
       : run.currentZone ? ` Current zone: ${zoneDisplayLabel(run.currentZone)}.` : "";
     const message = run.cancelRequested
-      ? `Cancelling GPU capacity scan after the current request. Checked ${completed}/${total} ${(allGpuZoneScan || selectedGpuProfilesScan) ? "GPU-zone combinations" : zoneCatalogScan ? "GPU profiles" : "zones"}.${current}`
+      ? `Pausing GPU capacity scan after the current request and releasing its reservation. Checked ${completed}/${total} ${(allGpuZoneScan || selectedGpuProfilesScan) ? "GPU-zone combinations" : zoneCatalogScan ? "GPU profiles" : "zones"}.${current}`
       : allGpuZoneScan
         ? `Scanning all GPU capacity: ${completed}/${total} GPU-zone combinations checked, ${available} currently available.${current}`
         : selectedGpuProfilesScan
@@ -1283,7 +1284,6 @@
       return;
     }
     run.cancelRequested = true;
-    run.abortController.abort();
     renderGpuAvailabilityScanProgress(run);
     updateGpuAvailabilityScanButton();
   }
@@ -1332,6 +1332,7 @@
 
   function renderScanCreateResults(run) {
     const candidates = Array.isArray(run && run.scanCreateCandidates) ? run.scanCreateCandidates : [];
+    const linksReady = Boolean(run && run.linksUnlocked);
     const containers = [elements.scanCreateResults, elements.pageLoaderScanResults].filter(Boolean);
     if (!containers.length) return;
     if (!candidates.length) {
@@ -1349,7 +1350,10 @@
       }
       const endpoint = candidate.endpoint || {};
       const link = scanCreateLink(candidate);
-      return `<article class="scan-create-result"><strong>${profile} in ${zone}: ready for Create</strong><span>Endpoint: ${escapeHtml(String(endpoint.domain || endpoint.id || ""))}</span><a href="${escapeHtml(link)}" target="_blank" rel="opener">Open prepared VM Control</a></article>`;
+      const action = linksReady
+        ? `<a href="${escapeHtml(link)}" target="_blank" rel="opener">Open prepared VM Control</a>`
+        : `<span class="scan-create-link is-disabled" aria-disabled="true">Pause scan to release GPU reservations before opening</span>`;
+      return `<article class="scan-create-result" data-links-ready="${linksReady ? "true" : "false"}"><strong>${profile} in ${zone}: ${linksReady ? "ready for Create" : "capacity found; waiting for GPU release"}</strong><span>Endpoint: ${escapeHtml(String(endpoint.domain || endpoint.id || ""))}</span>${action}</article>`;
     }).join("");
     containers.forEach((container) => {
       container.hidden = false;
@@ -1674,9 +1678,12 @@
       cleanupFailures: [],
       cancelRequested: false,
       finished: false,
+      linksUnlocked: false,
       abortController: new AbortController(),
     };
     state.gpuAvailabilityScanRun = run;
+    state.scanCreateResultRun = run;
+    renderScanCreateResults(run);
     updateGpuAvailabilityScanButton();
     renderGpuAvailabilityScanProgress(run);
     try {
@@ -1714,7 +1721,8 @@
       run.currentZone = "";
       state.gpuAvailabilityScanRun = null;
       updateGpuAvailabilityScanButton();
-      await refreshGpuCapacityReservationCount();
+      run.linksUnlocked = (await refreshGpuCapacityReservationCount()) === 0;
+      renderScanCreateResults(run);
       scheduleGpuCapacityReservationCountRefreshes();
       if (run.cancelRequested) {
         state.gpuAvailabilityScan = {
@@ -1788,9 +1796,12 @@
       cleanupFailures: [],
       cancelRequested: false,
       finished: false,
+      linksUnlocked: false,
       abortController: new AbortController(),
     };
     state.gpuAvailabilityScanRun = run;
+    state.scanCreateResultRun = run;
+    renderScanCreateResults(run);
     updateGpuAvailabilityScanButton();
     renderGpuAvailabilityScanProgress(run);
     try {
@@ -1832,7 +1843,8 @@
       run.currentTarget = null;
       state.gpuAvailabilityScanRun = null;
       updateGpuAvailabilityScanButton();
-      await refreshGpuCapacityReservationCount();
+      run.linksUnlocked = (await refreshGpuCapacityReservationCount()) === 0;
+      renderScanCreateResults(run);
       scheduleGpuCapacityReservationCountRefreshes();
     }
 
@@ -1890,9 +1902,12 @@
       cleanupFailures: [],
       cancelRequested: false,
       finished: false,
+      linksUnlocked: false,
       abortController: new AbortController(),
     };
     state.selectedZoneGpuAvailabilityScanRun = run;
+    state.scanCreateResultRun = run;
+    renderScanCreateResults(run);
     updateGpuAvailabilityScanButton();
     renderGpuAvailabilityScanProgress(run);
     try {
@@ -1930,7 +1945,8 @@
       run.currentProfile = null;
       state.selectedZoneGpuAvailabilityScanRun = null;
       updateGpuAvailabilityScanButton();
-      await refreshGpuCapacityReservationCount();
+      run.linksUnlocked = (await refreshGpuCapacityReservationCount()) === 0;
+      renderScanCreateResults(run);
       scheduleGpuCapacityReservationCountRefreshes();
     }
 
@@ -1990,9 +2006,12 @@
       cleanupFailures: [],
       cancelRequested: false,
       finished: false,
+      linksUnlocked: false,
       abortController: new AbortController(),
     };
     state.allGpuZoneAvailabilityScanRun = run;
+    state.scanCreateResultRun = run;
+    renderScanCreateResults(run);
     updateGpuAvailabilityScanButton();
     renderGpuAvailabilityScanProgress(run);
     try {
@@ -2034,7 +2053,8 @@
       run.currentTarget = null;
       state.allGpuZoneAvailabilityScanRun = null;
       updateGpuAvailabilityScanButton();
-      await refreshGpuCapacityReservationCount();
+      run.linksUnlocked = (await refreshGpuCapacityReservationCount()) === 0;
+      renderScanCreateResults(run);
       scheduleGpuCapacityReservationCountRefreshes();
     }
 
@@ -3634,13 +3654,21 @@
   async function refreshGpuCapacityReservationCount() {
     if (!state.user) {
       renderGpuCapacityReservationCount(0);
-      return;
+      return 0;
     }
     try {
       const data = await fetchApi("/api/capacity-reservations", { method: "GET" });
-      renderGpuCapacityReservationCount(data && data.reservedGpuCount);
+      const count = Math.max(0, Number.parseInt(data && data.reservedGpuCount, 10) || 0);
+      renderGpuCapacityReservationCount(count);
+      const resultRun = state.scanCreateResultRun;
+      if (count === 0 && resultRun && resultRun.finished && !resultRun.linksUnlocked) {
+        resultRun.linksUnlocked = true;
+        renderScanCreateResults(resultRun);
+      }
+      return count;
     } catch (error) {
       console.warn("Failed to refresh GPU capacity reservation count.", error);
+      return null;
     }
   }
 
