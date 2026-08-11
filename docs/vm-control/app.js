@@ -150,6 +150,7 @@
     gpuScanScope: document.querySelector("#gpu-scan-scope"),
     gpuScanProfiles: document.querySelector("#hardware-picker-options"),
     scanCreateResults: document.querySelector("#scan-create-results"),
+    pageLoaderScanResults: document.querySelector("#page-loader-scan-results"),
     gpuScanProfilesSummary: document.querySelector("#hardware-picker-summary"),
     refreshHardware: document.querySelector("#refresh-hardware"),
     scanSelectedGpu: document.querySelector("#scan-selected-gpu"),
@@ -1330,16 +1331,17 @@
   }
 
   function renderScanCreateResults(run) {
-    const container = elements.scanCreateResults;
-    if (!container) return;
     const candidates = Array.isArray(run && run.scanCreateCandidates) ? run.scanCreateCandidates : [];
+    const containers = [elements.scanCreateResults, elements.pageLoaderScanResults].filter(Boolean);
+    if (!containers.length) return;
     if (!candidates.length) {
-      container.hidden = true;
-      container.innerHTML = "";
+      containers.forEach((container) => {
+        container.hidden = true;
+        container.innerHTML = "";
+      });
       return;
     }
-    container.hidden = false;
-    container.innerHTML = candidates.map((candidate) => {
+    const content = candidates.map((candidate) => {
       const profile = escapeHtml(String(candidate.hardwareLabel || "GPU"));
       const zone = escapeHtml(zoneDisplayLabel(String(candidate.zone || "")));
       if (candidate.error) {
@@ -1349,6 +1351,10 @@
       const link = scanCreateLink(candidate);
       return `<article class="scan-create-result"><strong>${profile} in ${zone}: ready for Create</strong><span>Endpoint: ${escapeHtml(String(endpoint.domain || endpoint.id || ""))}</span><a href="${escapeHtml(link)}" target="_blank" rel="opener">Open prepared VM Control</a></article>`;
     }).join("");
+    containers.forEach((container) => {
+      container.hidden = false;
+      container.innerHTML = content;
+    });
   }
 
   async function appendScanCreateCandidate(run, profile, zone) {
