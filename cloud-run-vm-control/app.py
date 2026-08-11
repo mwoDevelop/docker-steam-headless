@@ -6379,12 +6379,14 @@ def allowed_commands(instance: dict[str, Any] | None) -> list[str]:
             return ["status", "stop", "delete"]
         if not hardware_matches:
             return ["status", "stop", "delete"]
-        commands = ["status", "set-auto-stop"]
+        # Deletion is intentionally available before the guest-ready marker.
+        # A failed boot or unsupported GPU configuration must not leave a VM
+        # that can be removed only through a direct API call.
+        commands = ["status", "set-auto-stop", "delete"]
         if is_live_backup_ready(instance):
             commands.extend([
                 "restart",
                 "stop",
-                "delete",
                 "create-backup",
                 "restore-backup",
                 "remove-backup",

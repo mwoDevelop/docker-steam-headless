@@ -310,10 +310,29 @@ if ! gcloud secrets describe "$CAPACITY_CLEANUP_TOKEN_SECRET_NAME" --project "$G
   gcloud secrets create "$CAPACITY_CLEANUP_TOKEN_SECRET_NAME" \
     --project "$GCP_PROJECT" \
     --replication-policy="automatic" >/dev/null
-  openssl rand -hex 32 | gcloud secrets versions add "$CAPACITY_CLEANUP_TOKEN_SECRET_NAME" \
+  printf '%s' "$(openssl rand -hex 32)" | gcloud secrets versions add "$CAPACITY_CLEANUP_TOKEN_SECRET_NAME" \
     --project "$GCP_PROJECT" \
     --data-file=- >/dev/null
 fi
+
+# Secret Manager preserves a trailing newline when a value is piped from a
+# command. Cloud Run then receives that byte in its environment, whereas Cloud
+# Scheduler strips it from the HTTP header. Normalize older values once so both
+# sides compare exactly the same 64-character token.
+CAPACITY_CLEANUP_TOKEN_FILE=$(mktemp)
+gcloud secrets versions access latest \
+  --secret="$CAPACITY_CLEANUP_TOKEN_SECRET_NAME" \
+  --project "$GCP_PROJECT" \
+  --out-file="$CAPACITY_CLEANUP_TOKEN_FILE" >/dev/null
+if [[ "$(wc -c < "$CAPACITY_CLEANUP_TOKEN_FILE")" != "64" ]] || ! LC_ALL=C grep -qE '^[0-9a-f]{64}$' "$CAPACITY_CLEANUP_TOKEN_FILE"; then
+  log "Normalizing GPU capacity cleanup token secret"
+  printf '%s' "$(openssl rand -hex 32)" > "$CAPACITY_CLEANUP_TOKEN_FILE"
+  gcloud secrets versions add "$CAPACITY_CLEANUP_TOKEN_SECRET_NAME" \
+    --project "$GCP_PROJECT" \
+    --data-file="$CAPACITY_CLEANUP_TOKEN_FILE" >/dev/null
+fi
+CAPACITY_CLEANUP_TOKEN="$(cat "$CAPACITY_CLEANUP_TOKEN_FILE")"
+rm -f "$CAPACITY_CLEANUP_TOKEN_FILE"
 
 log "Granting GPU capacity cleanup token access to runtime service account"
 gcloud secrets add-iam-policy-binding "$CAPACITY_CLEANUP_TOKEN_SECRET_NAME" \
@@ -403,7 +422,6 @@ SERVICE_URL=$(gcloud run services describe "$SERVICE_NAME" \
   --region "$REGION" \
   --format='value(status.url)')
 
-CAPACITY_CLEANUP_TOKEN=$(gcloud secrets versions access latest --secret="$CAPACITY_CLEANUP_TOKEN_SECRET_NAME" --project "$GCP_PROJECT")
 SCHEDULER_ARGS=(
   --project "$GCP_PROJECT"
   --location "$REGION"

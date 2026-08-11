@@ -648,6 +648,18 @@
           if (generation !== state.commandStatusRefreshGeneration) {
             return;
           }
+          if (!data) {
+            return;
+          }
+          // The command request can take longer than the first background
+          // refresh. Keep its progress message until it returns instead of
+          // presenting an older pre-create/pre-delete status as final.
+          if (String(state.activeCommand || "") === command) {
+            if (state.isPageLoading && state.user && generation === state.commandStatusRefreshGeneration) {
+              schedulePostCommandStatusRefresh(command, generation);
+            }
+            return;
+          }
           const stillUpdating = isTransitionalStatus(data);
           setCommandStatus(
             statusBannerMessage(stillUpdating ? `Command "${command}" still updating` : `Command "${command}" status refreshed`, data),
@@ -1669,7 +1681,7 @@
       elements.instancesList.className = "instance-list empty";
       elements.instancesList.textContent = "No managed Compute Engine instances are currently created.";
       if (elements.instancesStatus) {
-        elements.instancesStatus.textContent = "No created Compute Engine instances were found.";
+        elements.instancesStatus.textContent = "";
       }
       updateActionAvailability();
       return;
@@ -2111,7 +2123,11 @@
 
     do {
       await wait(SUNSHINE_POLL_INTERVAL_MS);
-      payload = await refreshStatus({ silent: true, forceRender: true });
+      const refreshedPayload = await refreshStatus({ silent: true, forceRender: true });
+      if (!refreshedPayload) {
+        continue;
+      }
+      payload = refreshedPayload;
       if (isTransitionalStatus(payload)) {
         setCommandStatus(statusBannerMessage(`Command "${command}" still updating`, payload), "warning");
       }
@@ -2522,6 +2538,8 @@
       }
     }
 
+    // Invalidate any Status request already in flight before mutating the VM.
+    state.statusRequestGeneration = Number(state.statusRequestGeneration || 0) + 1;
     const loadingToken = setPageLoading(`Running "${command}"...`);
     setBusy(true);
     state.activeCommand = command;
@@ -2922,6 +2940,7 @@
   async function refreshStatus(options) {
     const silent = Boolean(options && options.silent);
     const forceRender = Boolean(options && options.forceRender);
+    const requestGeneration = Number(state.statusRequestGeneration || 0);
     if (!state.user) {
       throw new Error("Sign in with Google first.");
     }
@@ -2934,6 +2953,11 @@
     try {
       const requestTargetKey = selectedTargetKey();
       const data = await fetchApi(`/api/status${statusQueryString()}`, { method: "GET" });
+      // Status remains available during actions. A response started before a
+      // lifecycle command must not overwrite the command's newer VM state.
+      if (requestGeneration !== Number(state.statusRequestGeneration || 0)) {
+        return null;
+      }
       if (!forceRender && requestTargetKey !== selectedTargetKey()) {
         return data;
       }
@@ -3351,6 +3375,9 @@
     elements.refreshStatus.addEventListener("click", async () => {
       try {
         const data = await refreshStatus({ silent: true });
+        if (!data) {
+          return;
+        }
         const activeCommand = String(state.activeCommand || "");
         setCommandStatus(
           statusBannerMessage(activeCommand ? `Command "${activeCommand}" still updating` : "VM status loaded", data),
@@ -3386,6 +3413,9 @@
         const loadingToken = state.isPageLoading ? null : setPageLoading("Refreshing VM status...");
         try {
           const data = await refreshStatus({ silent: true });
+          if (!data) {
+            return;
+          }
           const activeCommand = String(state.activeCommand || "");
           setCommandStatus(
             statusBannerMessage(activeCommand ? `Command "${activeCommand}" still updating` : "VM status loaded", data),
