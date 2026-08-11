@@ -461,16 +461,8 @@ select {
   gap: 8px;
 }
 
-.gpu-scan-profile-picker > span,
-.gpu-scan-profile-picker > p {
+.gpu-scan-profile-picker > span {
   font-size: 0.92rem;
-}
-
-.gpu-scan-profile-picker > p {
-  min-height: 1.2em;
-  margin: 0;
-  color: var(--muted);
-  font-size: 0.76rem;
 }
 
 .gpu-scan-profile-picker details {

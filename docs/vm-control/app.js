@@ -148,7 +148,6 @@
     gpuScanScope: document.querySelector("#gpu-scan-scope"),
     gpuScanProfiles: document.querySelector("#gpu-scan-profiles"),
     gpuScanProfilesSummary: document.querySelector("#gpu-scan-profiles-summary"),
-    gpuScanProfilesCount: document.querySelector("#gpu-scan-profiles-count"),
     refreshHardware: document.querySelector("#refresh-hardware"),
     scanSelectedGpu: document.querySelector("#scan-selected-gpu"),
     scanAllGpuZones: document.querySelector("#scan-all-gpu-zones"),
@@ -1085,13 +1084,8 @@
     const targetCount = gpuScanTargetCount(selectedProfiles);
     if (elements.gpuScanProfilesSummary) {
       elements.gpuScanProfilesSummary.textContent = selectedProfiles.length
-        ? `${selectedProfiles.length} GPU profile${selectedProfiles.length === 1 ? "" : "s"} selected`
+        ? `${selectedProfiles.length} GPU profile${selectedProfiles.length === 1 ? "" : "s"} selected - ${targetCount} GPU-zone test${targetCount === 1 ? "" : "s"}`
         : "No GPU profiles selected";
-    }
-    if (elements.gpuScanProfilesCount) {
-      elements.gpuScanProfilesCount.textContent = selectedProfiles.length
-        ? `${targetCount} GPU-zone test${targetCount === 1 ? "" : "s"} in ${gpuScanScopeLabel()}.`
-        : "Choose one or more GPU profiles for the geographic scan.";
     }
   }
 
@@ -1652,7 +1646,7 @@
     setBanner(message, cleanupFailures ? "warning" : "success");
   }
 
-  async function scanSelectedGpuProfilesAcrossZones() {
+  async function scanSelectedGpuProfilesAcrossZones(options = {}) {
     if (state.gpuAvailabilityScan) {
       resetGpuAvailabilityScan();
       renderZoneOptions();
@@ -1673,7 +1667,7 @@
     if (!targets.length) {
       throw new Error(`No compatible GPU zones are declared in ${gpuScanScopeLabel(scope)} for the selected profiles.`);
     }
-    if (profiles.length > 1 && !window.confirm(`This will create and immediately release ${targets.length} short-lived GPU capacity reservations for ${profiles.length} selected GPU profiles. It may take several minutes and may be cancelled. Continue?`)) {
+    if (profiles.length > 1 && !options.confirmed && !window.confirm(`This will create and immediately release ${targets.length} short-lived GPU capacity reservations for ${profiles.length} selected GPU profiles. It may take several minutes and may be cancelled. Continue?`)) {
       setCommandStatus("Selected GPU capacity scan cancelled before it started.", "neutral");
       return;
     }
@@ -3884,6 +3878,12 @@
     elements.refreshHardware.addEventListener("click", async () => {
       const restoringZones = Boolean(state.gpuAvailabilityScan);
       const scope = selectedGpuScanScope();
+      const profiles = selectedGpuScanProfiles();
+      const targetCount = gpuScanTargetCount(profiles, scope);
+      if (!restoringZones && profiles.length > 1 && !window.confirm(`This will create and immediately release ${targetCount} short-lived GPU capacity reservations for ${profiles.length} selected GPU profiles. It may take several minutes and may be cancelled. Continue?`)) {
+        setCommandStatus("Selected GPU capacity scan cancelled before it started.", "neutral");
+        return;
+      }
       const loadingToken = setPageLoading(restoringZones
         ? "Restoring compatible GPU zones..."
         : scope === "all"
@@ -3891,7 +3891,7 @@
           : `Scanning selected GPU capacity in ${gpuScanScopeLabel(scope)}...`);
       try {
         setBusy(true);
-        await scanSelectedGpuProfilesAcrossZones();
+        await scanSelectedGpuProfilesAcrossZones({ confirmed: true });
       } catch (error) {
         handleError(error);
       } finally {
