@@ -447,7 +447,7 @@ select {
 }
 
 .zone-gpu-scan-row {
-  grid-template-columns: minmax(0, 1.35fr) minmax(250px, 1fr);
+  grid-template-columns: minmax(0, 1.35fr) minmax(220px, 1fr) minmax(250px, 1fr);
 }
 
 .single-zone-gpu-scan-row {
