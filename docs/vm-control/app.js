@@ -144,10 +144,11 @@
     endpointSelect: document.querySelector("#endpoint-select"),
     endpointStatus: document.querySelector("#endpoint-status"),
     hardwareSelect: document.querySelector("#hardware-select"),
+    hardwarePicker: document.querySelector("#hardware-picker"),
     zoneSelect: document.querySelector("#zone-select"),
     gpuScanScope: document.querySelector("#gpu-scan-scope"),
-    gpuScanProfiles: document.querySelector("#gpu-scan-profiles"),
-    gpuScanProfilesSummary: document.querySelector("#gpu-scan-profiles-summary"),
+    gpuScanProfiles: document.querySelector("#hardware-picker-options"),
+    gpuScanProfilesSummary: document.querySelector("#hardware-picker-summary"),
     refreshHardware: document.querySelector("#refresh-hardware"),
     scanSelectedGpu: document.querySelector("#scan-selected-gpu"),
     scanAllGpuZones: document.querySelector("#scan-all-gpu-zones"),
@@ -184,6 +185,7 @@
     gpuAvailabilityScanRun: null,
     gpuScanProfileIds: [],
     gpuScanProfilesCustomized: false,
+    visibleHardwareProfiles: [],
     allGpuZoneAvailabilityScan: null,
     allGpuZoneAvailabilityScanRun: null,
     googleInitializedFor: "",
@@ -1057,12 +1059,13 @@
     return profiles.reduce((total, profile) => total + zonesForGpuScanScope(profile.zones || [], scope).length, 0);
   }
 
-  function renderGpuScanProfileOptions() {
+  function renderGpuScanProfileOptions(profiles = state.visibleHardwareProfiles) {
     if (!elements.gpuScanProfiles) {
       return;
     }
-    const profiles = eligibleGpuScanProfiles();
-    const allowedIds = new Set(profiles.map((profile) => String(profile.id)));
+    const visibleProfiles = Array.isArray(profiles) && profiles.length ? profiles : getHardwareProfiles();
+    const gpuProfiles = eligibleGpuScanProfiles();
+    const allowedIds = new Set(gpuProfiles.map((profile) => String(profile.id)));
     if (!state.gpuScanProfilesCustomized) {
       const selectedProfile = selectedHardwareProfile();
       state.gpuScanProfileIds = selectedProfile && allowedIds.has(String(selectedProfile.id))
@@ -1072,20 +1075,35 @@
       state.gpuScanProfileIds = state.gpuScanProfileIds.filter((id) => allowedIds.has(String(id)));
     }
     const selectedIds = new Set(state.gpuScanProfileIds.map((id) => String(id)));
-    elements.gpuScanProfiles.innerHTML = profiles.length
-      ? profiles.map((profile) => {
+    const selectedHardwareId = String(elements.hardwareSelect && elements.hardwareSelect.value || "");
+    const zone = selectedZone();
+    elements.gpuScanProfiles.innerHTML = visibleProfiles.length
+      ? visibleProfiles.map((profile) => {
         const id = String(profile.id);
+        const gpuCount = Number(profile.gpuCount || 0);
         const vram = Number(profile.vramGb || 0) > 0 ? `, ${Number(profile.vramGb)} GB VRAM` : "";
-        const label = `${String(profile.label || id)} (${String(profile.gpuType || id)}${vram}, ${profile.zones.length} zones)`;
-        return `<label><input type="checkbox" value="${escapeHtml(id)}" ${selectedIds.has(id) ? "checked" : ""}><span>${escapeHtml(label)}</span></label>`;
+        const compatibility = sunshineCompatibility(profile);
+        const compatibilityLabel = gpuCount > 0 ? ` [Sunshine: ${compatibility.label}]` : "";
+        const price = gpuCount > 0 && profile.priceEstimate && profile.priceEstimate.display ? ` - ${profile.priceEstimate.display}` : "";
+        const unavailable = !hardwareProfileSupported(profile)
+          ? ` - Create unavailable: ${String(profile.unavailableReason || "unsupported by this VM stack")}`
+          : "";
+        const zoneUnavailable = gpuCount > 0 && zone && !profile.zones.includes(zone);
+        const label = `${String(profile.label || id)}${compatibilityLabel}${price} (${gpuCount > 0 ? `${String(profile.gpuType || id)}${vram}, ${profile.machineType || "machine"}, ${profile.zones.length} zones` : String(profile.machineType || "machine")})${unavailable}`;
+        const scanToggle = allowedIds.has(id)
+          ? `<label class="hardware-picker-scan-toggle" title="Include this GPU in the geographic capacity scan"><input type="checkbox" value="${escapeHtml(id)}" ${selectedIds.has(id) ? "checked" : ""}><span>Scan</span></label>`
+          : "";
+        return `<div class="hardware-picker-option"><button type="button" class="hardware-picker-select sunshine-${escapeHtml(compatibility.state)}${String(selectedHardwareId) === id ? " is-selected" : ""}${zoneUnavailable ? " is-zone-unavailable" : ""}" data-hardware-select="${escapeHtml(id)}">${escapeHtml(label)}${zoneUnavailable ? " [Zone: unavailable]" : ""}</button>${scanToggle}</div>`;
       }).join("")
       : "<span>No GPU profiles are configured for the capacity scan.</span>";
     const selectedProfiles = selectedGpuScanProfiles();
     const targetCount = gpuScanTargetCount(selectedProfiles);
     if (elements.gpuScanProfilesSummary) {
-      elements.gpuScanProfilesSummary.textContent = selectedProfiles.length
-        ? `${selectedProfiles.length} GPU profile${selectedProfiles.length === 1 ? "" : "s"} selected - ${targetCount} GPU-zone test${targetCount === 1 ? "" : "s"}`
-        : "No GPU profiles selected";
+      const primaryLabel = selectedHardwareProfile() ? String(selectedHardwareProfile().label || selectedHardwareProfile().id) : "Select hardware";
+      const scanLabels = selectedProfiles.map((profile) => String(profile.label || profile.id));
+      elements.gpuScanProfilesSummary.textContent = scanLabels.length
+        ? `${primaryLabel} · scan: ${scanLabels.join(", ")} (${targetCount} tests)`
+        : `${primaryLabel} · no GPU scan profile selected`;
     }
   }
 
@@ -1156,7 +1174,7 @@
       elements.gpuScanScope.disabled = state.isBusy || !state.user || running;
     }
     if (elements.gpuScanProfiles) {
-      elements.gpuScanProfiles.querySelectorAll("input").forEach((input) => {
+      elements.gpuScanProfiles.querySelectorAll("input, [data-hardware-select]").forEach((input) => {
         input.disabled = state.isBusy || !state.user || running;
       });
     }
@@ -1270,29 +1288,7 @@
   }
 
   function updateHardwareZoneAvailability() {
-    if (!elements.hardwareSelect) {
-      return;
-    }
-    const zone = selectedZone();
-    elements.hardwareSelect.querySelectorAll("option[data-base-label]").forEach((option) => {
-      const profile = getHardwareProfiles().find((item) => String(item.id) === String(option.value));
-      const zoneUnavailable = Boolean(
-        profile
-        && Number(profile.gpuCount || 0) > 0
-        && zone
-        && !profile.zones.includes(zone)
-      );
-      option.classList.toggle("zone-unavailable", zoneUnavailable);
-      const baseLabel = option.dataset.baseLabel || option.textContent;
-      const hardwareLabel = option.dataset.hardwareLabel || baseLabel;
-      const unavailableLabel = [...hardwareLabel]
-        .map((character) => (/\s/.test(character) ? character : `${character}\u0336`))
-        .join("");
-      const unavailableBaseLabel = baseLabel.startsWith(hardwareLabel)
-        ? `${unavailableLabel}${baseLabel.slice(hardwareLabel.length)}`
-        : baseLabel;
-      option.textContent = `${zoneUnavailable ? unavailableBaseLabel : baseLabel}${zoneUnavailable ? " [Zone: unavailable]" : ""}`;
-    });
+    renderGpuScanProfileOptions();
   }
 
   function renderHardwareOptions(payload) {
@@ -1303,6 +1299,7 @@
     state.hardwarePayload = payload || state.hardwarePayload;
     const allProfiles = getHardwareProfiles();
     if (!allProfiles.length) {
+      state.visibleHardwareProfiles = [];
       elements.hardwareSelect.innerHTML = '<option value="">No hardware profiles loaded</option>';
       elements.zoneSelect.innerHTML = '<option value="">No zones loaded</option>';
       renderHardwarePriceEstimate(null);
@@ -1328,6 +1325,7 @@
       ));
     }
     const selectableProfiles = profiles;
+    state.visibleHardwareProfiles = profiles;
 
     const previousHardware = elements.hardwareSelect.value
       || elements.hardwareSelect.dataset.savedValue
@@ -3929,6 +3927,21 @@
   }
 
   if (elements.gpuScanProfiles) {
+    elements.gpuScanProfiles.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-hardware-select]");
+      if (!button || !elements.hardwareSelect || button.disabled) {
+        return;
+      }
+      const hardwareId = String(button.dataset.hardwareSelect || "");
+      if (!hardwareId || elements.hardwareSelect.value === hardwareId) {
+        return;
+      }
+      if (elements.hardwarePicker) {
+        elements.hardwarePicker.open = false;
+      }
+      elements.hardwareSelect.value = hardwareId;
+      elements.hardwareSelect.dispatchEvent(new Event("change", { bubbles: true }));
+    });
     elements.gpuScanProfiles.addEventListener("change", (event) => {
       const input = event.target.closest('input[type="checkbox"]');
       if (!input) {

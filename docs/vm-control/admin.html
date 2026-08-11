@@ -131,10 +131,14 @@
 
             <div class="hardware-zone-actions">
               <div class="hardware-scan-row">
-                <label>
+                <div class="hardware-picker">
                   <span>Hardware</span>
-                  <select id="hardware-select" name="hardware-select"><option value="">Connect and sign in to load hardware</option></select>
-                </label>
+                  <details id="hardware-picker">
+                    <summary id="hardware-picker-summary">Loading hardware profiles...</summary>
+                    <div id="hardware-picker-options" class="hardware-picker-options" role="group" aria-label="Hardware and GPU profiles to scan"></div>
+                  </details>
+                  <select id="hardware-select" class="native-hardware-select" name="hardware-select" tabindex="-1" aria-hidden="true"><option value="">Connect and sign in to load hardware</option></select>
+                </div>
                 <label>
                   <span>GPU scan scope</span>
                   <select id="gpu-scan-scope" name="gpu-scan-scope">
@@ -146,13 +150,6 @@
                     <option value="africa">Africa</option>
                   </select>
                 </label>
-                <div class="gpu-scan-profile-picker">
-                  <span>GPUs to scan</span>
-                  <details>
-                    <summary id="gpu-scan-profiles-summary">Loading GPU profiles...</summary>
-                    <div id="gpu-scan-profiles" class="gpu-scan-profile-list" role="group" aria-label="GPU profiles to scan"></div>
-                  </details>
-                </div>
                 <div class="control-row">
                   <button id="refresh-hardware" class="ghost" type="button">Scan All Compatible GPU Zones</button>
                 </div>
