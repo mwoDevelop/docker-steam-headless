@@ -314,6 +314,31 @@
     updateAuthUi();
   }
 
+  function requestAdminSessionFromOpener() {
+    if (state.token || !window.opener) {
+      return Promise.resolve(false);
+    }
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (received) => {
+        if (settled) return;
+        settled = true;
+        window.removeEventListener("message", receiveSession);
+        resolve(received);
+      };
+      const receiveSession = (event) => {
+        if (event.origin !== window.location.origin || event.data?.type !== adminSessionResponse) return;
+        const token = String(event.data?.token || "");
+        if (!token) return;
+        storeSessionToken(token);
+        finish(true);
+      };
+      window.addEventListener("message", receiveSession);
+      window.opener.postMessage({ type: adminSessionRequest }, window.location.origin);
+      window.setTimeout(() => finish(false), 1000);
+    });
+  }
+
   function saveConfig() {
     state.backendUrl = sanitizeBackendUrl(elements.backendUrl.value);
     window.localStorage.setItem(
@@ -4130,6 +4155,7 @@
     setPageLoading("Preparing page components...");
     try {
       loadConfig();
+      await requestAdminSessionFromOpener();
       setBusy(false);
       if (!state.backendUrl) {
         return;

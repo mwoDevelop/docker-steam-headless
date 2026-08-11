@@ -122,6 +122,10 @@ zakończyć się prawdziwym błędem pojemności GCE.
 5. **Uprawnienia:** przygotowanie endpointu i link do administracyjnego GUI są
    operacjami administratora. Backend ponownie sprawdza konto niezależnie od
    widoczności elementu strony.
+6. **Nowa karta i sesja:** `sessionStorage` jest izolowane między kartami.
+   Link Scan & Create musi więc jednorazowo pobrać sesję przez
+   `window.opener.postMessage`, wyłącznie przy zgodnym originie, zanim załaduje
+   kontrolki; token nie może trafić do URL ani `localStorage`.
 
 ## Fazy implementacji
 
