@@ -198,6 +198,7 @@
     token: "",
     tokenExpiresAt: 0,
     user: null,
+    selectedEndpointId: "",
     lastStatus: null,
     lastStatusTargetKey: "",
     hardwarePayload: null,
@@ -295,7 +296,8 @@
       elements.hardwareSelect.dataset.savedValue = scanCreateHardwareId || String(saved.hardwareId);
     }
     if (elements.endpointSelect && (scanCreateEndpointId || saved.endpointId)) {
-      elements.endpointSelect.dataset.savedValue = scanCreateEndpointId || String(saved.endpointId);
+      state.selectedEndpointId = scanCreateEndpointId || String(saved.endpointId);
+      elements.endpointSelect.dataset.savedValue = state.selectedEndpointId;
     }
     if (elements.zoneSelect && scanCreateZone) {
       elements.zoneSelect.dataset.savedValue = scanCreateZone;
@@ -914,7 +916,7 @@
   }
 
   function selectedEndpointId() {
-    return String(elements.endpointSelect && elements.endpointSelect.value || "mwo-vm1").trim() || "mwo-vm1";
+    return String(state.selectedEndpointId || elements.endpointSelect && elements.endpointSelect.value || "mwo-vm1").trim() || "mwo-vm1";
   }
 
   function selectedEndpoint() {
@@ -949,7 +951,8 @@
       return;
     }
     const endpoints = config && Array.isArray(config.endpoints) ? config.endpoints : [];
-    const previous = elements.endpointSelect.value
+    const previous = state.selectedEndpointId
+      || elements.endpointSelect.value
       || elements.endpointSelect.dataset.savedValue
       || "mwo-vm1";
     elements.endpointSelect.innerHTML = endpoints.length
@@ -963,6 +966,7 @@
     if (endpoints.some((endpoint) => String(endpoint.id) === previous)) {
       elements.endpointSelect.value = previous;
     }
+    state.selectedEndpointId = String(elements.endpointSelect.value || "").trim();
     elements.endpointSelect.dataset.savedValue = "";
     renderEndpointStatus();
   }
@@ -2295,6 +2299,7 @@
     const endpoint = endpointForInstance(instance);
     if (endpoint && elements.endpointSelect) {
       elements.endpointSelect.value = String(endpoint.id || "");
+      state.selectedEndpointId = String(endpoint.id || "");
       renderEndpointStatus();
     }
     elements.hardwareSelect.value = String(profile.id || "");
@@ -3965,6 +3970,7 @@
   if (elements.endpointSelect) {
     elements.endpointSelect.addEventListener("change", async () => {
       const loadingToken = setPageLoading("Loading selected public endpoint...");
+      state.selectedEndpointId = String(elements.endpointSelect.value || "").trim();
       resetGpuAvailabilityScan();
       resetGpuCapacityProbeButton();
       try {
