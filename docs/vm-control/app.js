@@ -113,6 +113,16 @@
       detail: "Removing Minecraft container while preserving world data.",
     },
   };
+  const COMMAND_POWER_ACTION_TRANSITIONS = {
+    create: { action: "create", phase: "requested", label: "Create requested" },
+    start: { action: "start", phase: "requested", label: "Start requested" },
+    restart: { action: "restart", phase: "requested", label: "Restart requested" },
+    stop: { action: "stop", phase: "requested", label: "Stop requested" },
+    delete: { action: "delete", phase: "requested", label: "Delete requested" },
+    "create-backup": { action: "create-backup", phase: "requested", label: "Backup requested" },
+    "restore-backup": { action: "restore-backup", phase: "requested", label: "Restore requested" },
+    "remove-backup": { action: "remove-backup", phase: "requested", label: "Backup removal requested" },
+  };
   const COMMANDS_TO_POLL_AFTER_RESPONSE = new Set([
     "create",
     "start",
@@ -2626,21 +2636,31 @@
   function applyCommandTransition(command) {
     const sunshineStatus = COMMAND_SUNSHINE_TRANSITIONS[command];
     const minecraftStatus = COMMAND_MINECRAFT_TRANSITIONS[command];
+    const powerAction = COMMAND_POWER_ACTION_TRANSITIONS[command];
     if (!state.lastStatus) {
       return;
     }
+    const nextStatus = { ...state.lastStatus };
     if (sunshineStatus) {
-      renderStatusPayload(withSunshineStatus(state.lastStatus, sunshineStatus));
-      return;
+      nextStatus.sunshineStatus = {
+        ...(state.lastStatus.sunshineStatus || {}),
+        ...sunshineStatus,
+      };
     }
     if (minecraftStatus) {
-      renderStatusPayload({
-        ...state.lastStatus,
-        minecraftStatus: {
-          ...(state.lastStatus.minecraftStatus || {}),
-          ...minecraftStatus,
-        },
-      });
+      nextStatus.minecraftStatus = {
+        ...(state.lastStatus.minecraftStatus || {}),
+        ...minecraftStatus,
+      };
+    }
+    if (powerAction) {
+      nextStatus.powerAction = {
+        ...(state.lastStatus.powerAction || {}),
+        ...powerAction,
+      };
+    }
+    if (sunshineStatus || minecraftStatus || powerAction) {
+      renderStatusPayload(nextStatus);
     }
   }
 
