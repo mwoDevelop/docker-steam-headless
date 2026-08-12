@@ -136,6 +136,7 @@
     connect: document.querySelector("#connect"),
     pageLoader: document.querySelector("#page-loader"),
     pageLoaderMessage: document.querySelector("#page-loader-message"),
+    pageLoaderOperationProgress: document.querySelector("#page-loader-operation-progress"),
     appShell: document.querySelector("#app-shell"),
     authStatus: document.querySelector("#auth-status"),
     googleSignIn: document.querySelector("#google-sign-in"),
@@ -213,6 +214,7 @@
     history: [],
     isPageLoading: true,
     pageLoadingToken: 0,
+    operationProgressCommand: "",
     scanCreateResultRun: null,
     scrolledInitialHash: "",
   };
@@ -220,6 +222,7 @@
   function setPageLoading(message) {
     state.pageLoadingToken += 1;
     state.isPageLoading = true;
+    clearOperationProgress();
     if (!embeddedVmControl) {
       document.body.classList.add("is-page-loading");
     }
@@ -270,6 +273,7 @@
           elements.pageLoader.classList.remove("is-active");
         }
         elements.pageLoader.hidden = true;
+        clearOperationProgress();
       }
     }, 220);
   }
@@ -2693,6 +2697,136 @@
       || ["installing", "starting", "stopping", "backup", "restore", "removing"].includes(minecraftState);
   }
 
+  const OPERATION_PROGRESS_TITLES = {
+    create: "Creating VM",
+    start: "Starting VM",
+    restart: "Restarting VM",
+    stop: "Stopping VM",
+    delete: "Deleting VM",
+    "create-backup": "Creating backup",
+    "restore-backup": "Restoring backup",
+    "remove-backup": "Removing backup",
+    "install-app": "Installing application",
+    "uninstall-app": "Uninstalling application",
+    "install-minecraft": "Installing Minecraft server",
+    "start-minecraft": "Starting Minecraft server",
+    "stop-minecraft": "Stopping Minecraft server",
+    "restart-minecraft": "Restarting Minecraft server",
+    "remove-minecraft": "Removing Minecraft server",
+    "set-auto-stop": "Updating auto-stop",
+  };
+
+  function progressPayloadState(payload, path, fallback) {
+    const value = path.reduce((current, key) => current && current[key], payload);
+    return String(value || fallback || "unknown").trim();
+  }
+
+  function operationProgressDefinition(command) {
+    if (command === "create") {
+      return ["Request accepted", "Provisioning Compute Engine VM", "Preparing data disk", "Starting platform services", "Verifying ready state"];
+    }
+    if (command === "start") {
+      return ["Request accepted", "Starting Compute Engine VM", "Preparing data disk", "Starting platform services", "Verifying ready state"];
+    }
+    if (command === "restart") {
+      return ["Request accepted", "Restarting guest system", "Starting platform services", "Verifying ready state"];
+    }
+    if (command === "stop") {
+      return ["Request accepted", "Stopping guest system", "Verifying VM is stopped"];
+    }
+    if (command === "delete") {
+      return ["Request accepted", "Stopping VM", "Removing VM and attached disks", "Verifying resources were removed"];
+    }
+    if (["create-backup", "restore-backup"].includes(command)) {
+      return ["Request accepted", "Preparing VM data", "Transferring persisted data", "Verifying result"];
+    }
+    if (command === "remove-backup") {
+      return ["Request accepted", "Removing backup from storage", "Verifying backup catalog"];
+    }
+    if (["install-app", "uninstall-app", "install-minecraft", "start-minecraft", "stop-minecraft", "restart-minecraft", "remove-minecraft"].includes(command)) {
+      return ["Request accepted", "Waiting for VM management agent", "Applying requested software change", "Refreshing service status"];
+    }
+    return ["Request accepted", "Applying configuration", "Verifying result"];
+  }
+
+  function operationProgressIndex(command, payload, steps) {
+    if (!payload) return 0;
+    const vmState = String(payload.status || "NOT_FOUND").trim().toUpperCase();
+    const instanceExists = payload.instanceExists !== false && vmState !== "NOT_FOUND";
+    const dataDiskState = progressPayloadState(payload, ["persistence", "dataDisk", "state"]);
+    const sunshineState = progressPayloadState(payload, ["sunshineStatus", "state"]);
+    const minecraftState = progressPayloadState(payload, ["minecraftStatus", "state"]);
+    const restoreState = progressPayloadState(payload, ["persistence", "restore", "state"]);
+    const archiveState = progressPayloadState(payload, ["persistence", "gamesArchive", "state"]);
+    const servicesReady = vmState === "RUNNING"
+      && ["ready", "disabled"].includes(sunshineState.toLowerCase())
+      && !isTransitionalStatus(payload);
+
+    if (["create", "start"].includes(command)) {
+      if (!instanceExists) return 1;
+      if (vmState !== "RUNNING") return 1;
+      if (!["ready", "disabled", "missing"].includes(dataDiskState.toLowerCase())) return 2;
+      if (!servicesReady) return 3;
+      return steps.length - 1;
+    }
+    if (command === "restart") {
+      const phase = progressPayloadState(payload, ["powerAction", "phase"]);
+      if (["requested", "running", "rebooting", "stopping"].includes(phase.toLowerCase()) || vmState !== "RUNNING") return 1;
+      if (!servicesReady) return 2;
+      return steps.length - 1;
+    }
+    if (command === "stop") {
+      return ["TERMINATED", "NOT_FOUND"].includes(vmState) ? steps.length - 1 : 1;
+    }
+    if (command === "delete") {
+      if (!instanceExists) return steps.length - 1;
+      if (["TERMINATED", "STOPPING"].includes(vmState)) return 2;
+      return 1;
+    }
+    if (["create-backup", "restore-backup"].includes(command)) {
+      if (["running", "restoring", "starting", "preparing"].includes(restoreState.toLowerCase()) || ["running", "archiving", "uploading"].includes(archiveState.toLowerCase())) return 2;
+      return isTransitionalStatus(payload) ? 1 : steps.length - 1;
+    }
+    if (["install-app", "uninstall-app", "install-minecraft", "start-minecraft", "stop-minecraft", "restart-minecraft", "remove-minecraft"].includes(command)) {
+      if (["installing", "starting", "stopping", "removing", "backup", "restore"].includes(minecraftState.toLowerCase())) return 2;
+      return isTransitionalStatus(payload) ? 1 : steps.length - 1;
+    }
+    return isTransitionalStatus(payload) ? 1 : steps.length - 1;
+  }
+
+  function renderOperationProgress(command, payload) {
+    const container = elements.pageLoaderOperationProgress;
+    if (!container || !command) return;
+    const steps = operationProgressDefinition(command);
+    const index = Math.min(Math.max(operationProgressIndex(command, payload, steps), 0), steps.length - 1);
+    const progressState = payload ? "Live status received" : "Waiting for first VM status";
+    const facts = payload ? [
+      ["VM", String(payload.status || "NOT_FOUND")],
+      ["VM action", progressPayloadState(payload, ["powerAction", "label"], progressPayloadState(payload, ["powerAction", "phase"]))],
+      ["Data disk", progressPayloadState(payload, ["persistence", "dataDisk", "label"], progressPayloadState(payload, ["persistence", "dataDisk", "state"]))],
+      ["Sunshine", progressPayloadState(payload, ["sunshineStatus", "label"], progressPayloadState(payload, ["sunshineStatus", "state"]))],
+      ["Minecraft", progressPayloadState(payload, ["minecraftStatus", "label"], progressPayloadState(payload, ["minecraftStatus", "state"]))],
+    ] : [["VM", "Waiting for status"], ["Service", "Waiting for status"]];
+    container.hidden = false;
+    container.innerHTML = `
+      <div class="operation-progress-head">
+        <p class="operation-progress-title">${escapeHtml(OPERATION_PROGRESS_TITLES[command] || "VM operation")}</p>
+        <p class="operation-progress-stage">${escapeHtml(progressState)}</p>
+      </div>
+      <progress class="operation-progress-meter" value="${index + 1}" max="${steps.length}"></progress>
+      <ol class="operation-progress-steps">${steps.map((step, stepIndex) => `<li data-state="${stepIndex < index ? "done" : stepIndex === index ? "active" : "pending"}">${escapeHtml(step)}</li>`).join("")}</ol>
+      <ul class="operation-progress-facts">${facts.map(([label, value]) => `<li><strong>${escapeHtml(label)}</strong>${escapeHtml(value)}</li>`).join("")}</ul>
+    `;
+    state.operationProgressCommand = command;
+  }
+
+  function clearOperationProgress() {
+    state.operationProgressCommand = "";
+    if (!elements.pageLoaderOperationProgress) return;
+    elements.pageLoaderOperationProgress.hidden = true;
+    elements.pageLoaderOperationProgress.innerHTML = "";
+  }
+
   async function waitForStatusSettled(command, initialPayload) {
     if (!COMMANDS_TO_POLL_AFTER_RESPONSE.has(command)) {
       return initialPayload;
@@ -2708,6 +2842,7 @@
         continue;
       }
       payload = refreshedPayload;
+      renderOperationProgress(command, payload);
       if (isTransitionalStatus(payload)) {
         setCommandStatus(statusBannerMessage(`Command "${command}" still updating`, payload), "warning");
       }
@@ -3134,6 +3269,7 @@
     state.activeCommand = command;
     setCommandStatus(`Running "${command}" on the VM...`, "warning");
     applyCommandTransition(command);
+    renderOperationProgress(command, state.lastStatus);
     const previousStatus = state.lastStatus;
     const previousStatusTargetKey = state.lastStatusTargetKey;
     schedulePostCommandStatusRefresh(command);
@@ -3572,6 +3708,9 @@
         return data;
       }
       renderStatusPayload(data, requestTargetKey);
+      if (state.activeCommand) {
+        renderOperationProgress(state.activeCommand, data);
+      }
       await refreshGpuCapacityReservationCount();
       if (!options || options.refreshInstances !== false) {
         try {

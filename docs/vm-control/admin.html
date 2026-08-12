@@ -85,6 +85,7 @@
           <div>
             <p class="page-loader-kicker">Loading VM Control</p>
             <p id="page-loader-message">Preparing VM control...</p>
+            <section id="page-loader-operation-progress" class="operation-progress" aria-live="polite" hidden></section>
             <div class="page-loader-scan-actions">
               <button id="pause-gpu-scan" class="ghost page-loader-cancel hidden" type="button">Pause Scan and Release Reservations</button>
               <button id="cancel-gpu-scan" class="ghost danger page-loader-cancel hidden" type="button">Cancel Scan and Release Reservations</button>
@@ -504,6 +505,6 @@
     </main>
 
     <script src="./admin.js?v=migration-zone-select-20260812"></script>
-    <script src="./app.js?v=compute-read-quota-guard-20260812"></script>
+    <script src="./app.js?v=operation-progress-20260812"></script>
   </body>
 </html>

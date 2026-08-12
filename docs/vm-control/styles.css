@@ -195,6 +195,125 @@ body:not(.is-page-loading) .page-loader {
   line-height: 1.45;
 }
 
+.operation-progress {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+  padding: 13px;
+  border: 1px solid rgba(106, 228, 208, 0.2);
+  border-radius: 14px;
+  background: rgba(2, 12, 18, 0.54);
+}
+
+.operation-progress[hidden] {
+  display: none;
+}
+
+.operation-progress-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.operation-progress-title {
+  margin: 0;
+  font-size: 0.84rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.operation-progress-stage {
+  margin: 0;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.72rem;
+  color: var(--accent);
+  text-align: right;
+}
+
+.operation-progress-meter {
+  width: 100%;
+  height: 6px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.operation-progress-meter::-webkit-progress-bar {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.operation-progress-meter::-webkit-progress-value {
+  background: linear-gradient(90deg, var(--accent), #f2c66d);
+}
+
+.operation-progress-meter::-moz-progress-bar {
+  background: linear-gradient(90deg, var(--accent), #f2c66d);
+}
+
+.operation-progress-steps,
+.operation-progress-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.operation-progress-steps li,
+.operation-progress-facts li {
+  min-width: 0;
+  padding: 7px 9px;
+  border-radius: 9px;
+  font-size: 0.75rem;
+  line-height: 1.35;
+}
+
+.operation-progress-steps li {
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  color: var(--muted);
+}
+
+.operation-progress-steps li[data-state="done"] {
+  border-color: rgba(106, 228, 208, 0.35);
+  color: var(--accent);
+}
+
+.operation-progress-steps li[data-state="active"] {
+  border-color: rgba(242, 198, 109, 0.56);
+  background: rgba(242, 198, 109, 0.1);
+  color: #ffe0a1;
+}
+
+.operation-progress-facts li {
+  background: rgba(255, 255, 255, 0.045);
+  color: var(--muted);
+}
+
+.operation-progress-facts strong {
+  display: block;
+  margin-bottom: 2px;
+  color: var(--text);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.67rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+@media (max-width: 640px) {
+  .operation-progress-head {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .operation-progress-stage {
+    text-align: left;
+  }
+}
+
 .page-loader-cancel {
   margin-top: 12px;
 }
