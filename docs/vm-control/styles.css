@@ -76,6 +76,12 @@ body::before {
   pointer-events: auto;
 }
 
+/* The VM Control loader owns the initial page transition. Do not let the
+   independent administration loader visually overlap it during a refresh. */
+#page-loader:not([hidden]) + #admin-page-loader {
+  display: none !important;
+}
+
 #page-loader.embedded-page-loader.is-active,
 .admin-page-loader {
   display: flex;

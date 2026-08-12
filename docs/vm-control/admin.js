@@ -89,6 +89,7 @@
     automaticRefreshInFlight: false,
   };
   let automaticRefreshTimer = 0;
+  let adminLoaderDeferredTimer = 0;
 
   function loadConfig() {
     const saved = JSON.parse(window.localStorage.getItem(storageKeys.config) || "{}");
@@ -105,17 +106,40 @@
     window.localStorage.setItem(storageKeys.config, JSON.stringify(saved));
   }
 
+  function vmControlLoaderVisible() {
+    const loader = document.querySelector("#page-loader");
+    return Boolean(loader && !loader.hidden);
+  }
+
   function setAdminPageLoading(nextBusy, message) {
     const loader = document.querySelector("#admin-page-loader");
     const loaderMessage = document.querySelector("#admin-page-loader-message");
     if (!loader) {
       return;
     }
-    loader.hidden = !nextBusy;
-    loader.setAttribute("aria-busy", String(nextBusy));
-    if (nextBusy && loaderMessage) {
+    window.clearTimeout(adminLoaderDeferredTimer);
+    if (!nextBusy) {
+      loader.hidden = true;
+      loader.setAttribute("aria-busy", "false");
+      return;
+    }
+    if (loaderMessage) {
       loaderMessage.textContent = message || "Updating administrator controls...";
     }
+    const showWhenVmControlLoaderIsGone = () => {
+      if (!state.isBusy) {
+        return;
+      }
+      if (vmControlLoaderVisible()) {
+        loader.hidden = true;
+        loader.setAttribute("aria-busy", "false");
+        adminLoaderDeferredTimer = window.setTimeout(showWhenVmControlLoaderIsGone, 80);
+        return;
+      }
+      loader.hidden = false;
+      loader.setAttribute("aria-busy", "true");
+    };
+    showWhenVmControlLoaderIsGone();
   }
 
   function setBusy(nextBusy, loadingMessage) {
