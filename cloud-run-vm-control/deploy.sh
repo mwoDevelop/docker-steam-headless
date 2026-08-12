@@ -152,6 +152,7 @@ log "Granting Compute Engine VM control role to runtime service account"
 gcloud projects add-iam-policy-binding "$GCP_PROJECT" \
   --member="serviceAccount:${RUNTIME_SA_EMAIL}" \
   --role="roles/compute.instanceAdmin.v1" \
+  --condition=None \
   --quiet >/dev/null
 
 ENDPOINT_ADDRESS_ROLE_ID="vmControlEndpointAddresses"
@@ -170,6 +171,7 @@ log "Granting endpoint static IP role to runtime service account"
 gcloud projects add-iam-policy-binding "$GCP_PROJECT" \
   --member="serviceAccount:${RUNTIME_SA_EMAIL}" \
   --role="$ENDPOINT_ADDRESS_ROLE" \
+  --condition=None \
   --quiet >/dev/null
 
 CAPACITY_RESERVATION_ROLE_ID="vmControlCapacityReservations"
@@ -188,12 +190,14 @@ log "Granting GPU capacity reservation role to runtime service account"
 gcloud projects add-iam-policy-binding "$GCP_PROJECT" \
   --member="serviceAccount:${RUNTIME_SA_EMAIL}" \
   --role="$CAPACITY_RESERVATION_ROLE" \
+  --condition=None \
   --quiet >/dev/null
 
 log "Granting Service Usage consumer role to runtime service account"
 gcloud projects add-iam-policy-binding "$GCP_PROJECT" \
   --member="serviceAccount:${RUNTIME_SA_EMAIL}" \
   --role="roles/serviceusage.serviceUsageConsumer" \
+  --condition=None \
   --quiet >/dev/null
 
 if ! gcloud secrets describe "$ACCESS_USERS_SECRET_NAME" --project "$GCP_PROJECT" >/dev/null 2>&1; then
@@ -364,6 +368,7 @@ log "Granting Compute Engine firewall management role to runtime service account
 gcloud projects add-iam-policy-binding "$GCP_PROJECT" \
   --member="serviceAccount:${RUNTIME_SA_EMAIL}" \
   --role="roles/compute.securityAdmin" \
+  --condition=None \
   --quiet >/dev/null
 
 log "Granting Google IAP TCP access to configured administrators"
@@ -373,6 +378,7 @@ while IFS= read -r admin_email; do
   gcloud projects add-iam-policy-binding "$GCP_PROJECT" \
     --member="user:${admin_email}" \
     --role="roles/iap.tunnelResourceAccessor" \
+    --condition=None \
     --quiet >/dev/null
 done < <(printf '%s' "$ADMIN_GOOGLE_EMAILS" | tr ',;' '\n\n')
 
