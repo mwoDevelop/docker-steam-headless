@@ -3352,6 +3352,11 @@
       }
       renderStatusPayload(data);
       if (COMMANDS_TO_POLL_AFTER_RESPONSE.has(command)) {
+        // The command endpoint can return before the guest has written its
+        // action metadata. Keep the accepted action visible until the first
+        // live status poll replaces this optimistic transition.
+        applyCommandTransition(command);
+        renderOperationProgress(command, state.lastStatus);
         setCommandStatus(`Command "${command}" accepted. Waiting for current VM and Sunshine status...`, "warning");
         data = await waitForStatusSettled(command, data);
         renderStatusPayload(data);
