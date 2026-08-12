@@ -2732,7 +2732,7 @@
       return ["Request accepted", "Restarting guest system", "Starting platform services", "Verifying ready state"];
     }
     if (command === "stop") {
-      return ["Request accepted", "Stopping guest system", "Verifying VM is stopped"];
+      return ["Request accepted", "Stopping guest services", "Saving VM state to Google Drive", "Powering off VM", "Verifying VM is stopped"];
     }
     if (command === "delete") {
       return ["Request accepted", "Stopping VM", "Removing VM and attached disks", "Verifying resources were removed"];
@@ -2776,7 +2776,11 @@
       return steps.length - 1;
     }
     if (command === "stop") {
-      return ["TERMINATED", "NOT_FOUND"].includes(vmState) ? steps.length - 1 : 1;
+      const phase = progressPayloadState(payload, ["powerAction", "phase"]);
+      if (["TERMINATED", "NOT_FOUND"].includes(vmState)) return steps.length - 1;
+      if (vmState === "STOPPING") return 3;
+      if (phase.toLowerCase() === "running") return 2;
+      return 1;
     }
     if (command === "delete") {
       if (!instanceExists) return steps.length - 1;
