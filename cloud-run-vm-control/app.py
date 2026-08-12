@@ -157,6 +157,7 @@ CONFIG = {
     "admin_google_emails": {value.lower() for value in (csv_env("ADMIN_GOOGLE_EMAILS") or ["mwodevelop@gmail.com"])},
     "access_users_secret_name": os.environ.get("ACCESS_USERS_SECRET_NAME", "steam-vm-control-allowed-users"),
     "endpoints_secret_name": os.environ.get("ENDPOINTS_SECRET_NAME", "steam-vm-control-endpoints"),
+    "migration_targets_secret_name": os.environ.get("MIGRATION_TARGETS_SECRET_NAME", "steam-vm-control-migration-targets"),
     "minecraft_versions_secret_name": os.environ.get("MINECRAFT_VERSIONS_SECRET_NAME", ""),
     "runtime_images_secret_name": os.environ.get("RUNTIME_IMAGES_SECRET_NAME", ""),
     "compatibility_catalog_secret_name": os.environ.get("COMPATIBILITY_CATALOG_SECRET_NAME", ""),
@@ -1702,6 +1703,353 @@ def write_endpoint_records(records: list[dict[str, Any]]) -> None:
     )
     if not response.ok:
         raise ApiError("Unable to save VM endpoint registry.", 502)
+
+
+MIGRATION_STATES: Final = frozenset({"preparing", "prepared", "failed", "starting", "started", "cleanup_pending", "cleaned"})
+
+
+def migration_targets_template() -> dict[str, Any]:
+    return {"schemaVersion": 1, "targets": []}
+
+
+def normalize_migration_target(raw_value: Any) -> dict[str, Any] | None:
+    if not isinstance(raw_value, dict):
+        return None
+    target_id = str(raw_value.get("id", "") or "").strip()
+    source_endpoint_id = str(raw_value.get("sourceEndpointId", "") or "").strip()
+    endpoint_id = str(raw_value.get("endpointId", "") or "").strip()
+    target_zone = str(raw_value.get("targetZone", "") or "").strip()
+    mode = str(raw_value.get("mode", "") or "").strip().lower()
+    state = str(raw_value.get("state", "") or "").strip().lower()
+    hardware = raw_value.get("hardware") if isinstance(raw_value.get("hardware"), dict) else {}
+    if (
+        not re.fullmatch(r"migration-[a-z0-9-]{8,80}", target_id)
+        or not source_endpoint_id
+        or not endpoint_id
+        or not target_zone.replace("-", "").isalnum()
+        or mode not in {"copy", "move"}
+        or state not in MIGRATION_STATES
+    ):
+        return None
+    return {
+        "id": target_id,
+        "sourceEndpointId": source_endpoint_id,
+        "sourceInstanceName": bounded_gce_name(str(raw_value.get("sourceInstanceName", "") or "")),
+        "sourceZone": str(raw_value.get("sourceZone", "") or ""),
+        "endpointId": endpoint_id,
+        "targetZone": target_zone,
+        "mode": mode,
+        "state": state,
+        "hardware": {
+            "id": str(hardware.get("id", "") or ""),
+            "machineType": str(hardware.get("machineType", "") or ""),
+            "gpuType": str(hardware.get("gpuType", "") or ""),
+            "gpuCount": int(hardware.get("gpuCount", 0) or 0),
+            "acceleratorMode": str(hardware.get("acceleratorMode", "") or "none"),
+        },
+        "snapshotName": bounded_gce_name(str(raw_value.get("snapshotName", "") or "")),
+        "snapshotUrl": str(raw_value.get("snapshotUrl", "") or ""),
+        "diskName": bounded_gce_name(str(raw_value.get("diskName", "") or "")),
+        "diskUrl": str(raw_value.get("diskUrl", "") or ""),
+        "diskSizeGb": str(raw_value.get("diskSizeGb", "") or ""),
+        "detail": str(raw_value.get("detail", "") or "")[:1000],
+        "createdAt": str(raw_value.get("createdAt", "") or ""),
+        "updatedAt": str(raw_value.get("updatedAt", "") or ""),
+    }
+
+
+def read_migration_targets() -> list[dict[str, Any]]:
+    secret_name = str(CONFIG["migration_targets_secret_name"] or "").strip()
+    if not secret_name:
+        return []
+    response = compute_session().get(
+        f"{SECRET_MANAGER_BASE_URL}/{secret_path(secret_name)}/versions/latest:access",
+        timeout=30,
+    )
+    if response.status_code == 404:
+        return []
+    if not response.ok:
+        raise ApiError("Unable to load VM migration registry.", 502)
+    try:
+        encoded = str(response.json().get("payload", {}).get("data", "") or "")
+        payload = json.loads(base64.b64decode(encoded).decode("utf-8"))
+        raw_targets = payload.get("targets", []) if isinstance(payload, dict) else []
+    except (ValueError, TypeError, json.JSONDecodeError):
+        raw_targets = []
+    return [target for target in (normalize_migration_target(item) for item in raw_targets) if target]
+
+
+def write_migration_targets(targets: list[dict[str, Any]]) -> None:
+    secret_name = str(CONFIG["migration_targets_secret_name"] or "").strip()
+    if not secret_name:
+        raise ApiError("VM migration registry is not configured.", 500)
+    normalized = [target for target in (normalize_migration_target(item) for item in targets) if target]
+    if len({target["id"] for target in normalized}) != len(normalized):
+        raise ApiError("Migration IDs must be unique.", 400)
+    encoded = base64.b64encode(json.dumps({"schemaVersion": 1, "targets": normalized}, separators=(",", ":"), sort_keys=True).encode("utf-8")).decode("ascii")
+    response = compute_session().post(
+        f"{SECRET_MANAGER_BASE_URL}/{secret_path(secret_name)}:addVersion",
+        json={"payload": {"data": encoded}},
+        timeout=30,
+    )
+    if not response.ok:
+        raise ApiError("Unable to save VM migration registry.", 502)
+
+
+def migration_targets_collection_url() -> str:
+    return f"https://compute.googleapis.com/compute/v1/projects/{require_env('project')}/global/snapshots"
+
+
+def migration_snapshot_url(name: str) -> str:
+    return f"{migration_targets_collection_url()}/{name}"
+
+
+def migration_disks_collection_url(zone: str) -> str:
+    return f"https://compute.googleapis.com/compute/v1/projects/{require_env('project')}/zones/{zone}/disks"
+
+
+def migration_disk_url(zone: str, name: str) -> str:
+    return f"{migration_disks_collection_url(zone)}/{name}"
+
+
+def migration_timestamp() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def migration_target_payload(target: dict[str, Any]) -> dict[str, Any]:
+    result = dict(target)
+    result["scope"] = "state-disk"
+    result["startRequired"] = str(target.get("state", "")) == "prepared"
+    return result
+
+
+def build_admin_migrations_payload(admin_user: dict[str, Any]) -> dict[str, Any]:
+    endpoints = reconcile_endpoint_instance_bindings()
+    sources: list[dict[str, Any]] = []
+    for endpoint in endpoints:
+        instance = endpoint_instance_or_none(endpoint)
+        if instance is None:
+            continue
+        sources.append({
+            "endpoint": endpoint_public_payload(endpoint),
+            "instanceState": str(instance.get("status", STATUS_NOT_FOUND)).upper(),
+            "eligible": str(instance.get("status", "")).upper() == "TERMINATED" and active_power_action(instance) is None,
+        })
+    return {
+        "user": admin_user,
+        "sources": sources,
+        "endpoints": [endpoint_public_payload(endpoint) for endpoint in endpoints],
+        "targets": [migration_target_payload(target) for target in read_migration_targets()],
+        "snapshotCount": sum(1 for target in read_migration_targets() if str(target.get("snapshotUrl", "") or "")),
+        "scopeNote": "Migration snapshots and restores the persistent state disk. Bootstrap recreates the boot disk at Start.",
+    }
+
+
+def migration_source_state_disk(instance: dict[str, Any]) -> dict[str, Any]:
+    disks = instance.get("disks", []) if isinstance(instance.get("disks"), list) else []
+    state_disk = next((disk for disk in disks if isinstance(disk, dict) and not bool(disk.get("boot"))), None)
+    source = str((state_disk or {}).get("source", "") or "")
+    if not state_disk or not source:
+        raise ApiError("Migration requires an attached persistent state disk.", 400)
+    return state_disk
+
+
+def migration_target_or_error(target_id: Any) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    value = str(target_id or "").strip()
+    targets = read_migration_targets()
+    target = next((item for item in targets if item["id"] == value), None)
+    if target is None:
+        raise ApiError("Migration target does not exist.", 404)
+    return targets, target
+
+
+def update_migration_target(targets: list[dict[str, Any]], target: dict[str, Any], **updates: Any) -> dict[str, Any]:
+    target.update(updates)
+    target["updatedAt"] = migration_timestamp()
+    for index, item in enumerate(targets):
+        if item["id"] == target["id"]:
+            targets[index] = target
+            break
+    write_migration_targets(targets)
+    return target
+
+
+def cleanup_migration_snapshot(target: dict[str, Any]) -> None:
+    snapshot_name = str(target.get("snapshotName", "") or "")
+    snapshot_url = str(target.get("snapshotUrl", "") or "") or (migration_snapshot_url(snapshot_name) if snapshot_name else "")
+    if not snapshot_url:
+        return
+    operation = compute_request("DELETE", snapshot_url, allow_404=True)
+    if isinstance(operation, dict):
+        wait_for_global_operation(operation, timeout_seconds=300)
+
+
+def execute_admin_migration_action(admin_user: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    action = str(payload.get("action", "")).strip().lower()
+    if action == "prepare":
+        source_endpoint_id = normalize_endpoint_id(payload.get("sourceEndpointId"))
+        target_zone = str(payload.get("targetZone", "") or "").strip()
+        mode = str(payload.get("mode", "") or "").strip().lower()
+        target_endpoint_id = normalize_endpoint_id(payload.get("targetEndpointId"))
+        if mode not in {"copy", "move"}:
+            raise ApiError("Migration mode must be copy or move.", 400)
+        source_endpoint = endpoint_by_id(source_endpoint_id)
+        source_instance = endpoint_instance_or_none(source_endpoint)
+        if source_instance is None:
+            raise ApiError("Source VM does not exist.", 404)
+        if str(source_instance.get("status", "")).upper() != "TERMINATED":
+            raise ApiError("Migration is available only for a TERMINATED VM.", 400)
+        require_no_active_power_action(source_instance, "migration")
+        if not target_zone.replace("-", "").isalnum() or target_zone == str(source_endpoint.get("zone", "") or ""):
+            raise ApiError("Choose a different valid target zone.", 400)
+        if mode == "move":
+            if target_endpoint_id != source_endpoint_id:
+                raise ApiError("Move must retain the source endpoint.", 400)
+            if endpoint_has_manual_static_ip(source_endpoint) and str(source_endpoint.get("region", "") or "") != zone_region(target_zone):
+                raise ApiError("Release the source endpoint's regional static IP before moving it to another region.", 409)
+        else:
+            target_endpoint = endpoint_by_id(target_endpoint_id)
+            if not endpoint_available_for_scan_create(target_endpoint, target_zone):
+                raise ApiError("Copy requires a free endpoint compatible with the target region.", 409)
+        existing = read_migration_targets()
+        if any(item["state"] in {"preparing", "prepared", "starting"} and (item["sourceEndpointId"] == source_endpoint_id or item["endpointId"] == target_endpoint_id or (item["targetZone"] == target_zone and item["hardware"] == instance_hardware_selection(source_instance))) for item in existing):
+            raise ApiError("A conflicting migration is already prepared or running.", 409)
+        hardware = instance_hardware_selection(source_instance)
+        state_disk = migration_source_state_disk(source_instance)
+        now = migration_timestamp()
+        nonce = hashlib.sha1(f"{source_endpoint_id}:{target_zone}:{mode}:{time.time_ns()}".encode("utf-8")).hexdigest()[:12]
+        target = {
+            "id": f"migration-{nonce}",
+            "sourceEndpointId": source_endpoint_id,
+            "sourceInstanceName": str(source_instance.get("name", "") or ""),
+            "sourceZone": str(source_endpoint.get("zone", "") or ""),
+            "endpointId": target_endpoint_id,
+            "targetZone": target_zone,
+            "mode": mode,
+            "state": "preparing",
+            "hardware": hardware,
+            "snapshotName": bounded_gce_name(f"{source_instance.get('name', 'vm')}-migration-{nonce}"),
+            "snapshotUrl": "",
+            "diskName": bounded_gce_name(f"steam-{target_endpoint_id}-{hardware_name_slug(str(hardware.get('id', 'cpu')), str(hardware.get('gpuType', '')), int(hardware.get('gpuCount', 0) or 0))}-{target_zone}-state"),
+            "diskUrl": "",
+            "diskSizeGb": str(state_disk.get("diskSizeGb", "") or parse_disk_size_gb(CONFIG["data_disk_size"])),
+            "detail": "Creating migration snapshot.",
+            "createdAt": now,
+            "updatedAt": now,
+        }
+        existing.append(target)
+        write_migration_targets(existing)
+        try:
+            snapshot_operation = compute_request("POST", migration_targets_collection_url(), json={
+                "name": target["snapshotName"],
+                "sourceDisk": str(state_disk["source"]),
+                "description": f"VM Control {mode} migration {target['id']}",
+                "labels": {"vm-control": "migration", "migration-id": nonce},
+            })
+            if not isinstance(snapshot_operation, dict):
+                raise ApiError("Failed to create migration snapshot.", 502)
+            wait_for_global_operation(snapshot_operation, timeout_seconds=900)
+            snapshot = compute_request("GET", migration_snapshot_url(target["snapshotName"]))
+            if not isinstance(snapshot, dict) or not str(snapshot.get("selfLink", "") or ""):
+                raise ApiError("Migration snapshot is not available.", 504)
+            target = update_migration_target(existing, target, snapshotUrl=str(snapshot["selfLink"]), detail="Restoring the state disk in the target zone.")
+            disk_operation = compute_request("POST", migration_disks_collection_url(target_zone), json={
+                "name": target["diskName"],
+                "sourceSnapshot": target["snapshotUrl"],
+                "sizeGb": target["diskSizeGb"],
+                "type": f"zones/{target_zone}/diskTypes/{CONFIG['data_disk_type']}",
+                "labels": {"vm-control": "migration", "migration-id": nonce},
+            })
+            if not isinstance(disk_operation, dict):
+                raise ApiError("Failed to restore the migration state disk.", 502)
+            wait_for_zone_operation(disk_operation, timeout_seconds=900, zone=target_zone)
+            disk = compute_request("GET", migration_disk_url(target_zone, target["diskName"]))
+            if not isinstance(disk, dict) or not str(disk.get("selfLink", "") or ""):
+                raise ApiError("Migration state disk is not available.", 504)
+            cleanup_migration_snapshot(target)
+            target = update_migration_target(
+                existing,
+                target,
+                snapshotName="",
+                snapshotUrl="",
+                diskUrl=str(disk["selfLink"]),
+                state="prepared",
+                detail="Prepared. The temporary migration snapshot was removed; Start creates the VM when Compute Engine can allocate its profile.",
+            )
+            if mode == "move":
+                delete_operation = compute_request("DELETE", explicit_instance_url(target["sourceZone"], target["sourceInstanceName"]))
+                if not isinstance(delete_operation, dict):
+                    raise ApiError("Prepared target exists, but source deletion did not start.", 502)
+                wait_for_zone_operation(delete_operation, timeout_seconds=300, zone=target["sourceZone"])
+                source_endpoint = endpoint_by_id(source_endpoint_id)
+                clear_endpoint_instance_binding(source_endpoint)
+                persist_endpoint(source_endpoint)
+                target = update_migration_target(existing, target, detail="Prepared. Source VM was removed; the migration snapshot remains for rollback.")
+        except ApiError as error:
+            try:
+                cleanup_migration_snapshot(target)
+                target = update_migration_target(existing, target, snapshotName="", snapshotUrl="", state="failed", detail=f"Migration failed after temporary snapshot cleanup. {error}")
+            except ApiError as cleanup_error:
+                target = update_migration_target(existing, target, state="cleanup_pending", detail=f"Migration failed and snapshot cleanup must be retried. Original error: {error}; cleanup error: {cleanup_error}")
+            raise
+        return build_admin_migrations_payload(admin_user)
+
+    targets, target = migration_target_or_error(payload.get("migrationId"))
+    if action == "start":
+        if target["state"] != "prepared":
+            raise ApiError("Only a prepared migration target can be started.", 400)
+        endpoint = endpoint_by_id(target["endpointId"])
+        if endpoint_instance_or_none(endpoint) is not None:
+            raise ApiError("The migration endpoint already has a VM.", 409)
+        running = running_managed_instances_except_selected()
+        if running:
+            raise ApiError(f"Stop the currently running VM before starting this migration: {running_instance_summary(running)}", 409)
+        update_migration_target(targets, target, state="starting", detail="Creating VM from the prepared state disk.")
+        try:
+            apply_target_overrides({"endpointId": target["endpointId"], "zone": target["targetZone"], **target["hardware"]}, respect_existing_endpoint_hardware=False)
+            ensure_firewall_rules()
+            source_instance = compute_request("GET", target["diskUrl"], allow_404=True)
+            if source_instance is None:
+                raise ApiError("Prepared migration state disk no longer exists.", 409)
+            credentials = {"username": SUNSHINE_USERNAME, "password": generate_sunshine_password()}
+            operation = compute_request("POST", instances_collection_url(), json=build_instance_create_request(auto_stop_hours=None, sunshine_credentials=credentials, existing_data_disk_url=target["diskUrl"]))
+            if not isinstance(operation, dict):
+                raise ApiError("Failed to create the VM from the prepared migration.", 502)
+            wait_for_zone_operation(operation, timeout_seconds=300, zone=target["targetZone"])
+            final_instance = poll_instance_status("RUNNING", timeout_seconds=300)
+            final_instance = wait_for_external_ip(timeout_seconds=180)
+            bind_selected_endpoint_to_instance(final_instance)
+            update_duckdns(extract_external_ip(final_instance))
+            update_migration_target(targets, target, state="started", detail="VM created and endpoint updated.")
+        except ApiError as error:
+            update_migration_target(targets, target, state="prepared", detail=f"Start failed; prepared disk is retained. {error}")
+            raise
+        return build_admin_migrations_payload(admin_user)
+
+    if action == "delete":
+        if target["state"] in {"starting", "started"}:
+            raise ApiError("A started migration target must be deleted through normal VM lifecycle controls.", 400)
+        cleanup_errors: list[str] = []
+        if target.get("diskUrl"):
+            operation = compute_request("DELETE", str(target["diskUrl"]), allow_404=True)
+            if isinstance(operation, dict):
+                try:
+                    wait_for_zone_operation(operation, timeout_seconds=300, zone=target["targetZone"])
+                except ApiError as error:
+                    cleanup_errors.append(str(error))
+        if target.get("snapshotUrl"):
+            operation = compute_request("DELETE", str(target["snapshotUrl"]), allow_404=True)
+            if isinstance(operation, dict):
+                try:
+                    wait_for_global_operation(operation, timeout_seconds=300)
+                except ApiError as error:
+                    cleanup_errors.append(str(error))
+        if cleanup_errors:
+            update_migration_target(targets, target, state="cleanup_pending", detail="; ".join(cleanup_errors))
+            raise ApiError("Migration cleanup is incomplete. Retry deletion.", 502)
+        write_migration_targets([item for item in targets if item["id"] != target["id"]])
+        return build_admin_migrations_payload(admin_user)
+    raise ApiError("Unsupported migration action.", 400)
 
 
 def endpoint_by_id(endpoint_id: str) -> dict[str, Any]:
@@ -3277,6 +3625,7 @@ def handle_unexpected_error(error: Exception):
 @app.route("/api/admin/runtime-images", methods=["GET", "POST", "OPTIONS"])
 @app.route("/api/admin/compatibility", methods=["GET", "POST", "OPTIONS"])
 @app.route("/api/admin/software", methods=["GET", "POST", "OPTIONS"])
+@app.route("/api/admin/migrations", methods=["GET", "POST", "OPTIONS"])
 @app.route("/api/hardware", methods=["GET", "OPTIONS"])
 @app.route("/api/instances", methods=["GET", "OPTIONS"])
 @app.route("/api/reachability", methods=["GET", "OPTIONS"])
@@ -3457,6 +3806,13 @@ def options_passthrough():
                 "minecraftServer": minecraft_version_payload(),
             }
         )
+
+    if request.path == "/api/admin/migrations":
+        admin_user = require_admin_user()
+        if request.method == "GET":
+            return jsonify(build_admin_migrations_payload(admin_user))
+        payload = request.get_json(silent=True) or {}
+        return jsonify(execute_admin_migration_action(admin_user, payload))
 
     if request.path == "/api/admin/endpoints":
         admin_user = require_admin_user()
@@ -5331,6 +5687,7 @@ def build_instance_create_request(
     *,
     auto_stop_hours: int | None,
     sunshine_credentials: dict[str, str],
+    existing_data_disk_url: str = "",
 ) -> dict[str, Any]:
     network_interface: dict[str, Any] = {
         "network": network_path(),
@@ -5363,16 +5720,25 @@ def build_instance_create_request(
                     "diskType": disk_type_path(),
                 },
             },
-            {
-                "boot": False,
-                "autoDelete": True,
-                "deviceName": data_disk_device_name(),
-                "initializeParams": {
-                    "diskName": data_disk_device_name(),
-                    "diskSizeGb": parse_disk_size_gb(CONFIG["data_disk_size"]),
-                    "diskType": data_disk_type_path(),
-                },
-            }
+            (
+                {
+                    "boot": False,
+                    "autoDelete": True,
+                    "deviceName": data_disk_device_name(),
+                    "source": existing_data_disk_url,
+                }
+                if existing_data_disk_url
+                else {
+                    "boot": False,
+                    "autoDelete": True,
+                    "deviceName": data_disk_device_name(),
+                    "initializeParams": {
+                        "diskName": data_disk_device_name(),
+                        "diskSizeGb": parse_disk_size_gb(CONFIG["data_disk_size"]),
+                        "diskType": data_disk_type_path(),
+                    },
+                }
+            )
         ],
         "networkInterfaces": [network_interface],
         "serviceAccounts": [

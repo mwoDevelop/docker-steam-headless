@@ -26,6 +26,14 @@
     adminMessage: document.querySelector("#admin-message"),
     usersList: document.querySelector("#users-list"),
     endpointsList: document.querySelector("#endpoints-list"),
+    migrationSource: document.querySelector("#migration-source"),
+    migrationMode: document.querySelector("#migration-mode"),
+    migrationTargetZone: document.querySelector("#migration-target-zone"),
+    migrationTargetEndpoint: document.querySelector("#migration-target-endpoint"),
+    prepareMigration: document.querySelector("#prepare-migration"),
+    migrationSnapshotCount: document.querySelector("#migration-snapshot-count"),
+    migrationStatus: document.querySelector("#migration-status"),
+    migrationTargets: document.querySelector("#migration-targets"),
     refreshRuntimeImages: document.querySelector("#refresh-runtime-images"),
     runtimeEndpoint: document.querySelector("#runtime-endpoint"),
     runtimeImagesList: document.querySelector("#runtime-images-list"),
@@ -69,6 +77,7 @@
     isBusy: false,
     usersPayload: null,
     endpointsPayload: null,
+    migrationsPayload: null,
     runtimeImagesPayload: null,
     compatibilityPayload: null,
     sunshineCredentialsPayload: null,
@@ -131,6 +140,13 @@
     });
     document.querySelectorAll("[data-endpoint-action], [data-endpoint-zone]").forEach((input) => {
       input.disabled = nextBusy || !state.user || input.dataset.endpointDisabled === "true";
+    });
+    const migrationLoaded = Boolean(state.migrationsPayload);
+    [elements.migrationSource, elements.migrationMode, elements.migrationTargetZone, elements.migrationTargetEndpoint, elements.prepareMigration].forEach((input) => {
+      input.disabled = nextBusy || !state.user || !migrationLoaded || input.dataset.migrationDisabled === "true";
+    });
+    document.querySelectorAll("[data-migration-action]").forEach((input) => {
+      input.disabled = nextBusy || !state.user || input.dataset.migrationDisabled === "true";
     });
     const hasVmEndpoint = vmEndpoints(state.endpointsPayload && state.endpointsPayload.endpoints).length > 0;
     const hasRuntimeVmEndpoint = vmEndpoints(state.runtimeImagesPayload && state.runtimeImagesPayload.endpoints).length > 0;
@@ -202,6 +218,7 @@
     }
     renderUsers();
     renderEndpoints();
+    renderMigrations();
     renderRuntimeImages();
     renderCompatibility();
     renderSunshineCredentials();
@@ -378,6 +395,56 @@
         </div>
       `;
     }).join("");
+  }
+
+  function renderMigrations() {
+    const payload = state.migrationsPayload;
+    if (!payload || !state.user) {
+      elements.migrationSource.innerHTML = '<option value="">Sign in to load stopped VMs</option>';
+      elements.migrationTargetEndpoint.innerHTML = '<option value="">Sign in to load endpoints</option>';
+      elements.migrationStatus.textContent = "Sign in to load stopped VM migration targets.";
+      elements.migrationStatus.dataset.tone = "neutral";
+      elements.migrationTargets.innerHTML = "";
+      elements.migrationSnapshotCount.textContent = "0";
+      return;
+    }
+    const sources = Array.isArray(payload.sources) ? payload.sources : [];
+    const snapshotCount = Math.max(0, Number(payload.snapshotCount || 0));
+    elements.migrationSnapshotCount.textContent = String(snapshotCount);
+    elements.migrationSnapshotCount.setAttribute("aria-label", `${snapshotCount} managed migration snapshots`);
+    const eligible = sources.filter((source) => Boolean(source.eligible));
+    const previousSource = String(elements.migrationSource.value || "");
+    elements.migrationSource.innerHTML = eligible.length ? eligible.map((source) => {
+      const endpoint = source.endpoint || {};
+      return `<option value="${escapeHtml(String(endpoint.id || ""))}">${escapeHtml(`${endpoint.id || "endpoint"} · ${endpoint.instanceName || "VM"} · ${endpoint.zone || "unknown zone"}`)}</option>`;
+    }).join("") : '<option value="">No terminated VM available</option>';
+    const sourceId = eligible.some((source) => String(source.endpoint && source.endpoint.id || "") === previousSource)
+      ? previousSource : String(eligible[0] && eligible[0].endpoint && eligible[0].endpoint.id || "");
+    elements.migrationSource.value = sourceId;
+    const mode = String(elements.migrationMode.value || "copy");
+    const endpoints = Array.isArray(payload.endpoints) ? payload.endpoints : [];
+    const targets = mode === "move"
+      ? endpoints.filter((endpoint) => String(endpoint.id || "") === sourceId)
+      : endpoints.filter((endpoint) => !String(endpoint.instanceName || "").trim() && !String(endpoint.zone || "").trim());
+    const previousTarget = String(elements.migrationTargetEndpoint.value || "");
+    elements.migrationTargetEndpoint.innerHTML = targets.length ? targets.map((endpoint) => {
+      const label = mode === "move" ? `${endpoint.id} · retain source endpoint` : `${endpoint.id} · ${endpoint.domain || "no DNS"}`;
+      return `<option value="${escapeHtml(String(endpoint.id || ""))}">${escapeHtml(label)}</option>`;
+    }).join("") : '<option value="">No compatible endpoint available</option>';
+    elements.migrationTargetEndpoint.value = targets.some((endpoint) => String(endpoint.id || "") === previousTarget)
+      ? previousTarget : String(targets[0] && targets[0].id || "");
+    const canPrepare = Boolean(sourceId && elements.migrationTargetEndpoint.value && String(elements.migrationTargetZone.value || "").trim());
+    elements.prepareMigration.dataset.migrationDisabled = String(!canPrepare);
+    elements.migrationStatus.textContent = payload.scopeNote || "Migration copies the persistent state disk only.";
+    elements.migrationStatus.dataset.tone = eligible.length ? "neutral" : "warning";
+    const targetsPayload = Array.isArray(payload.targets) ? payload.targets : [];
+    elements.migrationTargets.innerHTML = targetsPayload.length ? targetsPayload.map((target) => {
+      const status = String(target.state || "unknown");
+      const canStart = status === "prepared";
+      const canDelete = !["starting", "started"].includes(status);
+      const hardware = target.hardware || {};
+      return `<div class="admin-user-row fixed"><div><code>${escapeHtml(target.id)}</code><br><span>${escapeHtml(String(target.mode || "copy").toUpperCase())} · ${escapeHtml(String(target.sourceEndpointId || "source"))} -> ${escapeHtml(String(target.endpointId || "target"))} · ${escapeHtml(String(target.targetZone || ""))}</span><br><span>${escapeHtml(String(hardware.id || "CPU"))} · state disk ${escapeHtml(String(target.diskName || "pending"))} · ${escapeHtml(status)}</span><br><span>${escapeHtml(String(target.detail || ""))}</span></div><button class="action start" type="button" data-migration-action="start" data-migration-id="${escapeHtml(String(target.id || ""))}" data-migration-disabled="${canStart ? "false" : "true"}">Start prepared VM</button><button class="action delete" type="button" data-migration-action="delete" data-migration-id="${escapeHtml(String(target.id || ""))}" data-migration-disabled="${canDelete ? "false" : "true"}">Delete prepared target</button></div>`;
+    }).join("") : '<div class="admin-user-row fixed">No prepared migration targets.</div>';
   }
 
   function vmEndpoints(endpoints) {
@@ -658,6 +725,7 @@
     state.user = null;
     state.usersPayload = null;
     state.endpointsPayload = null;
+    state.migrationsPayload = null;
     state.runtimeImagesPayload = null;
     state.compatibilityPayload = null;
     state.sunshineCredentialsPayload = null;
@@ -722,9 +790,10 @@
   async function loadUsers(options) {
     const silent = Boolean(options && options.silent);
     const refreshRevision = state.refreshRevision;
-    const [payload, endpoints, runtimeImages, compatibility] = await Promise.all([
+    const [payload, endpoints, migrations, runtimeImages, compatibility] = await Promise.all([
       fetchApi("/api/admin/users", { method: "GET" }),
       fetchApi("/api/admin/endpoints", { method: "GET" }),
+      fetchApi("/api/admin/migrations", { method: "GET" }),
       fetchApi("/api/admin/runtime-images", { method: "GET" }),
       fetchApi("/api/admin/compatibility", { method: "GET" }),
     ]);
@@ -734,6 +803,7 @@
     state.user = payload.user;
     state.usersPayload = payload;
     state.endpointsPayload = endpoints;
+    state.migrationsPayload = migrations;
     state.runtimeImagesPayload = runtimeImages;
     state.compatibilityPayload = compatibility;
     const availableEndpoints = vmEndpoints(endpoints.endpoints);
@@ -820,6 +890,18 @@
     state.endpointsPayload = payload;
     const actionLabel = action === "add" ? "Added" : action === "remove" ? "Removed" : action === "reserve-ip" ? "Reserved IP for" : "Released IP for";
     setMessage(`${actionLabel} ${endpointId}.`, "success");
+    renderEndpoints();
+  }
+
+  async function updateMigration(action, extra) {
+    const payload = await fetchApi("/api/admin/migrations", {
+      method: "POST",
+      body: JSON.stringify({ action, ...(extra || {}) }),
+    });
+    state.migrationsPayload = payload;
+    state.endpointsPayload = { user: payload.user, endpoints: payload.endpoints || [] };
+    setMessage({ prepare: "Migration target prepared.", start: "Prepared migration VM started.", delete: "Prepared migration target deleted." }[action] || "Migration updated.", "success");
+    renderMigrations();
     renderEndpoints();
   }
 
@@ -1225,6 +1307,55 @@
     try {
       setBusy(true);
       await updateUser("set-minecraft-management", email, { minecraftManagement: input.checked });
+    } catch (error) {
+      handleError(error);
+    } finally {
+      setBusy(false);
+    }
+  });
+
+  [elements.migrationSource, elements.migrationMode, elements.migrationTargetZone, elements.migrationTargetEndpoint].forEach((input) => {
+    input.addEventListener("change", () => {
+      renderMigrations();
+      setBusy(state.isBusy);
+    });
+  });
+
+  elements.prepareMigration.addEventListener("click", async () => {
+    const sourceEndpointId = String(elements.migrationSource.value || "");
+    const mode = String(elements.migrationMode.value || "copy");
+    const targetZone = String(elements.migrationTargetZone.value || "").trim();
+    const targetEndpointId = String(elements.migrationTargetEndpoint.value || "");
+    if (!sourceEndpointId || !targetEndpointId || !targetZone) {
+      setMessage("Select a terminated source VM, target zone and endpoint.", "warning");
+      return;
+    }
+    const prompt = mode === "move"
+      ? `Move ${sourceEndpointId} to ${targetZone}? The source VM is deleted only after the migration disk is prepared; its snapshot is retained for rollback.`
+      : `Copy ${sourceEndpointId} to ${targetZone}? The source VM remains unchanged.`;
+    if (!window.confirm(prompt)) return;
+    try {
+      setBusy(true, "Preparing migration snapshot and target state disk...");
+      await updateMigration("prepare", { sourceEndpointId, mode, targetZone, targetEndpointId });
+    } catch (error) {
+      handleError(error);
+    } finally {
+      setBusy(false);
+    }
+  });
+
+  elements.migrationTargets.addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-migration-action]");
+    if (!button || button.disabled) return;
+    const action = String(button.dataset.migrationAction || "");
+    const migrationId = String(button.dataset.migrationId || "");
+    const prompt = action === "delete"
+      ? "Delete this prepared migration target, its state disk and its migration snapshot?"
+      : "Start this prepared VM? Compute Engine will attempt to allocate the saved CPU/GPU profile now.";
+    if (!window.confirm(prompt)) return;
+    try {
+      setBusy(true, action === "start" ? "Creating VM from prepared state disk..." : "Deleting prepared migration target...");
+      await updateMigration(action, { migrationId });
     } catch (error) {
       handleError(error);
     } finally {

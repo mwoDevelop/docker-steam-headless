@@ -70,6 +70,7 @@
 
       <nav class="admin-tabs" aria-label="Administration sections" role="tablist">
         <button class="admin-tab is-active" type="button" data-admin-tab="vm-control" role="tab" aria-selected="true">VM Control</button>
+        <button class="admin-tab" type="button" data-admin-tab="migrations" role="tab" aria-selected="false">Migrations</button>
         <button class="admin-tab" type="button" data-admin-tab="software" role="tab" aria-selected="false">Software</button>
         <button class="admin-tab" type="button" data-admin-tab="runtime" role="tab" aria-selected="false">Runtime images</button>
         <button class="admin-tab" type="button" data-admin-tab="endpoints" role="tab" aria-selected="false">Endpoints</button>
@@ -214,6 +215,44 @@
             <p id="backup-options-status">Create a manual backup, then select it here before running Restore Backup.</p>
           </div>
         </div>
+      </section>
+
+      <section class="panel admin-tab-panel" data-admin-tab-panel="migrations" hidden>
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Stopped VM migration</p>
+            <h2>Copy or move a state disk to another zone</h2>
+          </div>
+        </div>
+        <p class="hint" id="migration-scope-note">
+          Migration is available only for terminated VMs. It creates a snapshot and a prepared state disk; it neither starts a VM nor reserves a GPU.
+        </p>
+        <div class="form-grid" autocomplete="off">
+          <label>
+            <span>Source VM</span>
+            <select id="migration-source"></select>
+          </label>
+          <label>
+            <span>Operation</span>
+            <select id="migration-mode">
+              <option value="copy">Copy (keep source)</option>
+              <option value="move">Move (delete source after preparation)</option>
+            </select>
+          </label>
+          <label>
+            <span>Target zone</span>
+            <input id="migration-target-zone" type="text" placeholder="europe-west3-a" autocomplete="off">
+          </label>
+          <label>
+            <span>Target endpoint</span>
+            <select id="migration-target-endpoint"></select>
+          </label>
+          <button id="prepare-migration" class="action create" type="button">Prepare migration <span id="migration-snapshot-count" class="gpu-probe-count" aria-label="Managed migration snapshots">0</span></button>
+        </div>
+        <div id="migration-status" class="command-status" data-tone="neutral">
+          Sign in to load stopped VM migration targets.
+        </div>
+        <div id="migration-targets" class="admin-list"></div>
       </section>
 
       <section class="panel admin-tab-panel" data-admin-tab-panel="access">
@@ -461,7 +500,7 @@
       </section>
     </main>
 
-    <script src="./admin.js?v=admin-embedded-vm-control-20260727"></script>
+    <script src="./admin.js?v=admin-migrations-20260812"></script>
     <script src="./app.js?v=embedded-vm-control-20260727"></script>
   </body>
 </html>
