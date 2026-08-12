@@ -1863,6 +1863,18 @@ def migration_target_or_error(target_id: Any) -> tuple[list[dict[str, Any]], dic
     return targets, target
 
 
+def active_migration_for_endpoint(endpoint_id: str) -> dict[str, Any] | None:
+    return next(
+        (
+            target
+            for target in read_migration_targets()
+            if target.get("endpointId") == endpoint_id
+            and target.get("state") in {"preparing", "prepared", "starting", "failed", "cleanup_pending"}
+        ),
+        None,
+    )
+
+
 def update_migration_target(targets: list[dict[str, Any]], target: dict[str, Any], **updates: Any) -> dict[str, Any]:
     target.update(updates)
     target["updatedAt"] = migration_timestamp()
@@ -2115,6 +2127,8 @@ def endpoint_public_payload(endpoint: dict[str, Any]) -> dict[str, Any]:
 def endpoint_available_for_scan_create(endpoint: dict[str, Any], zone: str) -> bool:
     """Return whether an endpoint can be selected for a new Scan & Create link."""
     if str(endpoint.get("instanceName", "") or "") or str(endpoint.get("zone", "") or ""):
+        return False
+    if active_migration_for_endpoint(str(endpoint.get("id", "") or "")):
         return False
     if endpoint_has_manual_static_ip(endpoint) and str(endpoint.get("region", "") or "") != zone_region(zone):
         return False
@@ -6867,6 +6881,8 @@ def require_no_active_power_action(instance: dict[str, Any] | None, command: str
 
 def allowed_commands(instance: dict[str, Any] | None) -> list[str]:
     if instance is None:
+        if active_migration_for_endpoint(selected_endpoint_id()):
+            return ["status"]
         return ["status", "create"]
 
     status = str(instance.get("status", "UNKNOWN")).upper()
@@ -7555,6 +7571,13 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
     require_no_active_power_action(current_instance, command)
 
     if command == "create":
+        prepared = active_migration_for_endpoint(selected_endpoint_id())
+        if prepared:
+            raise ApiError(
+                f"Endpoint is reserved by migration {prepared['id']} in state {prepared['state']}. "
+                "Start or delete the prepared migration target before creating another VM.",
+                409,
+            )
         validate_scan_create_preparation(payload, user)
         if selected_gpu_count() > 0:
             gpu_hardware_profile(selected_hardware_id())
