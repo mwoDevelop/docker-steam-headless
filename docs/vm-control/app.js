@@ -3045,10 +3045,19 @@
         }
         clearSession();
       }
-      throw new Error((payload && payload.error) || `API returned ${response.status}.`);
+      const apiError = new Error((payload && payload.error) || `API returned ${response.status}.`);
+      apiError.status = response.status;
+      apiError.details = payload || {};
+      apiError.retryAfterSeconds = Number(payload && payload.retryAfterSeconds || 0);
+      throw apiError;
     }
 
     return payload;
+  }
+
+  function isComputeReadRateLimitError(error) {
+    return Number(error && error.status) === 429
+      && String(error && error.details && error.details.reason || "") === "COMPUTE_READ_RATE_LIMIT";
   }
 
   async function dispatchCommand(command) {
@@ -3146,10 +3155,31 @@
         body.autoStopHours = autoStopHours;
       }
 
-      let data = await fetchApi("/api/command", {
+      const submitCommand = () => fetchApi("/api/command", {
         method: "POST",
         body: JSON.stringify(body),
       });
+      let data;
+      try {
+        data = await submitCommand();
+      } catch (error) {
+        if (command !== "create" || !isComputeReadRateLimitError(error)) {
+          throw error;
+        }
+        const retryAfterSeconds = Math.max(5, Number(error.retryAfterSeconds || 65));
+        setCommandStatus(
+          `Compute Engine read quota is cooling down. Create was not retried yet; checking the VM after ${retryAfterSeconds}s.`,
+          "warning",
+        );
+        await wait(retryAfterSeconds * 1000);
+        const cooledStatus = await refreshStatus({ silent: true, forceRender: true });
+        if (String(cooledStatus && cooledStatus.status || "").toUpperCase() !== "NOT_FOUND") {
+          renderStatusPayload(cooledStatus);
+          throw new Error("Create was not retried because the VM state changed while Compute Engine read quota was cooling down.");
+        }
+        setCommandStatus("Compute Engine read quota recovered. Retrying Create because no VM exists yet...", "warning");
+        data = await submitCommand();
+      }
       renderStatusPayload(data);
       if (COMMANDS_TO_POLL_AFTER_RESPONSE.has(command)) {
         setCommandStatus(`Command "${command}" accepted. Waiting for current VM and Sunshine status...`, "warning");

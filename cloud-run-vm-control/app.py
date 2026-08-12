@@ -31,10 +31,11 @@ logging.basicConfig(level=logging.INFO)
 
 
 class ApiError(Exception):
-    def __init__(self, message: str, status_code: int = 400) -> None:
+    def __init__(self, message: str, status_code: int = 400, details: dict[str, Any] | None = None) -> None:
         super().__init__(message)
         self.message = message
         self.status_code = status_code
+        self.details = details or {}
 
 
 def csv_env(name: str) -> list[str]:
@@ -240,6 +241,14 @@ PRICE_CACHE_TTL_SECONDS = 6 * 60 * 60
 BILLING_HOURS_PER_MONTH = 730
 CAPACITY_RESERVATION_TTL_SECONDS = max(60, min(int(os.environ.get("CAPACITY_RESERVATION_TTL_SECONDS", "300") or "300"), 900))
 CAPACITY_RESERVATION_DESCRIPTION_PREFIX: Final = "steam-vm-control-capacity-probe"
+COMPUTE_READ_MIN_INTERVAL_SECONDS = max(0.05, min(float(os.environ.get("COMPUTE_READ_MIN_INTERVAL_SECONDS", "0.20") or "0.20"), 2.0))
+COMPUTE_READ_COOLDOWN_SECONDS = max(30, min(int(os.environ.get("COMPUTE_READ_COOLDOWN_SECONDS", "65") or "65"), 300))
+COMPUTE_STATIC_READ_CACHE_TTL_SECONDS = max(10, min(int(os.environ.get("COMPUTE_STATIC_READ_CACHE_TTL_SECONDS", "120") or "120"), 900))
+COMPUTE_READ_LOCK = threading.Lock()
+COMPUTE_READ_NEXT_AT = 0.0
+COMPUTE_READ_COOLDOWN_UNTIL = 0.0
+COMPUTE_STATIC_READ_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+GPU_HARDWARE_PROFILE_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 MACHINE_TYPE_SPECS: Final = {
     "n1-standard-4": {"family": "n1-standard", "vcpus": 4.0, "memoryGb": 15.0},
     "g2-standard-4": {"family": "g2", "vcpus": 4.0, "memoryGb": 16.0},
@@ -3650,7 +3659,7 @@ def add_cors_headers(response):  # type: ignore[override]
 
 @app.errorhandler(ApiError)
 def handle_api_error(error: ApiError):
-    response = jsonify({"error": error.message})
+    response = jsonify({"error": error.message, **error.details})
     response.status_code = error.status_code
     return response
 
@@ -4406,10 +4415,73 @@ def google_userinfo(token: str) -> dict[str, Any]:
     return info
 
 
+def compute_static_read_cache_key(method: str, url: str, kwargs: dict[str, Any]) -> str | None:
+    if method.upper() != "GET":
+        return None
+    if "/aggregated/acceleratorTypes" not in url and not re.search(r"/projects/[^/]+/zones$", url):
+        return None
+    params = kwargs.get("params") if isinstance(kwargs.get("params"), dict) else {}
+    return f"{url}?{json.dumps(params, sort_keys=True, separators=(',', ':'))}"
+
+
+def compute_read_cooldown_seconds() -> int:
+    with COMPUTE_READ_LOCK:
+        remaining = COMPUTE_READ_COOLDOWN_UNTIL - time.monotonic()
+    return max(0, int(remaining + 0.999))
+
+
+def throttle_compute_read() -> None:
+    global COMPUTE_READ_NEXT_AT
+    now = time.monotonic()
+    with COMPUTE_READ_LOCK:
+        remaining = COMPUTE_READ_COOLDOWN_UNTIL - now
+        if remaining > 0:
+            retry_after = max(1, int(remaining + 0.999))
+            raise ApiError(
+                f"Compute Engine read quota is cooling down. Retry after {retry_after} seconds.",
+                429,
+                {"reason": "COMPUTE_READ_RATE_LIMIT", "retryAfterSeconds": retry_after},
+            )
+        scheduled_at = max(now, COMPUTE_READ_NEXT_AT)
+        COMPUTE_READ_NEXT_AT = scheduled_at + COMPUTE_READ_MIN_INTERVAL_SECONDS
+    if scheduled_at > now:
+        time.sleep(scheduled_at - now)
+
+
+def mark_compute_read_rate_limited() -> ApiError:
+    global COMPUTE_READ_COOLDOWN_UNTIL
+    with COMPUTE_READ_LOCK:
+        COMPUTE_READ_COOLDOWN_UNTIL = max(
+            COMPUTE_READ_COOLDOWN_UNTIL,
+            time.monotonic() + COMPUTE_READ_COOLDOWN_SECONDS,
+        )
+    retry_after = compute_read_cooldown_seconds()
+    return ApiError(
+        f"Compute Engine read quota is cooling down. Retry after {retry_after} seconds.",
+        429,
+        {"reason": "COMPUTE_READ_RATE_LIMIT", "retryAfterSeconds": retry_after},
+    )
+
+
+def is_compute_read_rate_limit_response(response: requests.Response) -> bool:
+    if response.status_code not in {403, 429}:
+        return False
+    detail = response.text or ""
+    return "RATE_LIMIT_EXCEEDED" in detail or "GlobalReadsPerMinutePerProject" in detail or "global_reads" in detail
+
+
 def compute_request(method: str, url: str, *, allow_404: bool = False, **kwargs) -> dict[str, Any] | None:
+    cache_key = compute_static_read_cache_key(method, url, kwargs)
+    if cache_key:
+        with COMPUTE_READ_LOCK:
+            cached = COMPUTE_STATIC_READ_CACHE.get(cache_key)
+        if cached and time.monotonic() - cached[0] < COMPUTE_STATIC_READ_CACHE_TTL_SECONDS:
+            return cached[1]
     response = None
     last_error: requests.RequestException | None = None
     for attempt in range(1, 4):
+        if method.upper() == "GET":
+            throttle_compute_read()
         try:
             candidate = compute_session().request(method=method, url=url, timeout=30, **kwargs)
         except requests.RequestException as error:
@@ -4418,6 +4490,8 @@ def compute_request(method: str, url: str, *, allow_404: bool = False, **kwargs)
                 time.sleep(attempt)
                 continue
             break
+        if is_compute_read_rate_limit_response(candidate):
+            raise mark_compute_read_rate_limited()
         if candidate.status_code in {429, 500, 502, 503, 504} and attempt < 3:
             time.sleep(attempt)
             continue
@@ -4435,7 +4509,11 @@ def compute_request(method: str, url: str, *, allow_404: bool = False, **kwargs)
         )
     if response.status_code >= 400:
         raise ApiError(response.text or f"Compute API returned {response.status_code}.", 502)
-    return response.json()
+    payload = response.json()
+    if cache_key and isinstance(payload, dict):
+        with COMPUTE_READ_LOCK:
+            COMPUTE_STATIC_READ_CACHE[cache_key] = (time.monotonic(), payload)
+    return payload
 
 
 def require_capacity_cleanup_token() -> None:
@@ -4628,12 +4706,18 @@ def create_capacity_reservation_probe() -> dict[str, Any]:
 
 def gpu_hardware_profile(hardware_id: str) -> dict[str, Any]:
     normalized_id = str(hardware_id or "").strip()
+    with COMPUTE_READ_LOCK:
+        cached = GPU_HARDWARE_PROFILE_CACHE.get(normalized_id)
+    if cached and time.monotonic() - cached[0] < COMPUTE_STATIC_READ_CACHE_TTL_SECONDS:
+        return cached[1]
     for profile in build_hardware_payload().get("profiles", []):
         if str(profile.get("id", "")) == normalized_id:
             if int(profile.get("gpuCount", 0) or 0) <= 0 or not str(profile.get("gpuType", "")).strip():
                 raise ApiError("GPU capacity scans require a selected GPU hardware profile.", 400)
             if not bool(profile.get("supported", True)):
                 raise ApiError(str(profile.get("unavailableReason") or "This GPU is not supported by the current VM stack."), 400)
+            with COMPUTE_READ_LOCK:
+                GPU_HARDWARE_PROFILE_CACHE[normalized_id] = (time.monotonic(), profile)
             return profile
     raise ApiError("The selected GPU hardware profile is no longer available.", 400)
 
