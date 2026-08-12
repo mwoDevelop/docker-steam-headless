@@ -199,6 +199,7 @@
     tokenExpiresAt: 0,
     user: null,
     selectedEndpointId: "",
+    endpointSelectionLocked: false,
     lastStatus: null,
     lastStatusTargetKey: "",
     hardwarePayload: null,
@@ -297,6 +298,7 @@
     }
     if (elements.endpointSelect && (scanCreateEndpointId || saved.endpointId)) {
       state.selectedEndpointId = scanCreateEndpointId || String(saved.endpointId);
+      state.endpointSelectionLocked = true;
       elements.endpointSelect.dataset.savedValue = state.selectedEndpointId;
     }
     if (elements.zoneSelect && scanCreateZone) {
@@ -2260,6 +2262,9 @@
   }
 
   async function autoSelectCreatedInstanceIfNeeded(options) {
+    if (state.endpointSelectionLocked) {
+      return false;
+    }
     const instances = getCreatedInstances();
     if (!instances.length) {
       return false;
@@ -2300,6 +2305,7 @@
     if (endpoint && elements.endpointSelect) {
       elements.endpointSelect.value = String(endpoint.id || "");
       state.selectedEndpointId = String(endpoint.id || "");
+      state.endpointSelectionLocked = false;
       renderEndpointStatus();
     }
     elements.hardwareSelect.value = String(profile.id || "");
@@ -3971,6 +3977,7 @@
     elements.endpointSelect.addEventListener("change", async () => {
       const loadingToken = setPageLoading("Loading selected public endpoint...");
       state.selectedEndpointId = String(elements.endpointSelect.value || "").trim();
+      state.endpointSelectionLocked = true;
       resetGpuAvailabilityScan();
       resetGpuCapacityProbeButton();
       try {
