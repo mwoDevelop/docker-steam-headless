@@ -2272,14 +2272,24 @@
     if (!state.hardwarePayload || !getHardwareProfiles().length) {
       await refreshHardwareOptions({ silent: true });
     }
+    if (state.endpointSelectionLocked) {
+      return false;
+    }
     if (currentSelectionMatchesCreatedInstance()) {
       return false;
     }
-    await selectCreatedInstance(0, options);
+    await selectCreatedInstance(0, { ...(options || {}), automatic: true });
     return true;
   }
 
   async function selectCreatedInstance(index, options) {
+    const automatic = Boolean(options && options.automatic);
+    if (automatic && state.endpointSelectionLocked) {
+      return false;
+    }
+    if (!automatic) {
+      state.endpointSelectionLocked = false;
+    }
     const silent = Boolean(options && options.silent);
     const instances = getCreatedInstances();
     const instance = instances[index];
@@ -2288,6 +2298,9 @@
     }
     if (!state.hardwarePayload || !getHardwareProfiles().length) {
       await refreshHardwareOptions({ silent: false });
+    }
+    if (automatic && state.endpointSelectionLocked) {
+      return false;
     }
 
     const profile = profileForInstance(instance);
@@ -2302,6 +2315,9 @@
 
     resetGpuAvailabilityScan();
     const endpoint = endpointForInstance(instance);
+    if (automatic && state.endpointSelectionLocked) {
+      return false;
+    }
     if (endpoint && elements.endpointSelect) {
       elements.endpointSelect.value = String(endpoint.id || "");
       state.selectedEndpointId = String(endpoint.id || "");
