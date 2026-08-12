@@ -61,7 +61,7 @@ body::before {
     radial-gradient(circle at 20% 18%, rgba(106, 228, 208, 0.22), transparent 28%),
     radial-gradient(circle at 78% 22%, rgba(242, 198, 109, 0.14), transparent 26%),
     rgba(5, 12, 18, 0.62);
-  backdrop-filter: blur(3px);
+  backdrop-filter: blur(1px);
   transition: opacity 180ms ease, visibility 180ms ease;
 }
 
