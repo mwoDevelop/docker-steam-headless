@@ -1884,6 +1884,17 @@ def cleanup_migration_snapshot(target: dict[str, Any]) -> None:
         wait_for_global_operation(operation, timeout_seconds=300)
 
 
+def migration_error_detail(error: ApiError) -> str:
+    raw = str(error)
+    if "ZONE_RESOURCE_POOL_EXHAUSTED" in raw:
+        zone_match = re.search(r"(?:unavailable in the |zones/)([a-z0-9-]+)", raw, re.IGNORECASE)
+        accelerator_match = re.search(r"with 1 ([a-z0-9-]+) accelerator", raw, re.IGNORECASE)
+        zone = zone_match.group(1) if zone_match else "the selected zone"
+        accelerator = accelerator_match.group(1) if accelerator_match else "the selected GPU"
+        return f"Google Compute Engine capacity is unavailable for {accelerator} in {zone}. The prepared state disk is retained; try Start later or prepare another target zone."
+    return raw
+
+
 def execute_admin_migration_action(admin_user: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
     action = str(payload.get("action", "")).strip().lower()
     if action == "prepare":
@@ -2022,8 +2033,9 @@ def execute_admin_migration_action(admin_user: dict[str, Any], payload: dict[str
             update_duckdns(extract_external_ip(final_instance))
             update_migration_target(targets, target, state="started", detail="VM created and endpoint updated.")
         except ApiError as error:
-            update_migration_target(targets, target, state="prepared", detail=f"Start failed; prepared disk is retained. {error}")
-            raise
+            detail = migration_error_detail(error)
+            update_migration_target(targets, target, state="prepared", detail=f"Start failed; prepared disk is retained. {detail}")
+            raise ApiError(detail, error.status_code)
         return build_admin_migrations_payload(admin_user)
 
     if action == "delete":
