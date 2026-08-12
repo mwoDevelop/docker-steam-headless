@@ -1823,6 +1823,21 @@ def migration_target_payload(target: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def migration_target_zones_for_hardware(hardware: dict[str, Any], source_zone: str) -> list[str]:
+    hardware_id = str(hardware.get("id", "") or "").strip()
+    profiles = build_hardware_payload().get("profiles", [])
+    profile = next((item for item in profiles if str(item.get("id", "") or "") == hardware_id), None)
+    if not isinstance(profile, dict):
+        return []
+    return sorted(
+        {
+            str(zone or "").strip()
+            for zone in profile.get("zones", [])
+            if str(zone or "").strip() and str(zone or "").strip() != source_zone
+        }
+    )
+
+
 def build_admin_migrations_payload(admin_user: dict[str, Any]) -> dict[str, Any]:
     endpoints = reconcile_endpoint_instance_bindings()
     sources: list[dict[str, Any]] = []
@@ -1830,10 +1845,13 @@ def build_admin_migrations_payload(admin_user: dict[str, Any]) -> dict[str, Any]
         instance = endpoint_instance_or_none(endpoint)
         if instance is None:
             continue
+        endpoint_payload = endpoint_public_payload(endpoint)
+        hardware = instance_hardware_selection(instance)
         sources.append({
-            "endpoint": endpoint_public_payload(endpoint),
+            "endpoint": endpoint_payload,
             "instanceState": str(instance.get("status", STATUS_NOT_FOUND)).upper(),
             "eligible": str(instance.get("status", "")).upper() == "TERMINATED" and active_power_action(instance) is None,
+            "targetZones": migration_target_zones_for_hardware(hardware, str(endpoint_payload.get("zone", "") or "")),
         })
     return {
         "user": admin_user,
@@ -1925,6 +1943,10 @@ def execute_admin_migration_action(admin_user: dict[str, Any], payload: dict[str
         require_no_active_power_action(source_instance, "migration")
         if not target_zone.replace("-", "").isalnum() or target_zone == str(source_endpoint.get("zone", "") or ""):
             raise ApiError("Choose a different valid target zone.", 400)
+        hardware = instance_hardware_selection(source_instance)
+        compatible_zones = migration_target_zones_for_hardware(hardware, str(source_endpoint.get("zone", "") or ""))
+        if target_zone not in compatible_zones:
+            raise ApiError("Target zone is not compatible with the source VM hardware profile.", 400)
         if mode == "move":
             if target_endpoint_id != source_endpoint_id:
                 raise ApiError("Move must retain the source endpoint.", 400)
@@ -1937,7 +1959,6 @@ def execute_admin_migration_action(admin_user: dict[str, Any], payload: dict[str
         existing = read_migration_targets()
         if any(item["state"] in {"preparing", "prepared", "starting"} and (item["sourceEndpointId"] == source_endpoint_id or item["endpointId"] == target_endpoint_id or (item["targetZone"] == target_zone and item["hardware"] == instance_hardware_selection(source_instance))) for item in existing):
             raise ApiError("A conflicting migration is already prepared or running.", 409)
-        hardware = instance_hardware_selection(source_instance)
         state_disk = migration_source_state_disk(source_instance)
         now = migration_timestamp()
         nonce = hashlib.sha1(f"{source_endpoint_id}:{target_zone}:{mode}:{time.time_ns()}".encode("utf-8")).hexdigest()[:12]
@@ -2007,7 +2028,7 @@ def execute_admin_migration_action(admin_user: dict[str, Any], payload: dict[str
                 source_endpoint = endpoint_by_id(source_endpoint_id)
                 clear_endpoint_instance_binding(source_endpoint)
                 persist_endpoint(source_endpoint)
-                target = update_migration_target(existing, target, detail="Prepared. Source VM was removed; the migration snapshot remains for rollback.")
+                target = update_migration_target(existing, target, detail="Prepared. Source VM was removed and the temporary migration snapshot was deleted.")
         except ApiError as error:
             try:
                 cleanup_migration_snapshot(target)

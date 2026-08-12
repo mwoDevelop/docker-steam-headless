@@ -401,6 +401,7 @@
     const payload = state.migrationsPayload;
     if (!payload || !state.user) {
       elements.migrationSource.innerHTML = '<option value="">Sign in to load stopped VMs</option>';
+      elements.migrationTargetZone.innerHTML = '<option value="">Sign in to load compatible zones</option>';
       elements.migrationTargetEndpoint.innerHTML = '<option value="">Sign in to load endpoints</option>';
       elements.migrationStatus.textContent = "Sign in to load stopped VM migration targets.";
       elements.migrationStatus.dataset.tone = "neutral";
@@ -421,6 +422,18 @@
     const sourceId = eligible.some((source) => String(source.endpoint && source.endpoint.id || "") === previousSource)
       ? previousSource : String(eligible[0] && eligible[0].endpoint && eligible[0].endpoint.id || "");
     elements.migrationSource.value = sourceId;
+    const source = eligible.find((item) => String(item.endpoint && item.endpoint.id || "") === sourceId) || null;
+    const targetZones = Array.isArray(source && source.targetZones)
+      ? source.targetZones.map((zone) => String(zone || "").trim()).filter(Boolean)
+      : [];
+    const previousZone = String(elements.migrationTargetZone.value || "").trim();
+    elements.migrationTargetZone.innerHTML = targetZones.length
+      ? targetZones.map((zone) => `<option value="${escapeHtml(zone)}">${escapeHtml(zone)}</option>`).join("")
+      : '<option value="">No compatible target zones available</option>';
+    const preferredZone = targetZones.includes(previousZone)
+      ? previousZone
+      : targetZones.find((zone) => zone.startsWith("europe-")) || targetZones[0] || "";
+    elements.migrationTargetZone.value = preferredZone;
     const mode = String(elements.migrationMode.value || "copy");
     const endpoints = Array.isArray(payload.endpoints) ? payload.endpoints : [];
     const targets = mode === "move"
@@ -1331,7 +1344,7 @@
       return;
     }
     const prompt = mode === "move"
-      ? `Move ${sourceEndpointId} to ${targetZone}? The source VM is deleted only after the migration disk is prepared; its snapshot is retained for rollback.`
+      ? `Move ${sourceEndpointId} to ${targetZone}? The source VM is deleted only after the target disk is prepared. The temporary snapshot is removed automatically.`
       : `Copy ${sourceEndpointId} to ${targetZone}? The source VM remains unchanged.`;
     if (!window.confirm(prompt)) return;
     try {
