@@ -85,7 +85,10 @@
           <div>
             <p class="page-loader-kicker">Loading VM Control</p>
             <p id="page-loader-message">Preparing VM control...</p>
-            <button id="cancel-gpu-scan" class="ghost page-loader-cancel hidden" type="button">Pause Scan and Release Reservations</button>
+            <div class="page-loader-scan-actions">
+              <button id="pause-gpu-scan" class="ghost page-loader-cancel hidden" type="button">Pause Scan and Release Reservations</button>
+              <button id="cancel-gpu-scan" class="ghost danger page-loader-cancel hidden" type="button">Cancel Scan and Release Reservations</button>
+            </div>
           </div>
         </div>
         <div id="page-loader-scan-results" class="page-loader-scan-results" aria-live="polite" hidden></div>
@@ -501,6 +504,6 @@
     </main>
 
     <script src="./admin.js?v=admin-migrations-20260812"></script>
-    <script src="./app.js?v=endpoint-selection-race-20260812"></script>
+    <script src="./app.js?v=gpu-scan-pause-resume-20260812"></script>
   </body>
 </html>
