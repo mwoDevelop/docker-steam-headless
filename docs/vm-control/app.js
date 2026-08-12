@@ -2804,9 +2804,19 @@
     const steps = operationProgressDefinition(command);
     const index = Math.min(Math.max(operationProgressIndex(command, payload, steps), 0), steps.length - 1);
     const progressState = payload ? "Live status received" : "Waiting for first VM status";
+    const rawVmAction = progressPayloadState(
+      payload,
+      ["powerAction", "label"],
+      progressPayloadState(payload, ["powerAction", "phase"]),
+    );
+    const vmAction = rawVmAction.toLowerCase() === "unknown"
+      ? ["create", "start"].includes(command)
+        ? "Not required during provisioning"
+        : "No guest action active"
+      : rawVmAction;
     const facts = payload ? [
       ["VM", String(payload.status || "NOT_FOUND")],
-      ["VM action", progressPayloadState(payload, ["powerAction", "label"], progressPayloadState(payload, ["powerAction", "phase"]))],
+      ["VM action", vmAction],
       ["Data disk", progressPayloadState(payload, ["persistence", "dataDisk", "label"], progressPayloadState(payload, ["persistence", "dataDisk", "state"]))],
       ["Sunshine", progressPayloadState(payload, ["sunshineStatus", "label"], progressPayloadState(payload, ["sunshineStatus", "state"]))],
       ["Minecraft", progressPayloadState(payload, ["minecraftStatus", "label"], progressPayloadState(payload, ["minecraftStatus", "state"]))],
