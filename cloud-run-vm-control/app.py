@@ -5044,7 +5044,14 @@ def set_instance_metadata_values(instance: dict[str, Any], updates: dict[str, st
             wait_for_zone_operation(operation, zone=instance_zone_name(current_instance))
             return
         except ApiError as error:
-            if "CONDITION_NOT_MET" not in str(error) or attempt == 4:
+            error_text = str(error).lower()
+            metadata_conflict = (
+                "condition_not_met" in error_text
+                or "conditionnotmet" in error_text
+                or "metadata fingerprint" in error_text
+                or "supplied fingerprint does not match" in error_text
+            )
+            if not metadata_conflict or attempt == 4:
                 raise
             last_error = error
             time.sleep(0.4 * (attempt + 1))
@@ -6676,31 +6683,32 @@ def build_minecraft_status(
         if server
         else metadata_value(instance, MINECRAFT_STATUS_DETAIL_METADATA_KEY).strip()
     )
+    minecraft_installed = state not in {"", "not_installed", "removed", "not_created"}
     phase, power_action, _ = parse_power_action_status(
         metadata_value(instance, POWER_ACTION_STATUS_METADATA_KEY)
     )
-    if power_action == "create-backup" and phase in {"requested", "running"}:
+    if minecraft_installed and power_action == "create-backup" and phase in {"requested", "running"}:
         return {
             "state": "backup",
             "label": "Backup in progress",
             "detail": detail or "Minecraft server is temporarily stopped while the manual backup is running.",
             "version": version,
         }
-    if power_action == "restore-backup" and phase in {"requested", "running"}:
+    if minecraft_installed and power_action == "restore-backup" and phase in {"requested", "running"}:
         return {
             "state": "restore",
             "label": "Restore in progress",
             "detail": detail or "Minecraft server is temporarily stopped while the selected backup is restored.",
             "version": version,
         }
-    if power_action in {"stop", "delete", "auto-stop"} and phase in {"requested", "running", "backed-up", "stopping"}:
+    if minecraft_installed and power_action in {"stop", "delete", "auto-stop"} and phase in {"requested", "running", "backed-up", "stopping"}:
         return {
             "state": "stopping",
             "label": "Stopping",
             "detail": detail or "VM is stopping. Minecraft server is not expected to be reachable.",
             "version": version,
         }
-    if power_action == "restart" and phase in {"requested", "running", "rebooting"}:
+    if minecraft_installed and power_action == "restart" and phase in {"requested", "running", "rebooting"}:
         return {
             "state": "starting",
             "label": "Restarting",
