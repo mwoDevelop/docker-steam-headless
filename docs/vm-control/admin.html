@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;700&display=swap"
       rel="stylesheet"
     >
-    <link rel="stylesheet" href="./styles.css?v=loader-handoff-20260812">
+    <link rel="stylesheet" href="./styles.css?v=create-applications-20260813">
     <script src="https://accounts.google.com/gsi/client" async defer></script>
   </head>
   <body>
@@ -502,9 +502,22 @@
         </form>
         <div id="compatibility-list" class="admin-list"></div>
       </section>
+      <dialog id="create-applications-dialog" class="create-applications-dialog" aria-labelledby="create-applications-title">
+        <form method="dialog" class="create-applications-form">
+          <p class="eyebrow">Create VM</p>
+          <h2 id="create-applications-title">Install desktop applications</h2>
+          <p id="create-applications-summary" class="access-meta"></p>
+          <div id="create-applications-list" class="create-applications-list"></div>
+          <div class="create-applications-actions">
+            <button value="cancel" class="ghost" type="submit">Cancel</button>
+            <button value="create-empty" class="action" type="submit">Create without applications</button>
+            <button id="create-with-applications" value="create-selected" class="action create" type="submit" disabled>Create and install selected</button>
+          </div>
+        </form>
+      </dialog>
     </main>
 
     <script src="./admin.js?v=loader-handoff-20260812"></script>
-    <script src="./app.js?v=operation-progress-v5-20260812"></script>
+    <script src="./app.js?v=create-applications-20260813"></script>
   </body>
 </html>

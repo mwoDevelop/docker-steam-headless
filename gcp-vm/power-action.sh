@@ -24,6 +24,8 @@ MINECRAFT_GAME_PORT_METADATA_KEY="vm-minecraft-game-port"
 MINECRAFT_SERVERS_METADATA_KEY="vm-minecraft-servers"
 STEAM_ENV_METADATA_KEY="steam-headless-env"
 SELECTED_APPLICATION_METADATA_KEY="vm-selected-application-id"
+POST_CREATE_APPLICATION_IDS_METADATA_KEY="vm-post-create-application-ids"
+POST_CREATE_APPLICATIONS_RESULT_METADATA_KEY="vm-post-create-applications-result"
 ENVF=/opt/container-services/steam-headless/.env
 COMPOSE_DIR=/opt/container-services/steam-headless
 COMPOSE_GCE="${COMPOSE_DIR}/docker-compose.nvidia.privileged.gce.yml"
@@ -1289,6 +1291,78 @@ PAYLOAD
   set_power_action_status "$action" "$token" "$target_phase" ""
 }
 
+wait_for_steam_headless_container() {
+  local container_id
+  for _ in $(seq 1 90); do
+    container_id="$(docker ps --filter 'name=steam-headless' --format '{{.ID}}' | head -n 1 || true)"
+    [[ -n "$container_id" ]] && return 0
+    sleep 2
+  done
+  return 1
+}
+
+run_post_create_applications() {
+  local action="$1"
+  local token="$2"
+  local requested app_ids total index app_id failures completed pending
+
+  requested="$(metadata_get "$POST_CREATE_APPLICATION_IDS_METADATA_KEY" | tr -d '\r' || true)"
+  IFS=',' read -r -a app_ids <<< "$requested"
+  total="${#app_ids[@]}"
+  if [[ "$total" -eq 0 ]]; then
+    set_instance_metadata_value "$POST_CREATE_APPLICATIONS_RESULT_METADATA_KEY" "completed:0/0" || true
+    set_power_action_status "$action" "$token" "installed" ""
+    return 0
+  fi
+
+  if ! wait_for_steam_headless_container; then
+    set_instance_metadata_value "$POST_CREATE_APPLICATIONS_RESULT_METADATA_KEY" "failed:steam-headless-not-ready" || true
+    set_sunshine_status "error" "Selected application installation could not start because Steam Headless was not ready."
+    set_power_action_status "$action" "$token" "failed" ""
+    return 1
+  fi
+
+  index=0
+  completed=0
+  failures=""
+  for app_id in "${app_ids[@]}"; do
+    [[ "$app_id" =~ ^(steam|prism|chrome)$ ]] || {
+      failures="${failures}${failures:+,}${app_id:-invalid}"
+      continue
+    }
+    pending="$(metadata_get "$POWER_ACTION_METADATA_KEY" || true)"
+    if [[ -n "$pending" && "$pending" != "${action}:${token}" ]]; then
+      log "Post-create application setup was cancelled by ${pending}."
+      return 0
+    fi
+    index=$((index + 1))
+    set_power_action_status "$action" "$token" "running" "${action}:${token}"
+    set_sunshine_status "starting" "Installing selected application ${index}/${total}: ${app_id}."
+    set_instance_metadata_value "$SELECTED_APPLICATION_METADATA_KEY" "$app_id" || true
+    if run_application_action "install-app" "$token"; then
+      completed=$((completed + 1))
+    else
+      failures="${failures}${failures:+,}${app_id}"
+    fi
+    pending="$(metadata_get "$POWER_ACTION_METADATA_KEY" || true)"
+    if [[ -n "$pending" && "$pending" != "${action}:${token}" ]]; then
+      log "Post-create application setup was cancelled by ${pending}."
+      return 0
+    fi
+  done
+
+  if [[ -n "$failures" ]]; then
+    set_instance_metadata_value "$POST_CREATE_APPLICATIONS_RESULT_METADATA_KEY" "failed:${completed}/${total}:${failures}" || true
+    set_sunshine_status "ready" "Selected applications installed: ${completed}/${total}. Failed: ${failures}."
+    set_power_action_status "$action" "$token" "failed" ""
+    return 1
+  fi
+
+  set_instance_metadata_value "$POST_CREATE_APPLICATIONS_RESULT_METADATA_KEY" "completed:${completed}/${total}" || true
+  set_sunshine_status "ready" "Installed selected applications: ${completed}/${total}."
+  set_power_action_status "$action" "$token" "installed" ""
+}
+
 run_daemon() {
   log "Starting power action daemon"
   mark_runtime_image_agent_ready || true
@@ -1319,6 +1393,9 @@ run_daemon() {
           ;;
         install-app|uninstall-app)
           run_application_action "$action" "$token" || true
+          ;;
+        post-create-applications)
+          run_post_create_applications "$action" "$token" || true
           ;;
         install-minecraft|start-minecraft|stop-minecraft|restart-minecraft|remove-minecraft)
           run_minecraft_action "$action" "$token" || true

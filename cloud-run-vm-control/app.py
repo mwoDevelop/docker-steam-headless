@@ -216,6 +216,9 @@ RESTORE_STATUS_METADATA_KEY = "vm-restore-status"
 RESTORE_DETAIL_METADATA_KEY = "vm-restore-detail"
 SELECTED_BACKUP_METADATA_KEY = "vm-selected-backup-id"
 SELECTED_APPLICATION_METADATA_KEY = "vm-selected-application-id"
+POST_CREATE_APPLICATION_IDS_METADATA_KEY = "vm-post-create-application-ids"
+POST_CREATE_APPLICATIONS_RESULT_METADATA_KEY = "vm-post-create-applications-result"
+POST_CREATE_APPLICATIONS_ACTION = "post-create-applications"
 BACKUPS_JSON_METADATA_KEY = "vm-backups-json"
 DATA_DISK_STATUS_METADATA_KEY = "vm-data-disk-status"
 DATA_DISK_DETAIL_METADATA_KEY = "vm-data-disk-detail"
@@ -5181,8 +5184,10 @@ def start_metadata_updates(
     *,
     auto_stop_hours: int | None,
     sunshine_credentials: dict[str, str],
+    post_create_application_ids: list[str] | None = None,
+    post_create_application_token: str = "",
 ) -> dict[str, str | None]:
-    return {
+    updates: dict[str, str | None] = {
         "startup-script": decode_config_b64("vm_startup_script_b64"),
         "shutdown-script": decode_config_b64("vm_shutdown_script_b64"),
         "vm-persist-script": decode_config_b64("vm_persist_script_b64"),
@@ -5209,6 +5214,14 @@ def start_metadata_updates(
             else "GPU disabled for this VM; Sunshine stack was not started."
         ),
     }
+    if post_create_application_ids is not None:
+        updates.update(
+            post_create_application_metadata_updates(
+                post_create_application_ids,
+                post_create_application_token,
+            )
+        )
+    return updates
 
 
 def reconcile_stopped_instance_hardware(instance: dict[str, Any]) -> dict[str, Any]:
@@ -5591,6 +5604,44 @@ def parse_application_id(payload: dict[str, Any]) -> str:
     return raw
 
 
+def parse_create_application_ids(payload: dict[str, Any]) -> list[str]:
+    raw = payload.get("applicationIds", [])
+    if raw in (None, ""):
+        return []
+    if not isinstance(raw, list):
+        raise ApiError("applicationIds must be a list.", 400)
+    application_ids = [str(value or "").strip().lower() for value in raw]
+    if any(not application_id for application_id in application_ids):
+        raise ApiError("applicationIds cannot contain empty values.", 400)
+    if len(application_ids) != len(set(application_ids)):
+        raise ApiError("applicationIds cannot contain duplicates.", 400)
+    unsupported = [application_id for application_id in application_ids if application_id not in APPLICATION_IDS]
+    if unsupported:
+        raise ApiError(f"Unsupported applicationIds: {', '.join(unsupported)}.", 400)
+    return application_ids
+
+
+def post_create_application_metadata_updates(
+    application_ids: list[str],
+    token: str,
+) -> dict[str, str | None]:
+    if not application_ids:
+        return {
+            POST_CREATE_APPLICATION_IDS_METADATA_KEY: None,
+            POST_CREATE_APPLICATIONS_RESULT_METADATA_KEY: None,
+            POWER_ACTION_METADATA_KEY: None,
+            POWER_ACTION_STATUS_METADATA_KEY: None,
+        }
+    if not token:
+        raise ApiError("Missing post-create application action token.", 500)
+    return {
+        POST_CREATE_APPLICATION_IDS_METADATA_KEY: ",".join(application_ids),
+        POST_CREATE_APPLICATIONS_RESULT_METADATA_KEY: "requested",
+        POWER_ACTION_METADATA_KEY: f"{POST_CREATE_APPLICATIONS_ACTION}:{token}",
+        POWER_ACTION_STATUS_METADATA_KEY: f"requested:{POST_CREATE_APPLICATIONS_ACTION}:{token}",
+    }
+
+
 def poll_power_action_backup(
     *,
     action: str,
@@ -5741,6 +5792,8 @@ def build_instance_metadata_items(
     auto_stop_hours: int | None,
     sunshine_credentials: dict[str, str],
     restore_mode: str | None = None,
+    post_create_application_ids: list[str] | None = None,
+    post_create_application_token: str = "",
 ) -> list[dict[str, str]]:
     items = [
         {"key": "startup-script", "value": decode_config_b64("vm_startup_script_b64")},
@@ -5807,6 +5860,15 @@ def build_instance_metadata_items(
         )
     if auto_stop_hours is not None:
         items.append({"key": AUTO_STOP_METADATA_KEY, "value": str(auto_stop_hours)})
+    if post_create_application_ids is not None:
+        items.extend(
+            {"key": key, "value": value}
+            for key, value in post_create_application_metadata_updates(
+                post_create_application_ids,
+                post_create_application_token,
+            ).items()
+            if value is not None
+        )
     return items
 
 
@@ -5857,6 +5919,8 @@ def build_instance_create_request(
     auto_stop_hours: int | None,
     sunshine_credentials: dict[str, str],
     existing_data_disk_url: str = "",
+    post_create_application_ids: list[str] | None = None,
+    post_create_application_token: str = "",
 ) -> dict[str, Any]:
     network_interface: dict[str, Any] = {
         "network": network_path(),
@@ -5925,6 +5989,8 @@ def build_instance_create_request(
                 "items": build_instance_metadata_items(
                     auto_stop_hours=auto_stop_hours,
                     sunshine_credentials=sunshine_credentials,
+                    post_create_application_ids=post_create_application_ids,
+                    post_create_application_token=post_create_application_token,
                 )
             },
     }
@@ -6040,6 +6106,13 @@ def build_sunshine_status(instance: dict[str, Any] | None) -> dict[str, str]:
             "state": "starting",
             "label": "Updating application",
             "detail": detail or "Updating Sunshine application list.",
+            "version": version,
+        }
+    if power_action == POST_CREATE_APPLICATIONS_ACTION and phase in {"requested", "running"}:
+        return {
+            "state": "starting",
+            "label": "Installing applications",
+            "detail": detail or "Installing applications selected during VM creation.",
             "version": version,
         }
     if (
@@ -7032,7 +7105,10 @@ def allowed_commands(instance: dict[str, Any] | None) -> list[str]:
     status = str(instance.get("status", "UNKNOWN")).upper()
     hardware_matches = instance_hardware_matches_selection(instance)
     if status == "RUNNING":
-        if active_power_action(instance):
+        active = active_power_action(instance)
+        if active:
+            if active.get("action") == POST_CREATE_APPLICATIONS_ACTION:
+                return ["status", "delete"]
             return ["status"]
         gpu_type = metadata_value(instance, "vm-gpu-type").strip() or instance_accelerator_summary(instance)[0]
         if gpu_type in INCOMPATIBLE_SUNSHINE_ACCELERATORS:
@@ -7097,6 +7173,7 @@ def build_power_action_status(instance: dict[str, Any] | None) -> dict[str, str]
         "scheduled": "Scheduled",
         "stopping": "Stopping",
         "failed": "Failed",
+        "cancelled": "Cancelled",
     }
     return {
         "phase": phase,
@@ -7104,6 +7181,35 @@ def build_power_action_status(instance: dict[str, Any] | None) -> dict[str, str]
         "token": token,
         "pending": pending,
         "label": labels.get(phase, phase.title() if phase else ""),
+    }
+
+
+def build_post_create_applications_status(instance: dict[str, Any] | None) -> dict[str, Any]:
+    if instance is None:
+        return {"applications": [], "phase": "", "label": "", "detail": ""}
+    applications = [
+        application_id
+        for application_id in metadata_value(instance, POST_CREATE_APPLICATION_IDS_METADATA_KEY).split(",")
+        if application_id
+    ]
+    phase, action, _ = parse_power_action_status(
+        metadata_value(instance, POWER_ACTION_STATUS_METADATA_KEY)
+    )
+    if action != POST_CREATE_APPLICATIONS_ACTION:
+        return {"applications": applications, "phase": "", "label": "", "detail": ""}
+    labels = {
+        "requested": "Queued",
+        "running": "Installing",
+        "installed": "Completed",
+        "failed": "Failed",
+        "cancelled": "Cancelled",
+    }
+    return {
+        "applications": applications,
+        "phase": phase,
+        "label": labels.get(phase, phase.title() if phase else ""),
+        "detail": metadata_value(instance, SUNSHINE_STATUS_DETAIL_METADATA_KEY).strip(),
+        "result": metadata_value(instance, POST_CREATE_APPLICATIONS_RESULT_METADATA_KEY).strip(),
     }
 
 
@@ -7198,6 +7304,7 @@ def build_status_payload(
                 "catalog": APPLICATION_CATALOG,
                 "selected": "",
             },
+            "postCreateApplications": build_post_create_applications_status(None),
         }
         if duckdns_updated is not None:
             payload["duckdnsUpdated"] = duckdns_updated
@@ -7265,6 +7372,7 @@ def build_status_payload(
             "catalog": APPLICATION_CATALOG,
             "selected": metadata_value(instance, SELECTED_APPLICATION_METADATA_KEY),
         },
+        "postCreateApplications": build_post_create_applications_status(instance),
     }
     if duckdns_updated is not None:
         payload["duckdnsUpdated"] = duckdns_updated
@@ -7712,7 +7820,13 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
                 logging.warning("Automatic endpoint IP cleanup after stop failed: %s", error)
         return build_status_payload(current_instance, user=user, command=command)
 
-    require_no_active_power_action(current_instance, command)
+    active_action = active_power_action(current_instance)
+    if not (
+        command == "delete"
+        and active_action
+        and active_action.get("action") == POST_CREATE_APPLICATIONS_ACTION
+    ):
+        require_no_active_power_action(current_instance, command)
 
     if command == "create":
         prepared = active_migration_for_endpoint(selected_endpoint_id())
@@ -7725,6 +7839,10 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
         validate_scan_create_preparation(payload, user)
         if selected_gpu_count() > 0:
             gpu_hardware_profile(selected_hardware_id())
+        application_ids = parse_create_application_ids(payload)
+        if application_ids and selected_gpu_count() <= 0:
+            raise ApiError("Automatic desktop application installation requires a GPU-enabled VM.", 409)
+        post_create_application_token = generate_action_token() if application_ids else ""
         auto_stop_hours = parse_auto_stop_hours(payload)
         if current_instance is not None:
             if current_status != "TERMINATED" or instance_hardware_matches_selection(current_instance):
@@ -7740,6 +7858,8 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
                 start_metadata_updates(
                     auto_stop_hours=auto_stop_hours,
                     sunshine_credentials=sunshine_credentials,
+                    post_create_application_ids=application_ids,
+                    post_create_application_token=post_create_application_token,
                 ),
             )
             current_instance = get_instance()
@@ -7770,6 +7890,8 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
             json=build_instance_create_request(
                 auto_stop_hours=auto_stop_hours,
                 sunshine_credentials=sunshine_credentials,
+                post_create_application_ids=application_ids,
+                post_create_application_token=post_create_application_token,
             ),
         )
         if not isinstance(operation, dict):
@@ -7933,6 +8055,19 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
         confirmed = bool(payload.get("confirmDelete"))
         if not confirmed:
             raise ApiError("Delete requires confirmation.", 400)
+
+        if active_action and active_action.get("action") == POST_CREATE_APPLICATIONS_ACTION:
+            set_instance_metadata_values(
+                current_instance,
+                {
+                    POWER_ACTION_METADATA_KEY: None,
+                    POWER_ACTION_STATUS_METADATA_KEY: (
+                        f"cancelled:{POST_CREATE_APPLICATIONS_ACTION}:{active_action.get('token', '')}"
+                    ),
+                    POST_CREATE_APPLICATIONS_RESULT_METADATA_KEY: "cancelled",
+                },
+            )
+            current_instance = get_instance()
 
         if current_status == "RUNNING":
             if is_live_backup_ready(current_instance):

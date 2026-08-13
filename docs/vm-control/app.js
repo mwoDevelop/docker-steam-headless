@@ -3229,6 +3229,76 @@
       && String(error && error.details && error.details.reason || "") === "COMPUTE_READ_RATE_LIMIT";
   }
 
+  function createApplicationCatalog() {
+    const catalog = state.backendConfig && Array.isArray(state.backendConfig.applicationCatalog)
+      ? state.backendConfig.applicationCatalog
+      : [];
+    return catalog.filter((application) => application && application.id && application.label);
+  }
+
+  function selectPostCreateApplications(target) {
+    const dialog = document.querySelector("#create-applications-dialog");
+    const summary = document.querySelector("#create-applications-summary");
+    const list = document.querySelector("#create-applications-list");
+    const selectedButton = document.querySelector("#create-with-applications");
+    if (!dialog || !summary || !list || !selectedButton) {
+      return Promise.resolve([]);
+    }
+
+    const gpuEnabled = Number(target && target.gpuCount || 0) > 0;
+    const applicationCatalog = createApplicationCatalog();
+    const targetLabel = [selectedEndpoint() && selectedEndpoint().domain, selectedHardwareLabel(), target && target.zone]
+      .filter(Boolean)
+      .join(" · ");
+    summary.textContent = gpuEnabled
+      ? `Target: ${targetLabel}. Selected applications will be installed after the VM and Sunshine are ready.`
+      : `Target: ${targetLabel}. Desktop application installation requires a GPU-enabled VM, so this VM will be created without applications.`;
+    list.replaceChildren();
+    if (!applicationCatalog.length) {
+      const empty = document.createElement("p");
+      empty.className = "access-meta";
+      empty.textContent = "No installable applications are available from the backend.";
+      list.append(empty);
+    } else {
+      applicationCatalog.forEach((application) => {
+        const label = document.createElement("label");
+        label.className = "create-application-option";
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.value = String(application.id);
+        checkbox.disabled = !gpuEnabled;
+        const copy = document.createElement("span");
+        const title = document.createElement("strong");
+        title.textContent = String(application.label);
+        const description = document.createElement("small");
+        description.textContent = String(application.description || "");
+        copy.append(title, description);
+        label.append(checkbox, copy);
+        list.append(label);
+      });
+    }
+
+    const updateSelectedButton = () => {
+      selectedButton.disabled = !gpuEnabled || !list.querySelector('input[type="checkbox"]:checked');
+    };
+    list.onchange = updateSelectedButton;
+    updateSelectedButton();
+
+    return new Promise((resolve) => {
+      const onClose = () => {
+        const choice = dialog.returnValue;
+        if (choice === "create-selected") {
+          resolve(Array.from(list.querySelectorAll('input[type="checkbox"]:checked'))
+            .map((checkbox) => String(checkbox.value)));
+          return;
+        }
+        resolve(choice === "create-empty" ? [] : null);
+      };
+      dialog.addEventListener("close", onClose, { once: true });
+      dialog.showModal();
+    });
+  }
+
   async function dispatchCommand(command) {
     if (!state.user) {
       throw new Error("Sign in with Google first.");
@@ -3254,6 +3324,14 @@
     }
     if (command === "install-minecraft") {
       state.pendingMinecraftServerType = requestedMinecraftServerType;
+    }
+
+    const createApplicationIds = command === "create"
+      ? await selectPostCreateApplications(commandTargetParams)
+      : [];
+    if (command === "create" && createApplicationIds === null) {
+      setBanner("Create cancelled.", "warning");
+      return;
     }
 
     if (command === "delete") {
@@ -3310,6 +3388,9 @@
 
     try {
       const body = { command, ...commandTargetParams };
+      if (command === "create") {
+        body.applicationIds = createApplicationIds;
+      }
       if (command === "delete") {
         body.confirmDelete = true;
       }
