@@ -834,6 +834,38 @@ def secret_path(secret_name: str) -> str:
     return f"projects/{project}/secrets/{secret_name}"
 
 
+def add_secret_version_if_changed(
+    secret_name: str,
+    payload: bytes,
+    *,
+    error_message: str,
+) -> bool:
+    """Add a version only when its bytes differ from the current payload."""
+
+    session = compute_session()
+    current = session.get(
+        f"{SECRET_MANAGER_BASE_URL}/{secret_path(secret_name)}/versions/latest:access",
+        timeout=30,
+    )
+    if current.status_code == 200:
+        try:
+            encoded = str(((current.json() or {}).get("payload") or {}).get("data") or "")
+            if base64.b64decode(encoded) == payload:
+                return False
+        except (ValueError, TypeError):
+            pass
+    elif current.status_code != 404:
+        raise ApiError(f"{error_message}: unable to compare current version.", 502)
+    response = session.post(
+        f"{SECRET_MANAGER_BASE_URL}/{secret_path(secret_name)}:addVersion",
+        json={"payload": {"data": base64.b64encode(payload).decode("ascii")}},
+        timeout=30,
+    )
+    if response.status_code >= 400:
+        raise ApiError(f"{error_message}: {response.text}", 502)
+    return True
+
+
 def read_access_user_profiles() -> dict[str, dict[str, bool]]:
     secret_name = str(CONFIG["access_users_secret_name"] or "").strip()
     if not secret_name:
@@ -898,13 +930,11 @@ def write_access_user_profiles(profiles: dict[str, dict[str, bool]]) -> None:
         for email, profile in sorted(profiles.items())
     ]
     payload = json.dumps({"users": users}, separators=(",", ":")).encode("utf-8")
-    response = compute_session().post(
-        f"{SECRET_MANAGER_BASE_URL}/{secret_path(secret_name)}:addVersion",
-        json={"payload": {"data": base64.b64encode(payload).decode("ascii")}},
-        timeout=30,
+    add_secret_version_if_changed(
+        secret_name,
+        payload,
+        error_message="Unable to update managed access users",
     )
-    if response.status_code >= 400:
-        raise ApiError(f"Unable to update managed access users: {response.text}", 502)
 
 
 def write_access_users_secret(users: set[str]) -> None:
@@ -988,13 +1018,11 @@ def save_persisted_minecraft_versions(catalogs: dict[str, dict[str, Any]]) -> No
         {"catalogs": catalogs},
         separators=(",", ":"),
     ).encode("utf-8")
-    response = compute_session().post(
-        f"{SECRET_MANAGER_BASE_URL}/{secret_path(secret_name)}:addVersion",
-        json={"payload": {"data": base64.b64encode(payload).decode("ascii")}},
-        timeout=30,
+    add_secret_version_if_changed(
+        secret_name,
+        payload,
+        error_message="Unable to save Minecraft versions cache",
     )
-    if response.status_code >= 400:
-        raise ApiError(f"Unable to save Minecraft versions cache: {response.text}", 502)
 
 
 def runtime_image_component(raw_component: Any) -> str:
@@ -1116,13 +1144,11 @@ def save_persisted_runtime_image_catalog(catalog: dict[str, Any]) -> None:
     if not secret_name:
         raise ApiError("Runtime image catalog secret is not configured.", 500)
     payload = json.dumps(catalog, separators=(",", ":"), sort_keys=True).encode("utf-8")
-    response = compute_session().post(
-        f"{SECRET_MANAGER_BASE_URL}/{secret_path(secret_name)}:addVersion",
-        json={"payload": {"data": base64.b64encode(payload).decode("ascii")}},
-        timeout=30,
+    add_secret_version_if_changed(
+        secret_name,
+        payload,
+        error_message="Unable to save runtime image catalog",
     )
-    if response.status_code >= 400:
-        raise ApiError(f"Unable to save runtime image catalog: {response.text}", 502)
 
 
 COMPATIBILITY_CATALOG_CACHE: dict[str, Any] = {
@@ -1260,13 +1286,11 @@ def save_persisted_compatibility_catalog(catalog: dict[str, Any]) -> None:
         raise ApiError("Compatibility catalog secret is not configured.", 500)
     normalized = normalize_compatibility_catalog(catalog)
     payload = json.dumps(normalized, separators=(",", ":"), sort_keys=True).encode("utf-8")
-    response = compute_session().post(
-        f"{SECRET_MANAGER_BASE_URL}/{secret_path(secret_name)}:addVersion",
-        json={"payload": {"data": base64.b64encode(payload).decode("ascii")}},
-        timeout=30,
+    add_secret_version_if_changed(
+        secret_name,
+        payload,
+        error_message="Unable to save compatibility catalog",
     )
-    if response.status_code >= 400:
-        raise ApiError(f"Unable to save compatibility catalog: {response.text}", 502)
     COMPATIBILITY_CATALOG_CACHE.clear()
     COMPATIBILITY_CATALOG_CACHE.update({"loaded": True, **normalized})
 
@@ -1704,14 +1728,14 @@ def write_endpoint_records(records: list[dict[str, Any]]) -> None:
         if any(existing["domain"] == endpoint["domain"] for existing in normalized if existing is not endpoint):
             raise ApiError("Endpoint DNS names must be unique.", 400)
         seen.add(endpoint["id"])
-    encoded = base64.b64encode(json.dumps({"endpoints": normalized}, separators=(",", ":"), sort_keys=True).encode("utf-8")).decode("ascii")
-    response = compute_session().post(
-        f"{SECRET_MANAGER_BASE_URL}/{secret_path(secret_name)}:addVersion",
-        json={"payload": {"data": encoded}},
-        timeout=30,
+    payload = json.dumps(
+        {"endpoints": normalized}, separators=(",", ":"), sort_keys=True
+    ).encode("utf-8")
+    add_secret_version_if_changed(
+        secret_name,
+        payload,
+        error_message="Unable to save VM endpoint registry",
     )
-    if not response.ok:
-        raise ApiError("Unable to save VM endpoint registry.", 502)
 
 
 MIGRATION_STATES: Final = frozenset({"preparing", "prepared", "failed", "starting", "started", "cleanup_pending", "cleaned"})
@@ -1795,14 +1819,16 @@ def write_migration_targets(targets: list[dict[str, Any]]) -> None:
     normalized = [target for target in (normalize_migration_target(item) for item in targets) if target]
     if len({target["id"] for target in normalized}) != len(normalized):
         raise ApiError("Migration IDs must be unique.", 400)
-    encoded = base64.b64encode(json.dumps({"schemaVersion": 1, "targets": normalized}, separators=(",", ":"), sort_keys=True).encode("utf-8")).decode("ascii")
-    response = compute_session().post(
-        f"{SECRET_MANAGER_BASE_URL}/{secret_path(secret_name)}:addVersion",
-        json={"payload": {"data": encoded}},
-        timeout=30,
+    payload = json.dumps(
+        {"schemaVersion": 1, "targets": normalized},
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    add_secret_version_if_changed(
+        secret_name,
+        payload,
+        error_message="Unable to save VM migration registry",
     )
-    if not response.ok:
-        raise ApiError("Unable to save VM migration registry.", 502)
 
 
 def migration_targets_collection_url() -> str:

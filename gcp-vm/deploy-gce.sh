@@ -127,7 +127,8 @@ if [[ "${SUNSHINE_PASS}" == "change-me" ]]; then
 fi
 
 STEAM_ENV_FILE=$(mktemp)
-trap 'rm -f "$STEAM_ENV_FILE"' EXIT
+CURRENT_GDRIVE_TOKEN_FILE=""
+trap 'rm -f "$STEAM_ENV_FILE"; if [[ -n "$CURRENT_GDRIVE_TOKEN_FILE" ]]; then rm -f "$CURRENT_GDRIVE_TOKEN_FILE"; fi' EXIT
 render_steam_headless_env > "$STEAM_ENV_FILE"
 
 echo "Using project=${GCP_PROJECT} zone=${GCP_ZONE} name=${GCE_NAME}"
@@ -153,9 +154,21 @@ if [[ -n "$GDRIVE_OAUTH_TOKEN_FILE" ]]; then
       --replication-policy=automatic >/dev/null
   fi
 
-  gcloud secrets versions add "$GDRIVE_OAUTH_TOKEN_SECRET_NAME" \
-    --project "$GCP_PROJECT" \
-    --data-file="$GDRIVE_OAUTH_TOKEN_FILE" >/dev/null
+  CURRENT_GDRIVE_TOKEN_FILE="$(mktemp)"
+  if ! gcloud secrets versions access latest \
+      --secret="$GDRIVE_OAUTH_TOKEN_SECRET_NAME" \
+      --project "$GCP_PROJECT" \
+      --out-file="$CURRENT_GDRIVE_TOKEN_FILE" >/dev/null 2>&1 ||
+      ! cmp -s "$CURRENT_GDRIVE_TOKEN_FILE" "$GDRIVE_OAUTH_TOKEN_FILE"; then
+    echo "Google Drive OAuth credential changed; adding one Secret Manager version."
+    gcloud secrets versions add "$GDRIVE_OAUTH_TOKEN_SECRET_NAME" \
+      --project "$GCP_PROJECT" \
+      --data-file="$GDRIVE_OAUTH_TOKEN_FILE" >/dev/null
+  else
+    echo "Google Drive OAuth credential is unchanged; reusing its current version."
+  fi
+  rm -f "$CURRENT_GDRIVE_TOKEN_FILE"
+  CURRENT_GDRIVE_TOKEN_FILE=""
 fi
 
 if [[ -n "$GDRIVE_FOLDER_ID" && -n "$GDRIVE_OAUTH_TOKEN_SECRET_NAME" ]]; then

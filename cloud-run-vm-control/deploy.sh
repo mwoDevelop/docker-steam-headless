@@ -48,6 +48,18 @@ GDRIVE_FOLDER_ID=${GDRIVE_FOLDER_ID:-}
 GDRIVE_STATE_ROOT=${GDRIVE_STATE_ROOT:-steam-vm-state}
 GDRIVE_OWNER_EMAIL=${GDRIVE_OWNER_EMAIL:-mwodevelop@gmail.com}
 GDRIVE_OAUTH_TOKEN_SECRET_NAME=${GDRIVE_OAUTH_TOKEN_SECRET_NAME:-}
+DUCKDNS_TOKEN_FILE=""
+SECRET_COMPARE_FILE=""
+
+cleanup_sensitive_files() {
+  if [[ -n "$DUCKDNS_TOKEN_FILE" ]]; then
+    rm -f "$DUCKDNS_TOKEN_FILE"
+  fi
+  if [[ -n "$SECRET_COMPARE_FILE" ]]; then
+    rm -f "$SECRET_COMPARE_FILE"
+  fi
+}
+trap cleanup_sensitive_files EXIT
 
 NAME=${NAME:-SteamHeadless}
 TZ=${TZ:-Europe/Warsaw}
@@ -84,6 +96,27 @@ NVIDIA_DRIVER_VERSION=${NVIDIA_DRIVER_VERSION:-}
 
 log() { printf '%s [cloud-run-vm-control] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
 err() { log "ERROR: $*" >&2; exit 1; }
+
+add_secret_version_if_changed() {
+  local secret_name="$1"
+  local data_file="$2"
+  SECRET_COMPARE_FILE="$(mktemp)"
+  if gcloud secrets versions access latest \
+      --secret="$secret_name" \
+      --project "$GCP_PROJECT" \
+      --out-file="$SECRET_COMPARE_FILE" >/dev/null 2>&1 &&
+      cmp -s "$SECRET_COMPARE_FILE" "$data_file"; then
+    rm -f "$SECRET_COMPARE_FILE"
+    SECRET_COMPARE_FILE=""
+    log "Secret ${secret_name} is unchanged; reusing its current version"
+    return 0
+  fi
+  rm -f "$SECRET_COMPARE_FILE"
+  SECRET_COMPARE_FILE=""
+  gcloud secrets versions add "$secret_name" \
+    --project "$GCP_PROJECT" \
+    --data-file="$data_file" >/dev/null
+}
 
 render_steam_headless_env() {
   cat <<EOF
@@ -410,10 +443,12 @@ if [[ -n "${DUCKDNS_TOKEN:-}" ]]; then
       --replication-policy="automatic" >/dev/null
   fi
 
-  log "Updating DuckDNS token secret"
-  printf '%s' "$DUCKDNS_TOKEN" | gcloud secrets versions add "$DUCKDNS_SECRET_NAME" \
-    --project "$GCP_PROJECT" \
-    --data-file=- >/dev/null
+  log "Reconciling DuckDNS token secret"
+  DUCKDNS_TOKEN_FILE="$(mktemp)"
+  printf '%s' "$DUCKDNS_TOKEN" >"$DUCKDNS_TOKEN_FILE"
+  add_secret_version_if_changed "$DUCKDNS_SECRET_NAME" "$DUCKDNS_TOKEN_FILE"
+  rm -f "$DUCKDNS_TOKEN_FILE"
+  DUCKDNS_TOKEN_FILE=""
 
   log "Granting Secret Manager access to runtime service account"
   gcloud secrets add-iam-policy-binding "$DUCKDNS_SECRET_NAME" \
