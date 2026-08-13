@@ -97,6 +97,23 @@ NVIDIA_DRIVER_VERSION=${NVIDIA_DRIVER_VERSION:-}
 log() { printf '%s [cloud-run-vm-control] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
 err() { log "ERROR: $*" >&2; exit 1; }
 
+retry_iam_policy_update() {
+  local attempt status delay=2
+  for attempt in {1..6}; do
+    if "$@"; then
+      return 0
+    else
+      status=$?
+    fi
+    if (( attempt == 6 )); then
+      return "$status"
+    fi
+    log "IAM policy update conflicted; retrying in ${delay}s (${attempt}/6)"
+    sleep "$delay"
+    delay=$((delay * 2))
+  done
+}
+
 add_secret_version_if_changed() {
   local secret_name="$1"
   local data_file="$2"
@@ -182,7 +199,7 @@ if ! gcloud iam service-accounts describe "$RUNTIME_SA_EMAIL" --project "$GCP_PR
 fi
 
 log "Granting Compute Engine VM control role to runtime service account"
-gcloud projects add-iam-policy-binding "$GCP_PROJECT" \
+retry_iam_policy_update gcloud projects add-iam-policy-binding "$GCP_PROJECT" \
   --member="serviceAccount:${RUNTIME_SA_EMAIL}" \
   --role="roles/compute.instanceAdmin.v1" \
   --condition=None \
@@ -201,7 +218,7 @@ if ! gcloud iam roles describe "$ENDPOINT_ADDRESS_ROLE_ID" --project "$GCP_PROJE
 fi
 
 log "Granting endpoint static IP role to runtime service account"
-gcloud projects add-iam-policy-binding "$GCP_PROJECT" \
+retry_iam_policy_update gcloud projects add-iam-policy-binding "$GCP_PROJECT" \
   --member="serviceAccount:${RUNTIME_SA_EMAIL}" \
   --role="$ENDPOINT_ADDRESS_ROLE" \
   --condition=None \
@@ -220,14 +237,14 @@ if ! gcloud iam roles describe "$CAPACITY_RESERVATION_ROLE_ID" --project "$GCP_P
 fi
 
 log "Granting GPU capacity reservation role to runtime service account"
-gcloud projects add-iam-policy-binding "$GCP_PROJECT" \
+retry_iam_policy_update gcloud projects add-iam-policy-binding "$GCP_PROJECT" \
   --member="serviceAccount:${RUNTIME_SA_EMAIL}" \
   --role="$CAPACITY_RESERVATION_ROLE" \
   --condition=None \
   --quiet >/dev/null
 
 log "Granting Service Usage consumer role to runtime service account"
-gcloud projects add-iam-policy-binding "$GCP_PROJECT" \
+retry_iam_policy_update gcloud projects add-iam-policy-binding "$GCP_PROJECT" \
   --member="serviceAccount:${RUNTIME_SA_EMAIL}" \
   --role="roles/serviceusage.serviceUsageConsumer" \
   --condition=None \
@@ -398,7 +415,7 @@ gcloud secrets add-iam-policy-binding "$CAPACITY_CLEANUP_TOKEN_SECRET_NAME" \
   --role="roles/secretmanager.secretAccessor" >/dev/null
 
 log "Granting Compute Engine firewall management role to runtime service account"
-gcloud projects add-iam-policy-binding "$GCP_PROJECT" \
+retry_iam_policy_update gcloud projects add-iam-policy-binding "$GCP_PROJECT" \
   --member="serviceAccount:${RUNTIME_SA_EMAIL}" \
   --role="roles/compute.securityAdmin" \
   --condition=None \
@@ -408,7 +425,7 @@ log "Granting Google IAP TCP access to configured administrators"
 while IFS= read -r admin_email; do
   admin_email="${admin_email//[[:space:]]/}"
   [[ -n "$admin_email" ]] || continue
-  gcloud projects add-iam-policy-binding "$GCP_PROJECT" \
+  retry_iam_policy_update gcloud projects add-iam-policy-binding "$GCP_PROJECT" \
     --member="user:${admin_email}" \
     --role="roles/iap.tunnelResourceAccessor" \
     --condition=None \
