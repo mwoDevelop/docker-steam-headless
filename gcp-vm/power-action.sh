@@ -1321,7 +1321,8 @@ wait_for_steam_headless_container() {
 run_post_create_applications() {
   local action="$1"
   local token="$2"
-  local requested app_ids total index app_id failures completed pending
+  local requested app_ids total index app_id failures completed pending app_attempt
+  local max_app_attempts=3
 
   requested="$(metadata_get "$POST_CREATE_APPLICATION_IDS_METADATA_KEY" | tr -d '\r' || true)"
   IFS=',' read -r -a app_ids <<< "$requested"
@@ -1356,11 +1357,19 @@ run_post_create_applications() {
     set_power_action_status "$action" "$token" "running" "${action}:${token}"
     set_sunshine_status "starting" "Installing selected application ${index}/${total}: ${app_id}."
     set_instance_metadata_value "$SELECTED_APPLICATION_METADATA_KEY" "$app_id" || true
-    if run_application_action "install-app" "$token"; then
-      completed=$((completed + 1))
-    else
-      failures="${failures}${failures:+,}${app_id}"
-    fi
+    for app_attempt in $(seq 1 "$max_app_attempts"); do
+      if run_application_action "install-app" "$token"; then
+        completed=$((completed + 1))
+        break
+      fi
+      if [[ "$app_attempt" -lt "$max_app_attempts" ]]; then
+        log "Selected application ${app_id} did not install on attempt ${app_attempt}/${max_app_attempts}; retrying the application action."
+        set_sunshine_status "starting" "Retrying selected application ${index}/${total}: ${app_id} (${app_attempt}/${max_app_attempts})."
+        sleep $((app_attempt * 20))
+      else
+        failures="${failures}${failures:+,}${app_id}"
+      fi
+    done
     pending="$(metadata_get "$POWER_ACTION_METADATA_KEY" || true)"
     if [[ -n "$pending" && "$pending" != "${action}:${token}" ]]; then
       log "Post-create application setup was cancelled by ${pending}."
