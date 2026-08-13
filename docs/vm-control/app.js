@@ -3238,10 +3238,11 @@
 
   function selectPostCreateApplications(target) {
     const dialog = document.querySelector("#create-applications-dialog");
+    const form = dialog && dialog.querySelector("form");
     const summary = document.querySelector("#create-applications-summary");
     const list = document.querySelector("#create-applications-list");
     const selectedButton = document.querySelector("#create-with-applications");
-    if (!dialog || !summary || !list || !selectedButton) {
+    if (!dialog || !form || !summary || !list || !selectedButton) {
       return Promise.resolve([]);
     }
 
@@ -3285,8 +3286,14 @@
     updateSelectedButton();
 
     return new Promise((resolve) => {
-      const onClose = () => {
-        const choice = dialog.returnValue;
+      let settled = false;
+      const finish = (choice) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        dialog.removeEventListener("close", onClose);
+        form.removeEventListener("submit", onSubmit);
         if (choice === "create-selected") {
           resolve(Array.from(list.querySelectorAll('input[type="checkbox"]:checked'))
             .map((checkbox) => String(checkbox.value)));
@@ -3294,7 +3301,17 @@
         }
         resolve(choice === "create-empty" ? [] : null);
       };
-      dialog.addEventListener("close", onClose, { once: true });
+      const onClose = () => {
+        finish(dialog.returnValue);
+      };
+      const onSubmit = (event) => {
+        event.preventDefault();
+        const choice = String(event.submitter && event.submitter.value || "cancel");
+        dialog.close(choice);
+        finish(choice);
+      };
+      dialog.addEventListener("close", onClose);
+      form.addEventListener("submit", onSubmit);
       dialog.showModal();
     });
   }
