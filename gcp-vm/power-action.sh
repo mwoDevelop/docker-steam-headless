@@ -1210,15 +1210,16 @@ PY
 
 install_flatpak_application() {
   local flatpak_id="$1"
-  local attempt
-  for attempt in 1 2 3; do
-    if sudo -u default env HOME=/home/default flatpak --user install -y flathub "$flatpak_id" \
+  local attempt max_attempts=5
+  for attempt in $(seq 1 "$max_attempts"); do
+    if sudo -u default env HOME=/home/default flatpak --user install --noninteractive -y flathub "$flatpak_id" \
       && sudo -u default env HOME=/home/default flatpak --user info "$flatpak_id" >/dev/null; then
       return 0
     fi
-    if [[ "$attempt" -lt 3 ]]; then
-      echo "Flatpak installation for ${flatpak_id} failed; retrying (${attempt}/3)." >&2
-      sleep $((attempt * 5))
+    if [[ "$attempt" -lt "$max_attempts" ]]; then
+      echo "Flatpak installation for ${flatpak_id} failed; repairing and retrying (${attempt}/${max_attempts})." >&2
+      sudo -u default env HOME=/home/default flatpak --user repair || true
+      sleep $((attempt * 15))
     fi
   done
   return 1
