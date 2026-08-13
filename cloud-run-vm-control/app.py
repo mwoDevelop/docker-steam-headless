@@ -436,6 +436,11 @@ def minecraft_firewall_allowed(ports: list[int]) -> list[dict[str, Any]]:
 FIREWALL_MINECRAFT_ALLOWED: Final = minecraft_firewall_allowed([int(CONFIG["minecraft_port"])])
 APPLICATION_CATALOG: Final = [
     {
+        "id": "steam",
+        "label": "Steam",
+        "description": "Steam desktop client installed as a user Flatpak and added to Sunshine applications.",
+    },
+    {
         "id": "prism",
         "label": "PrismLauncher",
         "description": "Minecraft launcher installed via Flatpak and added to Sunshine applications.",

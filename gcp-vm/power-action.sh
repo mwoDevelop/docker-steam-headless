@@ -1133,7 +1133,7 @@ run_application_action() {
 
   app_id="$(metadata_get "$SELECTED_APPLICATION_METADATA_KEY" || true)"
   case "$app_id" in
-    prism|chrome)
+    steam|prism|chrome)
       ;;
     *)
       log "Unsupported application id: ${app_id:-<empty>}"
@@ -1218,6 +1218,25 @@ install_prism() {
   update_sunshine_apps install PrismLauncher "/usr/bin/flatpak run org.prismlauncher.PrismLauncher//stable"
 }
 
+install_steam() {
+  install -d -m 0755 -o default -g default /home/default /home/default/.local /home/default/.var /home/default/.config
+  if ! command -v flatpak >/dev/null 2>&1; then
+    apt-get update -y
+    apt-get install -y flatpak
+  fi
+  sudo -u default env HOME=/home/default flatpak --user remote-add --if-not-exists flathub \
+    https://flathub.org/repo/flathub.flatpakrepo || true
+  sudo -u default env HOME=/home/default flatpak --user install -y flathub com.valvesoftware.Steam
+  update_sunshine_apps install Steam "/usr/bin/flatpak run com.valvesoftware.Steam"
+}
+
+uninstall_steam() {
+  if command -v flatpak >/dev/null 2>&1; then
+    sudo -u default env HOME=/home/default flatpak --user uninstall -y com.valvesoftware.Steam || true
+  fi
+  update_sunshine_apps uninstall Steam ""
+}
+
 uninstall_prism() {
   if command -v flatpak >/dev/null 2>&1; then
     sudo -u default env HOME=/home/default flatpak --user uninstall -y org.prismlauncher.PrismLauncher || true
@@ -1245,6 +1264,8 @@ uninstall_chrome() {
 }
 
 case "${action}:${app_id}" in
+  install-app:steam) install_steam ;;
+  uninstall-app:steam) uninstall_steam ;;
   install-app:prism) install_prism ;;
   uninstall-app:prism) uninstall_prism ;;
   install-app:chrome) install_chrome ;;
