@@ -1208,6 +1208,22 @@ with open(path, "w", encoding="utf-8") as handle:
 PY
 }
 
+install_flatpak_application() {
+  local flatpak_id="$1"
+  local attempt
+  for attempt in 1 2 3; do
+    if sudo -u default env HOME=/home/default flatpak --user install -y flathub "$flatpak_id" \
+      && sudo -u default env HOME=/home/default flatpak --user info "$flatpak_id" >/dev/null; then
+      return 0
+    fi
+    if [[ "$attempt" -lt 3 ]]; then
+      echo "Flatpak installation for ${flatpak_id} failed; retrying (${attempt}/3)." >&2
+      sleep $((attempt * 5))
+    fi
+  done
+  return 1
+}
+
 install_prism() {
   install -d -m 0755 -o default -g default /home/default /home/default/.local /home/default/.var /home/default/.config
   if ! command -v flatpak >/dev/null 2>&1; then
@@ -1216,7 +1232,7 @@ install_prism() {
   fi
   sudo -u default env HOME=/home/default flatpak --user remote-add --if-not-exists flathub \
     https://flathub.org/repo/flathub.flatpakrepo || true
-  sudo -u default env HOME=/home/default flatpak --user install -y flathub org.prismlauncher.PrismLauncher
+  install_flatpak_application org.prismlauncher.PrismLauncher
   update_sunshine_apps install PrismLauncher "/usr/bin/flatpak run org.prismlauncher.PrismLauncher//stable"
 }
 
@@ -1228,7 +1244,7 @@ install_steam() {
   fi
   sudo -u default env HOME=/home/default flatpak --user remote-add --if-not-exists flathub \
     https://flathub.org/repo/flathub.flatpakrepo || true
-  sudo -u default env HOME=/home/default flatpak --user install -y flathub com.valvesoftware.Steam
+  install_flatpak_application com.valvesoftware.Steam
   update_sunshine_apps install Steam "/usr/bin/flatpak run com.valvesoftware.Steam"
 }
 
@@ -1254,7 +1270,7 @@ install_chrome() {
   fi
   sudo -u default env HOME=/home/default flatpak --user remote-add --if-not-exists flathub \
     https://flathub.org/repo/flathub.flatpakrepo || true
-  sudo -u default env HOME=/home/default flatpak --user install -y flathub com.google.Chrome
+  install_flatpak_application com.google.Chrome
   update_sunshine_apps install "Google Chrome" "/usr/bin/flatpak run com.google.Chrome//stable --no-first-run --password-store=basic"
 }
 
