@@ -266,6 +266,9 @@
     if (selectedTab === "activity") {
       renderActivityHistory();
     }
+    if (selectedTab === "software" && state.user && !state.isBusy) {
+      refreshAdminDataInBackground();
+    }
   }
 
   function renderActivityHistory() {
