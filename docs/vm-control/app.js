@@ -1068,7 +1068,7 @@
   }
 
   function selectedGpuScanScope() {
-    return String(elements.gpuScanScope && elements.gpuScanScope.value || "all");
+    return String(elements.gpuScanScope && elements.gpuScanScope.value || "europe");
   }
 
   function gpuScanScopeLabel(scope = selectedGpuScanScope()) {
