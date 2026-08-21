@@ -5,8 +5,10 @@ aktualne wytyczne operacyjne z historii projektowania i wcześniejsze przewodnik
 
 ## Kontrola maszyn wirtualnych w Google Cloud
 
-- [Cloud Run VM Control](./cloud-run-vm-control.md): architektura, dostęp
-model, wdrożenie i interfejs GUI GitHub Pages.
+- [Architektura bieżącego rozwiązania](./architecture.md): komponenty,
+komunikacja, granice zaufania i diagramy Mermaid.
+- [Cloud Run VM Control](./cloud-run-vm-control.md): model dostępu,
+wdrożenie API i interfejs GUI GitHub Pages.
 - [Minecraft management](./minecraft-management.md): środowiska wykonawcze serwerów, RCON,
 właściwości serwera i zarządzanie treścią Modrinth.
 - [Troubleshooting](./troubleshooting.md): zwykła maszyna wirtualna, światło słoneczne, światło księżyca,

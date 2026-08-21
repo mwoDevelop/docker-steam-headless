@@ -17,7 +17,8 @@ Kontrola maszyny wirtualnej Google Cloud. Zacznij od [documentation index](./doc
 
 - [Open VM Control](https://mwodevelop.github.io/docker-steam-headless/vm-control/)
 - [Administrator panel](https://mwodevelop.github.io/docker-steam-headless/vm-control/admin.html)
-- [Architecture and deployment](./docs/cloud-run-vm-control.md)
+- [Current solution architecture](./docs/architecture.md)
+- [Cloud Run deployment and API](./docs/cloud-run-vm-control.md)
 - [Minecraft management](./docs/minecraft-management.md)
 - [Troubleshooting](./docs/troubleshooting.md)
 
