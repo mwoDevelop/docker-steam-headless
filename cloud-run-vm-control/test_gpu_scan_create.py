@@ -28,6 +28,9 @@ class GpuScanCreateContractTests(unittest.TestCase):
             zone="europe-west3-a",
             workflow_id="gpu-workflow-1",
             reservation_name="gpu-reservation-1",
+            operation="start",
+            source_instance_name="steam-mwo-vm2-l4-europe-west3-b",
+            source_zone="europe-west3-b",
         )
 
         payload = vm_control.decode_scan_create_token(token)
@@ -35,6 +38,8 @@ class GpuScanCreateContractTests(unittest.TestCase):
         self.assertEqual(payload["workflowId"], "gpu-workflow-1")
         self.assertEqual(payload["reservationName"], "gpu-reservation-1")
         self.assertEqual(payload["endpointId"], "mwo-vm2")
+        self.assertEqual(payload["operation"], "start")
+        self.assertEqual(payload["sourceZone"], "europe-west3-b")
         self.assertGreater(expires_at, int(datetime.now(timezone.utc).timestamp()))
 
     def test_held_probe_does_not_release_successful_reservation(self):
@@ -48,6 +53,7 @@ class GpuScanCreateContractTests(unittest.TestCase):
         workflow = {
             "workflowId": "gpu-workflow-1",
             "reservationName": "gpu-reservation-1",
+            "operation": "create",
         }
         transitioned = {**workflow, "state": "HELD"}
         with (
@@ -112,6 +118,25 @@ class GpuScanCreateContractTests(unittest.TestCase):
         self.assertTrue(vm_control.gpu_workflow_expired({
             "expiresAt": datetime.now(timezone.utc) - timedelta(seconds=1),
         }))
+
+    def test_relocate_start_migration_target_is_normalized(self):
+        target = vm_control.normalize_migration_target({
+            "id": "migration-12345678",
+            "sourceEndpointId": "mwo-vm2",
+            "sourceInstanceName": "steam-mwo-vm2-t4-europe-central2-b",
+            "sourceZone": "europe-central2-b",
+            "endpointId": "mwo-vm2",
+            "targetZone": "europe-central2-c",
+            "mode": "relocate-start",
+            "state": "prepared",
+            "hardware": {"id": "nvidia-tesla-t4", "machineType": "n1-standard-4", "gpuType": "nvidia-tesla-t4", "gpuCount": 1, "acceleratorMode": "attached"},
+            "sourceDiskUrl": "projects/p/zones/europe-central2-b/disks/source-state",
+            "gpuWorkflowId": "gpu-workflow-1",
+        })
+
+        self.assertIsNotNone(target)
+        self.assertEqual(target["mode"], "relocate-start")
+        self.assertEqual(target["gpuWorkflowId"], "gpu-workflow-1")
 
 
 if __name__ == "__main__":

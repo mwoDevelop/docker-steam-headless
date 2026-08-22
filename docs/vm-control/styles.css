@@ -819,6 +819,11 @@ select {
   line-height: 1.45;
 }
 
+.scan-create-result button {
+  align-self: flex-start;
+  margin-top: 0.35rem;
+}
+
 .native-hardware-select {
   position: absolute;
   width: 1px;

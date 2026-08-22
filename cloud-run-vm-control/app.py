@@ -184,9 +184,10 @@ SCAN_CREATE_TOKEN_PREFIX: Final = "vmcsp1"
 SCAN_CREATE_TOKEN_TTL_SECONDS: Final = 10 * 60
 GPU_WORKFLOW_ACTIVE_STATES: Final = frozenset({
     "PROBE_CREATING", "PROBE_UNKNOWN", "HELD", "CREATE_CLAIMED",
-    "INSERT_PENDING", "INSERT_UNKNOWN", "VM_CONFIRMED", "RELEASE_REQUESTED",
+    "START_CLAIMED", "RELOCATION_CLAIMED", "INSERT_PENDING", "INSERT_UNKNOWN", "VM_CONFIRMED", "RELEASE_REQUESTED",
     "EXPIRE_REQUESTED", "CLEANUP_PENDING",
 })
+GPU_START_OPERATION_TIMEOUT_SECONDS: Final = 60 * 60
 
 AUTO_STOP_METADATA_KEY = "vm-auto-shutdown-hours"
 AUTO_STOP_AT_METADATA_KEY = "vm-auto-shutdown-at"
@@ -1777,7 +1778,7 @@ def normalize_migration_target(raw_value: Any) -> dict[str, Any] | None:
         or not source_endpoint_id
         or not endpoint_id
         or not target_zone.replace("-", "").isalnum()
-        or mode not in {"copy", "move"}
+        or mode not in {"copy", "move", "relocate-start"}
         or state not in MIGRATION_STATES
     ):
         return None
@@ -1801,6 +1802,8 @@ def normalize_migration_target(raw_value: Any) -> dict[str, Any] | None:
         "snapshotUrl": str(raw_value.get("snapshotUrl", "") or ""),
         "diskName": bounded_gce_name(str(raw_value.get("diskName", "") or "")),
         "diskUrl": str(raw_value.get("diskUrl", "") or ""),
+        "sourceDiskUrl": str(raw_value.get("sourceDiskUrl", "") or ""),
+        "gpuWorkflowId": str(raw_value.get("gpuWorkflowId", "") or ""),
         "diskSizeGb": str(raw_value.get("diskSizeGb", "") or ""),
         "detail": str(raw_value.get("detail", "") or "")[:1000],
         "createdAt": str(raw_value.get("createdAt", "") or ""),
@@ -1984,8 +1987,8 @@ def execute_admin_migration_action(admin_user: dict[str, Any], payload: dict[str
         target_zone = str(payload.get("targetZone", "") or "").strip()
         mode = str(payload.get("mode", "") or "").strip().lower()
         target_endpoint_id = normalize_endpoint_id(payload.get("targetEndpointId"))
-        if mode not in {"copy", "move"}:
-            raise ApiError("Migration mode must be copy or move.", 400)
+        if mode not in {"copy", "move", "relocate-start"}:
+            raise ApiError("Migration mode must be copy, move or relocate-start.", 400)
         source_endpoint = endpoint_by_id(source_endpoint_id)
         source_instance = endpoint_instance_or_none(source_endpoint)
         if source_instance is None:
@@ -1999,18 +2002,38 @@ def execute_admin_migration_action(admin_user: dict[str, Any], payload: dict[str
         compatible_zones = migration_target_zones_for_hardware(hardware, str(source_endpoint.get("zone", "") or ""))
         if target_zone not in compatible_zones:
             raise ApiError("Target zone is not compatible with the source VM hardware profile.", 400)
-        if mode == "move":
+        if mode in {"move", "relocate-start"}:
             if target_endpoint_id != source_endpoint_id:
-                raise ApiError("Move must retain the source endpoint.", 400)
+                raise ApiError("Move and relocate-start must retain the source endpoint.", 400)
             if endpoint_has_manual_static_ip(source_endpoint) and str(source_endpoint.get("region", "") or "") != zone_region(target_zone):
                 raise ApiError("Release the source endpoint's regional static IP before moving it to another region.", 409)
-        else:
+        elif mode == "copy":
             target_endpoint = endpoint_by_id(target_endpoint_id)
             if not endpoint_available_for_scan_create(target_endpoint, target_zone):
                 raise ApiError("Copy requires a free endpoint compatible with the target region.", 409)
         existing = read_migration_targets()
         if any(item["state"] in {"preparing", "prepared", "starting"} and (item["sourceEndpointId"] == source_endpoint_id or item["endpointId"] == target_endpoint_id or (item["targetZone"] == target_zone and item["hardware"] == instance_hardware_selection(source_instance))) for item in existing):
             raise ApiError("A conflicting migration is already prepared or running.", 409)
+        relocation_workflow = None
+        if mode == "relocate-start":
+            prepared = decode_scan_create_token(payload.get("scanCreateToken"))
+            if (
+                str(prepared.get("operation", "")) != "start"
+                or str(prepared.get("endpointId", "")) != source_endpoint_id
+                or str(prepared.get("hardwareId", "")) != str(hardware.get("id", ""))
+                or str(prepared.get("zone", "")) != target_zone
+            ):
+                raise ApiError("The held GPU reservation does not match this relocation.", 409)
+            relocation_workflow = get_gpu_workflow(
+                str(payload.get("gpuWorkflowId", "")),
+                owner=str(admin_user.get("email", "")),
+            )
+            if (
+                str(relocation_workflow.get("state", "")) != "HELD"
+                or str(relocation_workflow.get("operation", "")) != "start"
+            ):
+                raise ApiError("The GPU reservation is not ready for relocation.", 409)
+            relocation_workflow = claim_gpu_workflow_for_start(relocation_workflow, admin_user, relocation=True)
         state_disk = migration_source_state_disk(source_instance)
         now = migration_timestamp()
         nonce = hashlib.sha1(f"{source_endpoint_id}:{target_zone}:{mode}:{time.time_ns()}".encode("utf-8")).hexdigest()[:12]
@@ -2028,6 +2051,8 @@ def execute_admin_migration_action(admin_user: dict[str, Any], payload: dict[str
             "snapshotUrl": "",
             "diskName": bounded_gce_name(f"steam-{target_endpoint_id}-{hardware_name_slug(str(hardware.get('id', 'cpu')), str(hardware.get('gpuType', '')), int(hardware.get('gpuCount', 0) or 0))}-{target_zone}-state"),
             "diskUrl": "",
+            "sourceDiskUrl": str(state_disk.get("source", "") or ""),
+            "gpuWorkflowId": str(payload.get("gpuWorkflowId", "") or ""),
             "diskSizeGb": str(state_disk.get("diskSizeGb", "") or parse_disk_size_gb(CONFIG["data_disk_size"])),
             "detail": "Creating migration snapshot.",
             "createdAt": now,
@@ -2082,6 +2107,15 @@ def execute_admin_migration_action(admin_user: dict[str, Any], payload: dict[str
                 persist_endpoint(source_endpoint)
                 target = update_migration_target(existing, target, detail="Prepared. Source VM was removed and the temporary migration snapshot was deleted.")
         except ApiError as error:
+            if relocation_workflow is not None:
+                try:
+                    release_gpu_workflow(
+                        str(relocation_workflow["workflowId"]),
+                        owner=str(admin_user.get("email", "")),
+                        reason="relocation-prepare-failed",
+                    )
+                except ApiError:
+                    logging.exception("Unable to release failed relocation preparation workflow")
             try:
                 cleanup_migration_snapshot(target)
                 target = update_migration_target(existing, target, snapshotName="", snapshotUrl="", state="failed", detail=f"Migration failed after temporary snapshot cleanup. {error}")
@@ -2095,11 +2129,27 @@ def execute_admin_migration_action(admin_user: dict[str, Any], payload: dict[str
         if target["state"] != "prepared":
             raise ApiError("Only a prepared migration target can be started.", 400)
         endpoint = endpoint_by_id(target["endpointId"])
-        if endpoint_instance_or_none(endpoint) is not None:
+        existing_endpoint_instance = endpoint_instance_or_none(endpoint)
+        if existing_endpoint_instance is not None and not (
+            target.get("mode") == "relocate-start"
+            and str(existing_endpoint_instance.get("name", "")) == str(target.get("sourceInstanceName", ""))
+            and str(existing_endpoint_instance.get("status", "")).upper() == "TERMINATED"
+        ):
             raise ApiError("The migration endpoint already has a VM.", 409)
         running = running_managed_instances_except_selected()
         if running:
             raise ApiError(f"Stop the currently running VM before starting this migration: {running_instance_summary(running)}", 409)
+        scan_workflow = None
+        if target.get("mode") == "relocate-start":
+            prepared = decode_scan_create_token(payload.get("scanCreateToken"))
+            if str(prepared.get("operation", "")) != "start" or str(prepared.get("endpointId", "")) != target["sourceEndpointId"] or str(prepared.get("zone", "")) != target["targetZone"]:
+                raise ApiError("The held GPU reservation does not match this relocation target.", 409)
+            scan_workflow = get_gpu_workflow(str(payload.get("gpuWorkflowId", "")), owner=str(admin_user.get("email", "")))
+            if str(scan_workflow.get("state", "")) not in {"HELD", "RELOCATION_CLAIMED"} or str(scan_workflow.get("operation", "")) != "start":
+                raise ApiError("The GPU reservation is not ready for relocation Start.", 409)
+            if str(scan_workflow.get("state", "")) == "HELD":
+                scan_workflow = claim_gpu_workflow_for_start(scan_workflow, admin_user, relocation=True)
+            scan_workflow = mark_gpu_workflow_start_pending(scan_workflow, admin_user)
         update_migration_target(targets, target, state="starting", detail="Creating VM from the prepared state disk.")
         try:
             apply_target_overrides({"endpointId": target["endpointId"], "zone": target["targetZone"], **target["hardware"]}, respect_existing_endpoint_hardware=False)
@@ -2108,7 +2158,10 @@ def execute_admin_migration_action(admin_user: dict[str, Any], payload: dict[str
             if source_instance is None:
                 raise ApiError("Prepared migration state disk no longer exists.", 409)
             credentials = {"username": SUNSHINE_USERNAME, "password": generate_sunshine_password()}
-            operation = compute_request("POST", instances_collection_url(), json=build_instance_create_request(auto_stop_hours=None, sunshine_credentials=credentials, existing_data_disk_url=target["diskUrl"]))
+            insert_url = instances_collection_url()
+            if scan_workflow is not None:
+                insert_url = f"{insert_url}?requestId={scan_workflow['requestId']}"
+            operation = compute_request("POST", insert_url, json=build_instance_create_request(auto_stop_hours=None, sunshine_credentials=credentials, existing_data_disk_url=target["diskUrl"]))
             if not isinstance(operation, dict):
                 raise ApiError("Failed to create the VM from the prepared migration.", 502)
             wait_for_zone_operation(operation, timeout_seconds=300, zone=target["targetZone"])
@@ -2116,8 +2169,24 @@ def execute_admin_migration_action(admin_user: dict[str, Any], payload: dict[str
             final_instance = wait_for_external_ip(timeout_seconds=180)
             bind_selected_endpoint_to_instance(final_instance)
             update_duckdns(extract_external_ip(final_instance))
-            update_migration_target(targets, target, state="started", detail="VM created and endpoint updated.")
+            if scan_workflow is not None:
+                complete_gpu_workflow_after_create(scan_workflow, final_instance, admin_user)
+            if target.get("mode") == "relocate-start":
+                delete_operation = compute_request("DELETE", explicit_instance_url(target["sourceZone"], target["sourceInstanceName"]), allow_404=True)
+                if isinstance(delete_operation, dict):
+                    wait_for_zone_operation(delete_operation, timeout_seconds=300, zone=target["sourceZone"])
+                source_disk_url = str(target.get("sourceDiskUrl", "") or "")
+                if source_disk_url:
+                    disk_delete = compute_request("DELETE", source_disk_url, allow_404=True)
+                    if isinstance(disk_delete, dict):
+                        wait_for_zone_operation(disk_delete, timeout_seconds=300, zone=target["sourceZone"])
+            update_migration_target(targets, target, state="started", detail="VM created, reservation consumed and endpoint updated.")
         except ApiError as error:
+            if scan_workflow is not None:
+                try:
+                    release_gpu_workflow(str(scan_workflow["workflowId"]), owner=str(admin_user.get("email", "")), reason="relocate-start-failed")
+                except ApiError:
+                    logging.exception("Unable to release failed relocate-start GPU workflow")
             detail = migration_error_detail(error)
             update_migration_target(targets, target, state="prepared", detail=f"Start failed; prepared disk is retained. {detail}")
             raise ApiError(detail, error.status_code)
@@ -2265,20 +2334,36 @@ def begin_gpu_hold_workflow(
     zone: str,
     user: dict[str, Any],
     scan_id: str,
+    operation: str = "create",
+    source_endpoint_id: str = "",
 ) -> dict[str, Any]:
-    candidates = sorted(
-        (
-            endpoint
-            for endpoint in reconcile_endpoint_instance_bindings()
-            if endpoint_available_for_scan_create(endpoint, zone)
-        ),
-        key=lambda endpoint: int(str(endpoint["id"]).removeprefix("mwo-vm")),
-    )
+    operation = str(operation or "create").strip().lower()
+    if operation not in {"create", "start"}:
+        raise ApiError("GPU workflow operation must be create or start.", 400)
+    source_instance: dict[str, Any] | None = None
+    if operation == "start":
+        source_endpoint = endpoint_by_id(normalize_endpoint_id(source_endpoint_id))
+        source_instance = endpoint_instance_or_none(source_endpoint)
+        if source_instance is None:
+            raise ApiError("The selected source VM no longer exists.", 404)
+        if str(source_instance.get("status", "")).upper() != "TERMINATED":
+            raise ApiError("GPU scan Start requires a TERMINATED source VM.", 409)
+        require_no_active_power_action(source_instance, "GPU scan Start")
+        source_hardware = instance_hardware_selection(source_instance)
+        if any(str(source_hardware.get(key, "")) != str(profile.get(key, "")) for key in ("id", "machineType", "gpuType", "gpuCount", "acceleratorMode")):
+            raise ApiError("The scanned GPU profile no longer matches the selected source VM.", 409)
+        candidates = [source_endpoint]
+    else:
+        candidates = sorted(
+            (endpoint for endpoint in reconcile_endpoint_instance_bindings() if endpoint_available_for_scan_create(endpoint, zone)),
+            key=lambda endpoint: int(str(endpoint["id"]).removeprefix("mwo-vm")),
+        )
     if not candidates:
         raise ApiError("NO_FREE_ENDPOINT: No free managed DuckDNS endpoint is available for this zone.", 409)
 
     now = datetime.now(timezone.utc)
     expires_at = now + timedelta(seconds=CAPACITY_RESERVATION_TTL_SECONDS)
+    operation_deadline = now + timedelta(seconds=GPU_START_OPERATION_TIMEOUT_SECONDS if operation == "start" else max(CAPACITY_RESERVATION_TTL_SECONDS, 15 * 60))
     workflow_id = f"gpu-{uuid.uuid4()}"
     generation = 1
     owner = normalize_email(str(user.get("email", "")))
@@ -2329,9 +2414,12 @@ def begin_gpu_hold_workflow(
             "owner": owner,
             "generation": generation,
             "state": "PROBE_CREATING",
+            "operation": operation,
             "createdAt": now,
             "updatedAt": now,
             "expiresAt": expires_at,
+            "decisionExpiresAt": expires_at,
+            "operationDeadline": operation_deadline,
             "endpointId": str(selected_endpoint["id"]),
             "endpointDomain": str(selected_endpoint.get("domain", "")),
             "reservationName": reservation_name,
@@ -2339,6 +2427,9 @@ def begin_gpu_hold_workflow(
             "canonicalReservationShape": canonical_shape,
             "cancelRequested": False,
             "requestId": str(uuid.uuid5(uuid.NAMESPACE_URL, f"{require_env('project')}:{workflow_id}:instance")),
+            "sourceEndpointId": str(selected_endpoint["id"]) if operation == "start" else "",
+            "sourceInstanceName": str((source_instance or {}).get("name", "")),
+            "sourceZone": instance_zone_name(source_instance) if source_instance else "",
         }
         transaction.create(workflow_ref, workflow)
         transaction.set(selected_lease_ref, {
@@ -2424,6 +2515,29 @@ def claim_gpu_workflow_for_create(workflow: dict[str, Any], user: dict[str, Any]
         next_state="CREATE_CLAIMED",
         owner=str(user.get("email", "")),
         updates={"createClaimedAt": datetime.now(timezone.utc)},
+    )
+
+
+def claim_gpu_workflow_for_start(workflow: dict[str, Any], user: dict[str, Any], *, relocation: bool = False) -> dict[str, Any]:
+    deadline = workflow.get("operationDeadline")
+    if not isinstance(deadline, datetime):
+        deadline = datetime.now(timezone.utc) + timedelta(seconds=GPU_START_OPERATION_TIMEOUT_SECONDS)
+    return transition_gpu_workflow(
+        str(workflow["workflowId"]),
+        allowed_states={"HELD"},
+        next_state="RELOCATION_CLAIMED" if relocation else "START_CLAIMED",
+        owner=str(user.get("email", "")),
+        updates={"startClaimedAt": datetime.now(timezone.utc), "expiresAt": deadline},
+    )
+
+
+def mark_gpu_workflow_start_pending(workflow: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
+    return transition_gpu_workflow(
+        str(workflow["workflowId"]),
+        allowed_states={"START_CLAIMED", "RELOCATION_CLAIMED"},
+        next_state="INSERT_PENDING",
+        owner=str(user.get("email", "")),
+        updates={"insertSubmittedAt": datetime.now(timezone.utc)},
     )
 
 
@@ -4070,6 +4184,7 @@ def handle_unexpected_error(error: Exception):
 @app.route("/api/scan-create/prepare", methods=["POST", "OPTIONS"])
 @app.route("/api/gpu-workflows/release", methods=["POST", "OPTIONS"])
 @app.route("/api/gpu-workflows/status", methods=["POST", "OPTIONS"])
+@app.route("/api/gpu-workflows/reserve", methods=["POST", "OPTIONS"])
 @app.route("/api/internal/capacity-reservations/cleanup", methods=["POST", "OPTIONS"])
 @app.route("/api/me", methods=["GET", "OPTIONS"])
 @app.route("/api/status", methods=["GET", "OPTIONS"])
@@ -4389,6 +4504,11 @@ def options_passthrough():
         )
         return jsonify({"workflow": workflow, **managed_capacity_reservation_summary()})
 
+    if request.path == "/api/gpu-workflows/reserve":
+        user = require_admin_user()
+        payload = request.get_json(silent=True) or {}
+        return jsonify(reserve_gpu_capacity_target(payload, user))
+
     if request.path == "/api/gpu-workflows/status":
         user = require_admin_user()
         payload = request.get_json(silent=True) or {}
@@ -4557,9 +4677,12 @@ def create_scan_create_token(
     zone: str,
     workflow_id: str = "",
     reservation_name: str = "",
+    operation: str = "create",
+    source_instance_name: str = "",
+    source_zone: str = "",
 ) -> tuple[str, int]:
     now = int(time.time())
-    expires_at = now + SCAN_CREATE_TOKEN_TTL_SECONDS
+    expires_at = now + (GPU_START_OPERATION_TIMEOUT_SECONDS if operation == "start" else SCAN_CREATE_TOKEN_TTL_SECONDS)
     payload = {
         "email": normalize_email(str(user.get("email", ""))),
         "endpointId": endpoint_id,
@@ -4567,6 +4690,9 @@ def create_scan_create_token(
         "zone": zone,
         "workflowId": workflow_id,
         "reservationName": reservation_name,
+        "operation": operation,
+        "sourceInstanceName": source_instance_name,
+        "sourceZone": source_zone,
         "iat": now,
         "exp": expires_at,
     }
@@ -4642,8 +4768,19 @@ def validate_scan_create_preparation(payload: dict[str, Any], user: dict[str, An
         or str(prepared.get("zone", "")) != selected_zone()
     ):
         raise ApiError("Scan & Create preparation no longer matches the selected endpoint, hardware and zone.", 409)
-    if not endpoint_available_for_scan_create(selected_endpoint(), selected_zone()):
-        raise ApiError("The prepared endpoint is no longer free. Start a new capacity scan.", 409)
+    operation = str(prepared.get("operation", "create") or "create").lower()
+    expected_operation = str(payload.get("command", "create") or "create").lower()
+    if operation != expected_operation:
+        raise ApiError(f"The held GPU workflow is prepared for {operation}, not {expected_operation}.", 409)
+    if operation == "create":
+        if not endpoint_available_for_scan_create(selected_endpoint(), selected_zone()):
+            raise ApiError("The prepared endpoint is no longer free. Start a new capacity scan.", 409)
+    else:
+        source = endpoint_instance_or_none(selected_endpoint())
+        if source is None or str(source.get("status", "")).upper() != "TERMINATED":
+            raise ApiError("The source VM is no longer available in TERMINATED state.", 409)
+        if str(source.get("name", "")) != str(prepared.get("sourceInstanceName", "")):
+            raise ApiError("The selected source VM changed after the GPU reservation was created.", 409)
     workflow_id = str(prepared.get("workflowId", ""))
     if not workflow_id:
         return None
@@ -4652,6 +4789,8 @@ def validate_scan_create_preparation(payload: dict[str, Any], user: dict[str, An
     workflow = get_gpu_workflow(workflow_id, owner=str(user.get("email", "")))
     if str(workflow.get("state", "")) != "HELD":
         raise ApiError(f"The held GPU workflow is {workflow.get('state', 'unknown')}, not ready for Create.", 409)
+    if str(workflow.get("operation", "create")) != operation:
+        raise ApiError("The GPU workflow operation does not match its signed preparation.", 409)
     if gpu_workflow_expired(workflow):
         raise ApiError("The held GPU reservation expired. Resume the capacity scan.", 409)
     target = workflow.get("target") or {}
@@ -5112,7 +5251,8 @@ def create_capacity_reservation_probe() -> dict[str, Any]:
             }
         delete_capacity_reservation(existing)
 
-    expires_at = datetime.now(timezone.utc) + timedelta(seconds=CAPACITY_RESERVATION_TTL_SECONDS)
+    workflow_deadline = (hold_workflow or {}).get("operationDeadline")
+    expires_at = workflow_deadline if isinstance(workflow_deadline, datetime) else datetime.now(timezone.utc) + timedelta(seconds=CAPACITY_RESERVATION_TTL_SECONDS)
     instance_properties: dict[str, Any] = {"machineType": selected_machine_type()}
     if selected_accelerator_mode() == "attached":
         instance_properties["guestAccelerators"] = [
@@ -5259,7 +5399,9 @@ def probe_gpu_capacity_zone(
         "error": error_message,
         "releasedReservation": created and not hold_workflow and not cleanup_failure,
         "cleanupFailure": cleanup_failure,
-        "heldForCreate": bool(available and hold_workflow),
+        "heldForCreate": bool(available and hold_workflow and str(hold_workflow.get("operation", "create")) == "create"),
+        "heldForOperation": bool(available and hold_workflow),
+        "operation": str(hold_workflow.get("operation", "create")) if hold_workflow else "",
         "workflowId": str(hold_workflow.get("workflowId", "")) if hold_workflow else "",
         "reservation": {
             "name": reservation["name"],
@@ -5277,7 +5419,8 @@ def scan_gpu_capacity_zone(payload: dict[str, Any], user: dict[str, Any] | None 
         raise ApiError("GPU capacity scans require a zone.", 400)
     if zone not in {str(item) for item in profile.get("zones", [])}:
         raise ApiError("The selected zone is not compatible with this GPU profile.", 400)
-    hold_for_create = bool(payload.get("holdForCreate"))
+    hold_for_create = bool(payload.get("holdForCreate") or payload.get("holdForOperation"))
+    operation = str(payload.get("operation", "create") or "create").lower()
     workflow = None
     if hold_for_create:
         if not user:
@@ -5287,6 +5430,8 @@ def scan_gpu_capacity_zone(payload: dict[str, Any], user: dict[str, Any] | None 
             zone=zone,
             user=user,
             scan_id=str(payload.get("scanId", "")),
+            operation=operation,
+            source_endpoint_id=str(payload.get("sourceEndpointId", "")),
         )
     result = probe_gpu_capacity_zone(
         profile,
@@ -5304,14 +5449,26 @@ def scan_gpu_capacity_zone(payload: dict[str, Any], user: dict[str, Any] | None 
             zone=zone,
             workflow_id=str(workflow["workflowId"]),
             reservation_name=str(workflow["reservationName"]),
+            operation=operation,
+            source_instance_name=str(workflow.get("sourceInstanceName", "")),
+            source_zone=str(workflow.get("sourceZone", "")),
         )
         result.update({
             "endpoint": endpoint_public_payload(endpoint),
             "target": dict(workflow["target"]),
             "preparationToken": token,
             "expiresAt": workflow["expiresAt"].isoformat(),
+            "operation": operation,
+            "source": {"endpointId": str(workflow.get("sourceEndpointId", "")), "instanceName": str(workflow.get("sourceInstanceName", "")), "zone": str(workflow.get("sourceZone", ""))},
         })
     return result
+
+
+def reserve_gpu_capacity_target(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
+    request_payload = dict(payload)
+    request_payload["holdForOperation"] = True
+    request_payload["scanId"] = str(request_payload.get("scanId", "")) or str(uuid.uuid4())
+    return scan_gpu_capacity_zone(request_payload, user)
 
 
 def scan_gpu_capacity_availability(payload: dict[str, Any]) -> dict[str, Any]:
@@ -8307,6 +8464,8 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
                 409,
             )
         scan_workflow = validate_scan_create_preparation(payload, user)
+        if scan_workflow is not None and str(scan_workflow.get("operation", "create")) != "create":
+            raise ApiError("The held GPU reservation is not prepared for Create.", 409)
         if selected_gpu_count() > 0:
             gpu_hardware_profile(selected_hardware_id())
             if scan_workflow is None:
@@ -8415,6 +8574,9 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
         )
 
     if command == "start":
+        scan_workflow = validate_scan_create_preparation(payload, user)
+        if scan_workflow is not None and str(scan_workflow.get("operation", "")) != "start":
+            raise ApiError("The held GPU reservation is not prepared for Start.", 409)
         if current_instance is None:
             raise ApiError("Instance does not exist. Use Create first.", 400)
         auto_stop_hours = parse_auto_stop_hours(payload)
@@ -8439,12 +8601,17 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
             current_instance = get_instance()
 
         if current_status != "RUNNING":
+            if scan_workflow is not None:
+                scan_workflow = claim_gpu_workflow_for_start(scan_workflow, user)
+                scan_workflow = mark_gpu_workflow_start_pending(scan_workflow, user)
             operation = compute_request("POST", f"{instance_url()}/start")
             if not isinstance(operation, dict):
                 raise ApiError("Failed to start VM instance.", 502)
             wait_for_zone_operation(operation, timeout_seconds=180)
             poll_instance_status("RUNNING")
             final_instance = wait_for_external_ip(timeout_seconds=120)
+            if scan_workflow is not None:
+                complete_gpu_workflow_after_create(scan_workflow, final_instance, user)
         else:
             final_instance = wait_for_external_ip()
         bind_selected_endpoint_to_instance(final_instance)
