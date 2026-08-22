@@ -1487,7 +1487,7 @@
     run.createStarted = true;
     const loadingToken = setPageLoading(`GPU reserved. ${operation === "start" ? "Starting" : "Creating"} ${String(target.hardwareId || "GPU")} VM in ${zoneDisplayLabel(target.zone)}...`);
     setBusy(true);
-    setCommandStatus("GPU capacity is held. Submitting Create against the reservation...", "warning");
+    setCommandStatus(`GPU capacity is held. Submitting ${operation === "start" ? "Start" : "Create"} against the reservation...`, "warning");
     try {
       const body = {
         command: operation,
@@ -1501,7 +1501,7 @@
       if (operation === "start" && String(prepared.source && prepared.source.zone || "") !== String(target.zone || "")) {
         await fetchApi("/api/admin/migrations", {
           method: "POST",
-          body: JSON.stringify({ action: "prepare", mode: "relocate-start", sourceEndpointId: String(prepared.source.endpointId || ""), targetEndpointId: String(prepared.source.endpointId || ""), targetZone: String(target.zone || ""), gpuWorkflowId: workflowId }),
+          body: JSON.stringify({ action: "prepare", mode: "relocate-start", sourceEndpointId: String(prepared.source.endpointId || ""), targetEndpointId: String(prepared.source.endpointId || ""), targetZone: String(target.zone || ""), gpuWorkflowId: workflowId, scanCreateToken: prepared.preparationToken }),
         });
         const migrations = await fetchApi("/api/admin/migrations", { method: "GET" });
         const migration = (migrations.targets || []).find((item) => item.mode === "relocate-start" && item.gpuWorkflowId === workflowId && item.state === "prepared");
@@ -1984,7 +1984,7 @@
           });
           if (data && data.available) {
             run.availableZones.push(zone);
-            if (data.heldForCreate) {
+            if (data.heldForOperation) {
               const outcome = await handleHeldGpuCapacity(run, data);
               if (["created", "failed", "cancelled"].includes(outcome)) break;
             } else {
@@ -2117,7 +2117,7 @@
             zones.push(String(target.zone));
             run.availableZonesByHardwareId[hardwareId] = zones;
             run.availablePairCount += 1;
-            if (data.heldForCreate) {
+            if (data.heldForOperation) {
               const outcome = await handleHeldGpuCapacity(run, data);
               if (["created", "failed", "cancelled"].includes(outcome)) break;
             } else {
@@ -2230,7 +2230,7 @@
           });
           if (data && data.available) {
             run.availableHardwareIds.push(String(profile.id));
-            if (data.heldForCreate) {
+            if (data.heldForOperation) {
               const outcome = await handleHeldGpuCapacity(run, data);
               if (["created", "failed", "cancelled"].includes(outcome)) break;
             } else {
@@ -2349,7 +2349,7 @@
             zones.push(target.zone);
             run.availableZonesByHardwareId[hardwareId] = zones;
             run.availablePairCount += 1;
-            if (data.heldForCreate) {
+            if (data.heldForOperation) {
               const outcome = await handleHeldGpuCapacity(run, data);
               if (["created", "failed", "cancelled"].includes(outcome)) break;
             } else {
