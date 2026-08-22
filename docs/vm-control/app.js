@@ -2140,7 +2140,7 @@
         const cleanupFailures = run.cleanupFailures.length;
         const message = cleanupFailures
           ? `GPU capacity scan cancelled after ${run.completed}/${zones.length} zones. Applied partial result: ${run.availableZones.length} GPU zones with current capacity; ${cleanupFailures} temporary reservation cleanup${cleanupFailures === 1 ? "" : "s"} will expire automatically.`
-          : `GPU capacity scan cancelled after ${run.completed}/${zones.length} zones. Applied partial result: ${run.availableZones.length} GPU zones with current capacity. All temporary reservations were released.`;
+          : `GPU capacity scan cancelled after ${run.completed}/${zones.length} zones. Applied partial result: ${run.availableZones.length} GPU zones with current capacity. Managed reservation cleanup was requested and is being verified in the background.`;
         setBanner(message, gpuScanCompletionTone(run));
         return;
       }
@@ -2279,9 +2279,12 @@
     await refreshStatus({ silent: true });
     const cleanupFailures = run.cleanupFailures.length;
     const prefix = run.cancelRequested ? "Selected GPU capacity scan cancelled" : "Selected GPU capacity scan completed";
+    const cleanupSummary = run.cancelRequested
+      ? "Managed reservation cleanup was requested and is being verified in the background."
+      : "Temporary test reservations were released immediately.";
     const message = cleanupFailures
       ? `${prefix}: ${run.availablePairCount}/${targets.length} GPU-zone combinations currently available; ${cleanupFailures} temporary reservation cleanup${cleanupFailures === 1 ? "" : "s"} will expire automatically.`
-      : `${prefix}: ${run.availablePairCount}/${targets.length} GPU-zone combinations currently available. Temporary test reservations were released immediately.`;
+      : `${prefix}: ${run.availablePairCount}/${targets.length} GPU-zone combinations currently available. ${cleanupSummary}`;
     if (elements.hardwareOptionsStatus) {
       elements.hardwareOptionsStatus.textContent = message;
     }
@@ -2394,9 +2397,12 @@
     await refreshStatus({ silent: true });
     const cleanupFailures = run.cleanupFailures.length;
     const prefix = run.cancelRequested ? "GPU capacity scan cancelled" : "GPU capacity scan completed";
+    const cleanupSummary = run.cancelRequested
+      ? "Managed reservation cleanup was requested and is being verified in the background."
+      : "Temporary test reservations were released immediately.";
     const message = cleanupFailures
       ? `${prefix} for ${zoneDisplayLabel(zone)}: ${run.availableHardwareIds.length}/${profiles.length} GPU profiles currently available; ${cleanupFailures} temporary reservation cleanup${cleanupFailures === 1 ? "" : "s"} will expire automatically.`
-      : `${prefix} for ${zoneDisplayLabel(zone)}: ${run.availableHardwareIds.length}/${profiles.length} GPU profiles currently available. Temporary test reservations were released immediately.`;
+      : `${prefix} for ${zoneDisplayLabel(zone)}: ${run.availableHardwareIds.length}/${profiles.length} GPU profiles currently available. ${cleanupSummary}`;
     if (elements.hardwareOptionsStatus) {
       elements.hardwareOptionsStatus.textContent = message;
     }
@@ -2516,9 +2522,12 @@
     await refreshStatus({ silent: true });
     const cleanupFailures = run.cleanupFailures.length;
     const prefix = run.cancelRequested ? "Full GPU capacity scan cancelled" : "Full GPU capacity scan completed";
+    const cleanupSummary = run.cancelRequested
+      ? "Managed reservation cleanup was requested and is being verified in the background."
+      : "Temporary test reservations were released immediately.";
     const message = cleanupFailures
       ? `${prefix}: ${run.availablePairCount}/${targets.length} GPU-zone combinations currently available; ${cleanupFailures} temporary reservation cleanup${cleanupFailures === 1 ? "" : "s"} will expire automatically.`
-      : `${prefix}: ${run.availablePairCount}/${targets.length} GPU-zone combinations currently available. Temporary test reservations were released immediately.`;
+      : `${prefix}: ${run.availablePairCount}/${targets.length} GPU-zone combinations currently available. ${cleanupSummary}`;
     if (elements.hardwareOptionsStatus) {
       elements.hardwareOptionsStatus.textContent = message;
     }
@@ -4571,19 +4580,25 @@
       setCapacityButtonResult(elements.releaseGpuCapacity, "Releasing GPU Reservations...", "neutral");
       const data = await fetchApi("/api/capacity-reservations/release", { method: "POST", body: "{}" });
       const released = Array.isArray(data && data.released) ? data.released.length : 0;
+      const releasedWorkflows = Array.isArray(data && data.releasedWorkflows) ? data.releasedWorkflows.length : 0;
       const failed = Array.isArray(data && data.failed) ? data.failed.length : 0;
-      const message = failed
-        ? `Released ${released} managed GPU reservation${released === 1 ? "" : "s"}; ${failed} could not be released.`
-        : released
-          ? `Released all ${released} managed GPU capacity reservation${released === 1 ? "" : "s"}.`
+      const failedWorkflows = Array.isArray(data && data.failedWorkflows) ? data.failedWorkflows.length : 0;
+      const skipped = Array.isArray(data && data.skippedActiveWorkflows) ? data.skippedActiveWorkflows.length : 0;
+      const totalFailed = failed + failedWorkflows;
+      const message = totalFailed
+        ? `Released ${released} managed GPU reservation${released === 1 ? "" : "s"} and ${releasedWorkflows} cancellable workflow${releasedWorkflows === 1 ? "" : "s"}; ${totalFailed} cleanup operation${totalFailed === 1 ? "" : "s"} failed.`
+        : skipped
+          ? `Released ${released} managed GPU reservation${released === 1 ? "" : "s"} and ${releasedWorkflows} cancellable workflow${releasedWorkflows === 1 ? "" : "s"}; ${skipped} reservation${skipped === 1 ? " is" : "s are"} protected by an active Create or Start.`
+        : released || releasedWorkflows
+          ? `Released ${released} managed GPU capacity reservation${released === 1 ? "" : "s"} and ${releasedWorkflows} cancellable workflow${releasedWorkflows === 1 ? "" : "s"}.`
           : "No managed GPU capacity reservations were active.";
       setCapacityButtonResult(
         elements.releaseGpuCapacity,
-        failed ? "Release GPU Reservations Failed" : "GPU Reservations Released",
-        failed ? "error" : "success",
+        totalFailed ? "Release GPU Reservations Failed" : skipped ? "GPU Reservations Partially Released" : "GPU Reservations Released",
+        totalFailed ? "error" : skipped ? "warning" : "success",
       );
-      setCommandStatus(message, failed ? "error" : "success");
-      setBanner(message, failed ? "error" : "success");
+      setCommandStatus(message, totalFailed ? "error" : skipped ? "warning" : "success");
+      setBanner(message, totalFailed ? "error" : skipped ? "warning" : "success");
     } catch (error) {
       const message = commandFailureMessage("release-gpu-capacity-reservations", error);
       setCapacityButtonResult(elements.releaseGpuCapacity, "Release GPU Reservations Failed", "error");

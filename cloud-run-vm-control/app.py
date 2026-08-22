@@ -187,6 +187,10 @@ GPU_WORKFLOW_ACTIVE_STATES: Final = frozenset({
     "START_CLAIMED", "RELOCATION_CLAIMED", "INSERT_PENDING", "INSERT_UNKNOWN", "VM_CONFIRMED", "RELEASE_REQUESTED",
     "EXPIRE_REQUESTED", "CLEANUP_PENDING",
 })
+GPU_WORKFLOW_CANCEL_SAFE_STATES: Final = frozenset({
+    "PROBE_CREATING", "PROBE_UNKNOWN", "HELD", "RELEASE_REQUESTED",
+    "EXPIRE_REQUESTED", "CLEANUP_PENDING",
+})
 GPU_START_OPERATION_TIMEOUT_SECONDS: Final = 60 * 60
 
 AUTO_STOP_METADATA_KEY = "vm-auto-shutdown-hours"
@@ -2681,6 +2685,22 @@ def cleanup_expired_gpu_workflows() -> dict[str, Any]:
     return {"releasedWorkflows": released, "failedWorkflows": failed}
 
 
+def release_cancel_safe_gpu_workflows() -> dict[str, Any]:
+    released: list[str] = []
+    failed: list[dict[str, str]] = []
+    for snapshot in firestore_client().collection(workflow_collection_name("gpu-workflows")).stream():
+        workflow = firestore_snapshot_dict(snapshot)
+        if str(workflow.get("state", "")) not in GPU_WORKFLOW_CANCEL_SAFE_STATES:
+            continue
+        workflow_id = str(workflow.get("workflowId", snapshot.id))
+        try:
+            release_gpu_workflow(workflow_id, reason="release-all")
+            released.append(workflow_id)
+        except ApiError as error:
+            failed.append({"workflowId": workflow_id, "error": error.message})
+    return {"releasedWorkflows": released, "failedWorkflows": failed}
+
+
 LIVE_ACCESS_PROBE_TIMEOUT_SECONDS: Final = 5
 
 
@@ -4497,7 +4517,7 @@ def options_passthrough():
 
     if request.path == "/api/capacity-reservations/release":
         require_admin_user()
-        return jsonify(release_managed_capacity_reservations())
+        return jsonify(release_all_managed_gpu_capacity())
 
     if request.path == "/api/scan-create/prepare":
         user = require_admin_user()
@@ -5241,6 +5261,13 @@ def release_managed_capacity_reservations(*, expired_only: bool = False) -> dict
         "managedCount": len(reservations),
         "expiredOnly": expired_only,
     }
+
+
+def release_all_managed_gpu_capacity() -> dict[str, Any]:
+    workflow_result = release_cancel_safe_gpu_workflows()
+    reservation_result = release_managed_capacity_reservations()
+    reservation_result.update(workflow_result)
+    return reservation_result
 
 
 def create_capacity_reservation_probe() -> dict[str, Any]:
