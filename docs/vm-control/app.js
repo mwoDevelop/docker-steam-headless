@@ -1479,7 +1479,7 @@
     updateGpuAvailabilityScanButton();
   }
 
-  async function releaseCancelledGpuScanReservations(run) {
+  async function performCancelledGpuScanCleanup(run) {
     let remaining = null;
     try {
       await fetchApi("/api/capacity-reservations/release", { method: "POST", body: "{}" });
@@ -1491,17 +1491,32 @@
     } catch (error) {
       run.cleanupFailures.push({ error: formatErrorMessage(error) });
     }
-    GPU_SCAN_CANCEL_CLEANUP_DELAYS_MS.forEach((delayMs) => {
-      window.setTimeout(async () => {
-        try {
-          await fetchApi("/api/capacity-reservations/release", { method: "POST", body: "{}" });
-          await refreshGpuCapacityReservationCount();
-        } catch (error) {
-          console.warn("Deferred GPU scan cancellation cleanup failed.", error);
-        }
-      }, delayMs);
-    });
+    run.linksUnlocked = remaining === 0;
+    renderScanCreateResults(run);
     return remaining;
+  }
+
+  function enqueueCancelledGpuScanCleanup(run, delayMs) {
+    window.setTimeout(() => {
+      run.cleanupPromise = (run.cleanupPromise || Promise.resolve())
+        .then(() => performCancelledGpuScanCleanup(run))
+        .catch((error) => {
+          console.warn("Deferred GPU scan cancellation cleanup failed.", error);
+        });
+    }, delayMs);
+  }
+
+  async function releaseCancelledGpuScanReservations(run) {
+    enqueueCancelledGpuScanCleanup(run, 0);
+    GPU_SCAN_CANCEL_CLEANUP_DELAYS_MS.forEach((delayMs) => {
+      enqueueCancelledGpuScanCleanup(run, delayMs);
+    });
+    try {
+      return await refreshGpuCapacityReservationCount();
+    } catch (error) {
+      run.cleanupFailures.push({ error: formatErrorMessage(error) });
+      return null;
+    }
   }
 
   function gpuScanCompletionTone(run) {

@@ -29,6 +29,11 @@ class GpuScanCancelContractTests(unittest.TestCase):
         self.assertIn("releaseCancelledGpuScanReservations(run)", self.javascript)
         self.assertIn("GPU_SCAN_CANCEL_CLEANUP_DELAYS_MS = [10000, 60000]", self.javascript)
         self.assertIn('fetchApi("/api/capacity-reservations/release"', self.javascript)
+        body = self.javascript.split("async function releaseCancelledGpuScanReservations(run) {", 1)[1].split(
+            "\n  function ", 1
+        )[0]
+        self.assertIn("enqueueCancelledGpuScanCleanup(run, 0)", body)
+        self.assertNotIn('await fetchApi("/api/capacity-reservations/release"', body)
 
     def test_cancelled_scan_is_not_reported_as_success(self):
         body = self.javascript.split("function gpuScanCompletionTone(run) {", 1)[1].split(
