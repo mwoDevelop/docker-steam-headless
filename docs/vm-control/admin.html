@@ -183,8 +183,8 @@
             <label class="auto-create-first-gpu">
               <input id="start-selected-first-gpu" type="checkbox" disabled>
               <span>
-                <strong>Start selected VM after first available GPU</strong>
-                <small>Select a TERMINATED GPU VM in Created instances. The same GPU profile will be started locally or relocated to the reserved zone.</small>
+                <strong>Start selected VM using reserved GPU capacity</strong>
+                <small>Select a TERMINATED GPU VM in Created instances. Capacity found automatically or selected manually can start it locally or relocate it to the reserved zone.</small>
               </span>
             </label>
             <p class="gpu-compatibility-legend">
@@ -548,6 +548,6 @@
     </main>
 
     <script src="./admin.js?v=loader-handoff-20260812"></script>
-    <script src="./app.js?v=reserve-first-gpu-start-20260822-4"></script>
+    <script src="./app.js?v=gpu-scan-cancel-20260823-1"></script>
   </body>
 </html>

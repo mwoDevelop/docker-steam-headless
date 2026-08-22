@@ -34,6 +34,7 @@
   const POST_COMMAND_STATUS_REFRESH_DELAY_MS = 2000;
   const PASSIVE_STATUS_ACTIVE_INTERVAL_MS = 5000;
   const PASSIVE_STATUS_IDLE_INTERVAL_MS = 15000;
+  const GPU_SCAN_CANCEL_CLEANUP_DELAYS_MS = [10000, 60000];
   const actionStatusChannel = typeof BroadcastChannel === "function"
     ? new BroadcastChannel("vm-control-action-status")
     : null;
@@ -1354,6 +1355,9 @@
     }
     if (elements.cancelGpuScan) {
       elements.cancelGpuScan.classList.toggle("hidden", !running);
+      elements.cancelGpuScan.textContent = run && run.cancelRequested
+        ? "Cancelling Scan and Releasing Reservations..."
+        : "Cancel Scan and Release Reservations";
       elements.cancelGpuScan.disabled = !running || Boolean(run && run.cancelRequested);
     }
   }
@@ -1460,6 +1464,12 @@
     run.cancelRequested = true;
     run.pauseRequested = false;
     run.paused = false;
+    run.currentZone = "";
+    run.currentTarget = null;
+    run.currentProfile = null;
+    if (run.abortController && typeof run.abortController.abort === "function") {
+      run.abortController.abort();
+    }
     const resume = run.resume;
     run.resume = null;
     if (typeof resume === "function") {
@@ -1467,6 +1477,35 @@
     }
     renderGpuAvailabilityScanProgress(run);
     updateGpuAvailabilityScanButton();
+  }
+
+  async function releaseCancelledGpuScanReservations(run) {
+    let remaining = null;
+    try {
+      await fetchApi("/api/capacity-reservations/release", { method: "POST", body: "{}" });
+    } catch (error) {
+      run.cleanupFailures.push({ error: formatErrorMessage(error) });
+    }
+    try {
+      remaining = await refreshGpuCapacityReservationCount();
+    } catch (error) {
+      run.cleanupFailures.push({ error: formatErrorMessage(error) });
+    }
+    GPU_SCAN_CANCEL_CLEANUP_DELAYS_MS.forEach((delayMs) => {
+      window.setTimeout(async () => {
+        try {
+          await fetchApi("/api/capacity-reservations/release", { method: "POST", body: "{}" });
+          await refreshGpuCapacityReservationCount();
+        } catch (error) {
+          console.warn("Deferred GPU scan cancellation cleanup failed.", error);
+        }
+      }, delayMs);
+    });
+    return remaining;
+  }
+
+  function gpuScanCompletionTone(run) {
+    return run.cleanupFailures.length || run.cancelRequested ? "warning" : "success";
   }
 
   function autoCreateFirstAvailableGpuEnabled() {
@@ -2083,7 +2122,10 @@
       run.currentZone = "";
       state.gpuAvailabilityScanRun = null;
       updateGpuAvailabilityScanButton();
-      run.linksUnlocked = (await refreshGpuCapacityReservationCount()) === 0;
+      const remainingReservations = run.cancelRequested
+        ? await releaseCancelledGpuScanReservations(run)
+        : await refreshGpuCapacityReservationCount();
+      run.linksUnlocked = remainingReservations === 0;
       renderScanCreateResults(run);
       scheduleGpuCapacityReservationCountRefreshes();
       if (run.cancelRequested) {
@@ -2099,7 +2141,7 @@
         const message = cleanupFailures
           ? `GPU capacity scan cancelled after ${run.completed}/${zones.length} zones. Applied partial result: ${run.availableZones.length} GPU zones with current capacity; ${cleanupFailures} temporary reservation cleanup${cleanupFailures === 1 ? "" : "s"} will expire automatically.`
           : `GPU capacity scan cancelled after ${run.completed}/${zones.length} zones. Applied partial result: ${run.availableZones.length} GPU zones with current capacity. All temporary reservations were released.`;
-        setBanner(message, cleanupFailures ? "warning" : "success");
+        setBanner(message, gpuScanCompletionTone(run));
         return;
       }
     }
@@ -2117,7 +2159,7 @@
     const message = cleanupFailures
       ? `Capacity scan found ${run.availableZones.length}/${zones.length} available GPU zones, but ${cleanupFailures} temporary reservation cleanup${cleanupFailures === 1 ? "" : "s"} will expire automatically.`
       : `Capacity scan found ${run.availableZones.length}/${zones.length} GPU zones with current capacity. All temporary reservations were released.`;
-    setBanner(message, cleanupFailures ? "warning" : "success");
+    setBanner(message, gpuScanCompletionTone(run));
   }
 
   async function scanSelectedGpuProfilesAcrossZones(options = {}) {
@@ -2217,7 +2259,10 @@
       run.currentTarget = null;
       state.gpuAvailabilityScanRun = null;
       updateGpuAvailabilityScanButton();
-      run.linksUnlocked = (await refreshGpuCapacityReservationCount()) === 0;
+      const remainingReservations = run.cancelRequested
+        ? await releaseCancelledGpuScanReservations(run)
+        : await refreshGpuCapacityReservationCount();
+      run.linksUnlocked = remainingReservations === 0;
       renderScanCreateResults(run);
       scheduleGpuCapacityReservationCountRefreshes();
     }
@@ -2240,7 +2285,7 @@
     if (elements.hardwareOptionsStatus) {
       elements.hardwareOptionsStatus.textContent = message;
     }
-    setCommandStatus(message, cleanupFailures ? "warning" : "success");
+    setCommandStatus(message, gpuScanCompletionTone(run));
   }
 
   async function scanSelectedZoneGpuAvailability() {
@@ -2331,7 +2376,10 @@
       run.currentProfile = null;
       state.selectedZoneGpuAvailabilityScanRun = null;
       updateGpuAvailabilityScanButton();
-      run.linksUnlocked = (await refreshGpuCapacityReservationCount()) === 0;
+      const remainingReservations = run.cancelRequested
+        ? await releaseCancelledGpuScanReservations(run)
+        : await refreshGpuCapacityReservationCount();
+      run.linksUnlocked = remainingReservations === 0;
       renderScanCreateResults(run);
       scheduleGpuCapacityReservationCountRefreshes();
     }
@@ -2352,7 +2400,7 @@
     if (elements.hardwareOptionsStatus) {
       elements.hardwareOptionsStatus.textContent = message;
     }
-    setCommandStatus(message, cleanupFailures ? "warning" : "success");
+    setCommandStatus(message, gpuScanCompletionTone(run));
   }
 
   async function scanAllGpuZoneAvailability(options = {}) {
@@ -2451,7 +2499,10 @@
       run.currentTarget = null;
       state.allGpuZoneAvailabilityScanRun = null;
       updateGpuAvailabilityScanButton();
-      run.linksUnlocked = (await refreshGpuCapacityReservationCount()) === 0;
+      const remainingReservations = run.cancelRequested
+        ? await releaseCancelledGpuScanReservations(run)
+        : await refreshGpuCapacityReservationCount();
+      run.linksUnlocked = remainingReservations === 0;
       renderScanCreateResults(run);
       scheduleGpuCapacityReservationCountRefreshes();
     }
@@ -2471,7 +2522,7 @@
     if (elements.hardwareOptionsStatus) {
       elements.hardwareOptionsStatus.textContent = message;
     }
-    setCommandStatus(message, cleanupFailures ? "warning" : "success");
+    setCommandStatus(message, gpuScanCompletionTone(run));
   }
 
   function getCreatedInstances() {
