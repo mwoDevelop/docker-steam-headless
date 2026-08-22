@@ -319,6 +319,12 @@
   }
 
   function markPageReady(message, token) {
+    // Embedded administrator controls can finish their own asynchronous
+    // session refresh while a VM command is still polling. A tokenless
+    // completion must never hide the loader owned by that command.
+    if (!token && state.activeCommand) {
+      return;
+    }
     if (token && token !== state.pageLoadingToken) {
       return;
     }
@@ -3059,7 +3065,7 @@
       return ["Request accepted", "Restarting guest system", "Starting platform services", "Verifying ready state"];
     }
     if (command === "stop") {
-      return ["Request accepted", "Stopping guest services", "Saving VM state to Google Drive", "Powering off VM", "Verifying VM is stopped"];
+      return ["Request accepted", "Stopping guest services", "Flushing local disk writes", "Powering off VM", "Verifying VM is stopped"];
     }
     if (command === "delete") {
       return ["Request accepted", "Stopping VM", "Removing VM and attached disks", "Verifying resources were removed"];

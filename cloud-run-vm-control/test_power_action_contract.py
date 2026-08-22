@@ -31,6 +31,21 @@ class PowerActionContractTests(unittest.TestCase):
 
         self.assertIn('["status", "set-auto-stop", "stop", "delete"]', body)
 
+    def test_tokenless_refresh_cannot_hide_active_command_loader(self):
+        source = (ROOT / "docs" / "vm-control" / "app.js").read_text(encoding="utf-8")
+        body = source.split("function markPageReady(message, token) {", 1)[1].split(
+            "\n  function ", 1
+        )[0]
+
+        self.assertIn("if (!token && state.activeCommand)", body)
+
+    def test_stop_progress_does_not_claim_drive_backup(self):
+        source = (ROOT / "docs" / "vm-control" / "app.js").read_text(encoding="utf-8")
+        body = source.split('if (command === "stop") {', 1)[1].split("\n    }", 1)[0]
+
+        self.assertNotIn("Google Drive", body)
+        self.assertIn("Flushing local disk writes", body)
+
 
 if __name__ == "__main__":
     unittest.main()
