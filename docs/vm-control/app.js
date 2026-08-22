@@ -1464,6 +1464,7 @@
       throw new Error("The backend returned an incomplete held GPU reservation.");
     }
     state.activeHeldGpuWorkflow = { workflowId, ...prepared };
+    await refreshGpuCapacityReservationCount();
     renderGpuAvailabilityScanProgress(run);
     const operation = String(prepared.operation || "create");
     const choice = operation === "start"
@@ -2030,6 +2031,7 @@
       }
     }
 
+    if (run.createStarted) return;
     state.gpuAvailabilityScan = {
       hardwareId: run.hardwareId,
       scope: run.scope,
@@ -2147,6 +2149,7 @@
       scheduleGpuCapacityReservationCountRefreshes();
     }
 
+    if (run.createStarted) return;
     state.gpuAvailabilityScan = {
       hardwareIds: profiles.map((profile) => String(profile.id)),
       scope,
@@ -2260,6 +2263,7 @@
       scheduleGpuCapacityReservationCountRefreshes();
     }
 
+    if (run.createStarted) return;
     state.selectedZoneGpuAvailabilityScan = {
       zone,
       availableHardwareIds: run.availableHardwareIds,
@@ -2379,6 +2383,7 @@
       scheduleGpuCapacityReservationCountRefreshes();
     }
 
+    if (run.createStarted) return;
     state.allGpuZoneAvailabilityScan = {
       availableZonesByHardwareId: run.availableZonesByHardwareId,
     };
