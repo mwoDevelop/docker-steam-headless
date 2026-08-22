@@ -1878,6 +1878,17 @@ def migration_target_payload(target: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def migration_target_instance_name(target: dict[str, Any]) -> str:
+    hardware = target.get("hardware") if isinstance(target.get("hardware"), dict) else {}
+    return target_instance_name_for(
+        hardware_id=str(hardware.get("id", "") or "cpu"),
+        gpu_type=str(hardware.get("gpuType", "") or ""),
+        gpu_count=int(hardware.get("gpuCount", 0) or 0),
+        zone=str(target.get("targetZone", "") or ""),
+        base_name=f"steam-{str(target.get('endpointId', '') or '').strip()}",
+    )
+
+
 def migration_target_zones_for_hardware(hardware: dict[str, Any], source_zone: str) -> list[str]:
     hardware_id = str(hardware.get("id", "") or "").strip()
     profiles = build_hardware_payload().get("profiles", [])
@@ -2153,6 +2164,8 @@ def execute_admin_migration_action(admin_user: dict[str, Any], payload: dict[str
         update_migration_target(targets, target, state="starting", detail="Creating VM from the prepared state disk.")
         try:
             apply_target_overrides({"endpointId": target["endpointId"], "zone": target["targetZone"], **target["hardware"]}, respect_existing_endpoint_hardware=False)
+            if target.get("mode") == "relocate-start":
+                g.target_instance_name = migration_target_instance_name(target)
             ensure_firewall_rules()
             source_instance = compute_request("GET", target["diskUrl"], allow_404=True)
             if source_instance is None:
