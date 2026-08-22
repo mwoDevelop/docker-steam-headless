@@ -32,6 +32,11 @@
   const SUNSHINE_POLL_INTERVAL_MS = 3000;
   const SUNSHINE_POLL_TIMEOUT_MS = 1200000;
   const POST_COMMAND_STATUS_REFRESH_DELAY_MS = 2000;
+  const PASSIVE_STATUS_ACTIVE_INTERVAL_MS = 5000;
+  const PASSIVE_STATUS_IDLE_INTERVAL_MS = 15000;
+  const actionStatusChannel = typeof BroadcastChannel === "function"
+    ? new BroadcastChannel("vm-control-action-status")
+    : null;
   const COMMAND_STATUS_POLL_TIMEOUT_MS = 1200000;
   const COMMAND_STATUS_POLL_TIMEOUTS_MS = {
     create: 1200000,
@@ -231,7 +236,63 @@
     activeHeldGpuWorkflow: null,
     startScanSourceInstanceName: "",
     scrolledInitialHash: "",
+    passiveStatusTimer: null,
+    passiveStatusRefreshRunning: false,
   };
+
+  function broadcastActionStatus(type, command) {
+    if (!actionStatusChannel) return;
+    actionStatusChannel.postMessage({
+      type,
+      command: String(command || ""),
+      targetKey: selectedTargetKey(),
+      at: Date.now(),
+    });
+  }
+
+  function schedulePassiveStatusRefresh(delayMs) {
+    if (state.passiveStatusTimer) {
+      window.clearTimeout(state.passiveStatusTimer);
+    }
+    state.passiveStatusTimer = window.setTimeout(runPassiveStatusRefresh, delayMs);
+  }
+
+  async function runPassiveStatusRefresh() {
+    state.passiveStatusTimer = null;
+    if (!state.user || state.isBusy || state.isPageLoading || document.visibilityState !== "visible" || state.passiveStatusRefreshRunning) {
+      schedulePassiveStatusRefresh(PASSIVE_STATUS_IDLE_INTERVAL_MS);
+      return;
+    }
+    state.passiveStatusRefreshRunning = true;
+    let active = false;
+    try {
+      const payload = await refreshStatus({ silent: true, forceRender: true, refreshInstances: false });
+      active = Boolean(payload && isTransitionalStatus(payload));
+      if (active && !state.activeCommand) {
+        const action = String(payload.powerAction && payload.powerAction.action || "VM action");
+        setCommandStatus(statusBannerMessage(`${action} is still running`, payload), "warning");
+        renderOperationProgress(action, payload);
+      }
+    } catch (error) {
+      console.warn("Passive VM status refresh failed.", error);
+    } finally {
+      state.passiveStatusRefreshRunning = false;
+      schedulePassiveStatusRefresh(active ? PASSIVE_STATUS_ACTIVE_INTERVAL_MS : PASSIVE_STATUS_IDLE_INTERVAL_MS);
+    }
+  }
+
+  if (actionStatusChannel) {
+    actionStatusChannel.addEventListener("message", (event) => {
+      if (!event.data || event.data.targetKey !== selectedTargetKey()) return;
+      schedulePassiveStatusRefresh(250);
+    });
+  }
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") {
+      schedulePassiveStatusRefresh(250);
+    }
+  });
 
   function setPageLoading(message) {
     state.pageLoadingToken += 1;
@@ -3681,6 +3742,7 @@
     const loadingToken = setPageLoading(`Running "${command}"...`);
     setBusy(true);
     state.activeCommand = command;
+    broadcastActionStatus("started", command);
     setCommandStatus(`Running "${command}" on the VM...`, "warning");
     applyCommandTransition(command);
     renderOperationProgress(command, state.lastStatus);
@@ -3759,6 +3821,7 @@
       const powerActionPhase = String(data.powerAction && data.powerAction.phase ? data.powerAction.phase : "").toLowerCase();
       const bannerTone = powerActionPhase === "failed" ? "warning" : "success";
       setCommandStatus(`${commandCompletionMessage(command, data)}${suffix}${autoStop}`, bannerTone);
+      broadcastActionStatus("settled", command);
       pushHistory({
         at: new Date().toISOString(),
         command,
@@ -3773,6 +3836,7 @@
       const message = commandFailureMessage(command, error);
       setCommandStatus(message, "error");
       setBanner(message, "error");
+      broadcastActionStatus("failed", command);
       let recoveredStatus = null;
       if (COMMANDS_TO_POLL_AFTER_RESPONSE.has(command)) {
         try {
@@ -4952,6 +5016,7 @@
       }
       setBusy(true);
       await connectBackend({ silent: true });
+      schedulePassiveStatusRefresh(1000);
     } catch (error) {
       handleError(error);
     } finally {

@@ -1007,7 +1007,6 @@ perform_action() {
   local action="$1"
   local token="$2"
   local trigger="$3"
-  local backup_mode="backup-runtime"
 
   log "Handling action=${action} token=${token} trigger=${trigger}"
   set_power_action_status "$action" "$token" "running"
@@ -1018,12 +1017,6 @@ perform_action() {
       ;;
     stop|delete)
       set_sunshine_status "stopping" "Sunshine is stopping for the requested VM action."
-      ;;
-  esac
-
-  case "$action" in
-    delete)
-      backup_mode="backup-delete"
       ;;
   esac
 
@@ -1048,26 +1041,21 @@ perform_action() {
     return 0
   fi
 
-  if ! run_backup "$backup_mode"; then
-    "$PERSIST_SCRIPT" start-stack >/dev/null 2>&1 || true
-    set_power_action_status "$action" "$token" "failed" ""
-    return 1
-  fi
-
-  touch "$BACKUP_COMPLETE_MARKER"
-  set_power_action_status "$action" "$token" "backed-up" ""
-
   case "$action" in
-    stop|delete)
-      log "Powering off after backup"
-      /sbin/poweroff
-      ;;
-    auto-stop)
-      log "Auto-stop powering off after backup"
+    stop|auto-stop)
+      set_power_action_status "$action" "$token" "stopping" ""
+      log "Stopping workload and powering off without creating a Drive backup"
+      if ! stop_stack; then
+        set_power_action_status "$action" "$token" "failed" ""
+        return 1
+      fi
+      sync
+      touch "$BACKUP_COMPLETE_MARKER"
       /sbin/poweroff
       ;;
     *)
       log "Unsupported action ${action}"
+      set_power_action_status "$action" "$token" "failed" ""
       return 1
       ;;
   esac

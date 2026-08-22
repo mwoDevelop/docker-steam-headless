@@ -7758,11 +7758,10 @@ def allowed_commands(instance: dict[str, Any] | None) -> list[str]:
         # Deletion is intentionally available before the guest-ready marker.
         # A failed boot or unsupported GPU configuration must not leave a VM
         # that can be removed only through a direct API call.
-        commands = ["status", "set-auto-stop", "delete"]
+        commands = ["status", "set-auto-stop", "stop", "delete"]
         if is_live_backup_ready(instance):
             commands.extend([
                 "restart",
-                "stop",
                 "create-backup",
                 "restore-backup",
                 "remove-backup",
@@ -8664,14 +8663,18 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
         if current_instance is None:
             raise ApiError("Instance does not exist.", 400)
         if current_status != "TERMINATED":
-            require_live_backup_ready(current_instance, command)
             current_instance, token = request_live_power_action(
                 current_instance,
                 action="stop",
-                status_detail="VM stopping after a live backup.",
+                status_detail="VM stopping without creating a Drive backup.",
             )
-            poll_power_action_backup(action="stop", token=token)
-            final_instance = poll_instance_status("TERMINATED", timeout_seconds=900)
+            wait_for_power_action_phase(
+                action="stop",
+                token=token,
+                target_phase="stopping",
+                timeout_seconds=120,
+            )
+            final_instance = poll_instance_status("TERMINATED", timeout_seconds=300)
         else:
             final_instance = current_instance
         final_instance = release_selected_endpoint_ephemeral_ip(final_instance)

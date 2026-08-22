@@ -357,7 +357,54 @@ EOF
   chmod 600 "$RCLONE_CONFIG_PATH"
 }
 
+ensure_current_rclone() {
+  local expected_version="v1.75.0"
+  local current_version=""
+  local archive_arch=""
+  local archive_sha256=""
+  local archive_name=""
+  local download_url=""
+  local temp_dir=""
+
+  if command -v rclone >/dev/null 2>&1; then
+    current_version="$(rclone version 2>/dev/null | awk 'NR == 1 { print $2 }')"
+  fi
+  if [[ "$current_version" == "$expected_version" ]]; then
+    return 0
+  fi
+
+  case "$(uname -m)" in
+    x86_64|amd64)
+      archive_arch="amd64"
+      archive_sha256="aa2804e08f48250e71009c727124b6341cd0288465804a9a09d14663cabafbaa"
+      ;;
+    aarch64|arm64)
+      archive_arch="arm64"
+      archive_sha256="d0ad88ba4c8e285b7c9efa591e0ab643280a91741e13c27f3a9c0957ccfa5203"
+      ;;
+    *)
+      log "Unsupported architecture for pinned rclone: $(uname -m)"
+      return 1
+      ;;
+  esac
+
+  archive_name="rclone-${expected_version}-linux-${archive_arch}.zip"
+  download_url="https://github.com/rclone/rclone/releases/download/${expected_version}/${archive_name}"
+  temp_dir="$(mktemp -d /tmp/rclone-update.XXXXXX)"
+  log "Installing pinned rclone ${expected_version} (${archive_arch})"
+  curl --fail --location --silent --show-error --retry 3 --retry-delay 5 \
+    --output "${temp_dir}/${archive_name}" "$download_url"
+  printf '%s  %s\n' "$archive_sha256" "${temp_dir}/${archive_name}" | sha256sum --check --status
+  python3 -m zipfile -e "${temp_dir}/${archive_name}" "$temp_dir"
+  install -m 0755 \
+    "${temp_dir}/rclone-${expected_version}-linux-${archive_arch}/rclone" \
+    /usr/local/bin/rclone
+  find "$temp_dir" -type f -delete
+  find "$temp_dir" -depth -type d -empty -delete
+}
+
 ensure_rclone_remote() {
+  ensure_current_rclone
   local folder_id oauth_secret_name owner_email
 
   folder_id="$(metadata_get gdrive-folder-id)"
