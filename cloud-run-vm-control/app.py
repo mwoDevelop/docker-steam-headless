@@ -11,6 +11,7 @@ import socket
 import ssl
 import threading
 import time
+import uuid
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
@@ -22,6 +23,7 @@ from typing import Any
 import google.auth
 from flask import Flask, jsonify, make_response, request, g, has_request_context
 from google.auth.transport.requests import AuthorizedSession, Request
+from google.cloud import firestore
 from google.oauth2 import id_token
 import requests
 
@@ -165,6 +167,8 @@ CONFIG = {
     "vm_minecraft_management_script_b64": os.environ.get("VM_MINECRAFT_MANAGEMENT_SCRIPT_B64", ""),
     "session_token_secret": os.environ.get("VM_CONTROL_SESSION_SECRET", ""),
     "capacity_cleanup_token": os.environ.get("CAPACITY_RESERVATION_CLEANUP_TOKEN", ""),
+    "firestore_database": os.environ.get("FIRESTORE_DATABASE", "(default)"),
+    "firestore_collection_prefix": os.environ.get("FIRESTORE_COLLECTION_PREFIX", "vm-control"),
     "duckdns_domains": normalize_duckdns_domains(csv_env("DUCKDNS_DOMAINS")),
     "duckdns_token": os.environ.get("DUCKDNS_TOKEN", ""),
     "novnc_port": os.environ.get("VM_NOVNC_PORT", "8083"),
@@ -178,6 +182,11 @@ SESSION_TOKEN_PREFIX: Final = "vmcs1"
 SESSION_TOKEN_TTL_SECONDS: Final = 12 * 60 * 60
 SCAN_CREATE_TOKEN_PREFIX: Final = "vmcsp1"
 SCAN_CREATE_TOKEN_TTL_SECONDS: Final = 10 * 60
+GPU_WORKFLOW_ACTIVE_STATES: Final = frozenset({
+    "PROBE_CREATING", "PROBE_UNKNOWN", "HELD", "CREATE_CLAIMED",
+    "INSERT_PENDING", "INSERT_UNKNOWN", "VM_CONFIRMED", "RELEASE_REQUESTED",
+    "EXPIRE_REQUESTED", "CLEANUP_PENDING",
+})
 
 AUTO_STOP_METADATA_KEY = "vm-auto-shutdown-hours"
 AUTO_STOP_AT_METADATA_KEY = "vm-auto-shutdown-at"
@@ -2214,6 +2223,337 @@ def first_free_endpoint_for_scan_create(zone: str) -> dict[str, Any]:
     return candidates[0]
 
 
+@lru_cache(maxsize=1)
+def firestore_client() -> firestore.Client:
+    return firestore.Client(
+        project=require_env("project"),
+        database=str(CONFIG["firestore_database"] or "(default)"),
+    )
+
+
+def workflow_collection_name(kind: str) -> str:
+    prefix = re.sub(r"[^a-z0-9-]+", "-", str(CONFIG["firestore_collection_prefix"] or "vm-control").lower()).strip("-")
+    return f"{prefix}-{kind}"
+
+
+def gpu_workflow_ref(workflow_id: str):
+    return firestore_client().collection(workflow_collection_name("gpu-workflows")).document(workflow_id)
+
+
+def endpoint_lease_ref(endpoint_id: str):
+    return firestore_client().collection(workflow_collection_name("endpoint-leases")).document(endpoint_id)
+
+
+def gpu_admission_lock_ref():
+    return firestore_client().collection(workflow_collection_name("locks")).document("gpu-admission")
+
+
+def firestore_snapshot_dict(snapshot: Any) -> dict[str, Any]:
+    return snapshot.to_dict() if snapshot is not None and snapshot.exists else {}
+
+
+def gpu_workflow_expired(workflow: dict[str, Any], now: datetime | None = None) -> bool:
+    expires_at = workflow.get("expiresAt")
+    if not isinstance(expires_at, datetime):
+        return True
+    return expires_at <= (now or datetime.now(timezone.utc))
+
+
+def begin_gpu_hold_workflow(
+    *,
+    profile: dict[str, Any],
+    zone: str,
+    user: dict[str, Any],
+    scan_id: str,
+) -> dict[str, Any]:
+    candidates = sorted(
+        (
+            endpoint
+            for endpoint in reconcile_endpoint_instance_bindings()
+            if endpoint_available_for_scan_create(endpoint, zone)
+        ),
+        key=lambda endpoint: int(str(endpoint["id"]).removeprefix("mwo-vm")),
+    )
+    if not candidates:
+        raise ApiError("NO_FREE_ENDPOINT: No free managed DuckDNS endpoint is available for this zone.", 409)
+
+    now = datetime.now(timezone.utc)
+    expires_at = now + timedelta(seconds=CAPACITY_RESERVATION_TTL_SECONDS)
+    workflow_id = f"gpu-{uuid.uuid4()}"
+    generation = 1
+    owner = normalize_email(str(user.get("email", "")))
+    normalized_scan_id = re.sub(r"[^a-zA-Z0-9_-]+", "-", str(scan_id or "")).strip("-")[:80] or str(uuid.uuid4())
+    token = uuid.uuid4().hex[:12]
+    reservation_name = scan_capacity_reservation_name(profile, zone, token)
+    workflow_ref = gpu_workflow_ref(workflow_id)
+    lock_ref = gpu_admission_lock_ref()
+    lease_refs = [(endpoint, endpoint_lease_ref(str(endpoint["id"]))) for endpoint in candidates]
+    transaction = firestore_client().transaction()
+
+    @firestore.transactional
+    def acquire(transaction):
+        lock = firestore_snapshot_dict(lock_ref.get(transaction=transaction))
+        if str(lock.get("state", "")) in GPU_WORKFLOW_ACTIVE_STATES:
+            raise ApiError(
+                "Another GPU reservation or Create workflow is active. Pause, cancel, or finish it before starting another GPU operation.",
+                409,
+            )
+        selected_endpoint = None
+        selected_lease_ref = None
+        for endpoint, lease_ref in lease_refs:
+            lease = firestore_snapshot_dict(lease_ref.get(transaction=transaction))
+            if lease and str(lease.get("state", "")) not in {"RELEASED", "EXPIRED", "COMPLETED"} and not gpu_workflow_expired(lease, now):
+                continue
+            selected_endpoint = endpoint
+            selected_lease_ref = lease_ref
+            break
+        if selected_endpoint is None or selected_lease_ref is None:
+            raise ApiError("NO_FREE_ENDPOINT: Every compatible endpoint already has an active lease.", 409)
+
+        target = {
+            "endpointId": str(selected_endpoint["id"]),
+            "hardwareId": str(profile["id"]),
+            "machineType": str(profile["machineType"]),
+            "gpuType": str(profile["gpuType"]),
+            "gpuCount": int(profile["gpuCount"]),
+            "acceleratorMode": str(profile.get("acceleratorMode", "attached")),
+            "zone": zone,
+        }
+        canonical_shape = {
+            "zone": zone,
+            "instanceProperties": scan_capacity_instance_properties(profile),
+        }
+        workflow = {
+            "workflowId": workflow_id,
+            "scanId": normalized_scan_id,
+            "owner": owner,
+            "generation": generation,
+            "state": "PROBE_CREATING",
+            "createdAt": now,
+            "updatedAt": now,
+            "expiresAt": expires_at,
+            "endpointId": str(selected_endpoint["id"]),
+            "endpointDomain": str(selected_endpoint.get("domain", "")),
+            "reservationName": reservation_name,
+            "target": target,
+            "canonicalReservationShape": canonical_shape,
+            "cancelRequested": False,
+            "requestId": str(uuid.uuid5(uuid.NAMESPACE_URL, f"{require_env('project')}:{workflow_id}:instance")),
+        }
+        transaction.create(workflow_ref, workflow)
+        transaction.set(selected_lease_ref, {
+            "workflowId": workflow_id,
+            "scanId": normalized_scan_id,
+            "owner": owner,
+            "generation": generation,
+            "state": "LEASED",
+            "expiresAt": expires_at,
+            "updatedAt": now,
+        })
+        transaction.set(lock_ref, {
+            "workflowId": workflow_id,
+            "owner": owner,
+            "generation": generation,
+            "state": "PROBE_CREATING",
+            "expiresAt": expires_at,
+            "updatedAt": now,
+        })
+        return workflow
+
+    return acquire(transaction)
+
+
+def transition_gpu_workflow(
+    workflow_id: str,
+    *,
+    allowed_states: set[str] | frozenset[str],
+    next_state: str,
+    owner: str = "",
+    updates: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    workflow_ref = gpu_workflow_ref(workflow_id)
+    lock_ref = gpu_admission_lock_ref()
+    transaction = firestore_client().transaction()
+
+    @firestore.transactional
+    def transition(transaction):
+        workflow = firestore_snapshot_dict(workflow_ref.get(transaction=transaction))
+        if not workflow:
+            raise ApiError("GPU reservation workflow does not exist or has expired.", 404)
+        if owner and normalize_email(str(workflow.get("owner", ""))) != normalize_email(owner):
+            raise ApiError("GPU reservation workflow belongs to another administrator.", 403)
+        current_state = str(workflow.get("state", ""))
+        if current_state not in allowed_states:
+            if current_state == next_state:
+                return workflow
+            raise ApiError(f"GPU reservation workflow is {current_state}, not one of {sorted(allowed_states)}.", 409)
+        generation = int(workflow.get("generation", 0) or 0) + 1
+        values = {"state": next_state, "generation": generation, "updatedAt": datetime.now(timezone.utc)}
+        values.update(updates or {})
+        lock = firestore_snapshot_dict(lock_ref.get(transaction=transaction))
+        transaction.update(workflow_ref, values)
+        if str(lock.get("workflowId", "")) == workflow_id:
+            transaction.update(lock_ref, {"state": next_state, "generation": generation, "updatedAt": datetime.now(timezone.utc)})
+        return {**workflow, **values}
+
+    return transition(transaction)
+
+
+def get_gpu_workflow(workflow_id: str, *, owner: str = "") -> dict[str, Any]:
+    workflow = firestore_snapshot_dict(gpu_workflow_ref(workflow_id).get())
+    if not workflow:
+        raise ApiError("GPU reservation workflow does not exist or has expired.", 404)
+    if owner and normalize_email(str(workflow.get("owner", ""))) != normalize_email(owner):
+        raise ApiError("GPU reservation workflow belongs to another administrator.", 403)
+    return workflow
+
+
+def assert_gpu_admission_available() -> None:
+    lock = firestore_snapshot_dict(gpu_admission_lock_ref().get())
+    if str(lock.get("state", "")) in GPU_WORKFLOW_ACTIVE_STATES:
+        raise ApiError(
+            "Another GPU reservation or Create workflow is active. Finish, pause, or cancel it before creating a different GPU VM.",
+            409,
+        )
+
+
+def claim_gpu_workflow_for_create(workflow: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
+    return transition_gpu_workflow(
+        str(workflow["workflowId"]),
+        allowed_states={"HELD"},
+        next_state="CREATE_CLAIMED",
+        owner=str(user.get("email", "")),
+        updates={"createClaimedAt": datetime.now(timezone.utc)},
+    )
+
+
+def mark_gpu_workflow_insert_pending(workflow: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
+    return transition_gpu_workflow(
+        str(workflow["workflowId"]),
+        allowed_states={"CREATE_CLAIMED"},
+        next_state="INSERT_PENDING",
+        owner=str(user.get("email", "")),
+        updates={"insertSubmittedAt": datetime.now(timezone.utc)},
+    )
+
+
+def complete_gpu_workflow_after_create(
+    workflow: dict[str, Any],
+    instance: dict[str, Any],
+    user: dict[str, Any],
+) -> dict[str, Any]:
+    workflow_id = str(workflow["workflowId"])
+    reservation_name = str(workflow.get("reservationName", ""))
+    consumption_info: dict[str, Any] = {}
+    current_instance = instance
+    for attempt in range(5):
+        resource_status = current_instance.get("resourceStatus", {}) or {}
+        candidate = resource_status.get("reservationConsumptionInfo", {}) or {}
+        if isinstance(candidate, dict) and reservation_name in json.dumps(candidate, sort_keys=True):
+            consumption_info = candidate
+            break
+        if attempt < 4:
+            time.sleep(2)
+            current_instance = get_instance()
+    workflow = transition_gpu_workflow(
+        workflow_id,
+        allowed_states={"INSERT_PENDING", "INSERT_UNKNOWN"},
+        next_state="VM_CONFIRMED",
+        owner=str(user.get("email", "")),
+        updates={
+            "instanceName": str(instance.get("name", "")),
+            "reservationConsumptionVerified": bool(consumption_info),
+            "reservationConsumptionInfo": consumption_info,
+        },
+    )
+    if not consumption_info:
+        return transition_gpu_workflow(
+            workflow_id,
+            allowed_states={"VM_CONFIRMED"},
+            next_state="CLEANUP_PENDING",
+            owner=str(user.get("email", "")),
+            updates={"lastError": "VM is running, but reservation consumption is not visible yet; cleanup will be reconciled."},
+        )
+    zone = str((workflow.get("target") or {}).get("zone", ""))
+    operation = compute_request("DELETE", capacity_reservation_url(zone, reservation_name), allow_404=True)
+    if isinstance(operation, dict):
+        wait_for_zone_operation(operation, timeout_seconds=90, zone=zone)
+    return finalize_gpu_workflow_release(workflow, state="COMPLETED")
+
+
+def finalize_gpu_workflow_release(workflow: dict[str, Any], state: str = "RELEASED") -> dict[str, Any]:
+    workflow_id = str(workflow["workflowId"])
+    workflow_ref = gpu_workflow_ref(workflow_id)
+    lease_ref = endpoint_lease_ref(str(workflow.get("endpointId", "")))
+    lock_ref = gpu_admission_lock_ref()
+    transaction = firestore_client().transaction()
+
+    @firestore.transactional
+    def finalize(transaction):
+        current = firestore_snapshot_dict(workflow_ref.get(transaction=transaction))
+        lease = firestore_snapshot_dict(lease_ref.get(transaction=transaction))
+        lock = firestore_snapshot_dict(lock_ref.get(transaction=transaction))
+        generation = int(current.get("generation", 0) or 0) + 1
+        now = datetime.now(timezone.utc)
+        transaction.set(workflow_ref, {"state": state, "generation": generation, "updatedAt": now}, merge=True)
+        if str(lease.get("workflowId", "")) == workflow_id:
+            transaction.delete(lease_ref)
+        if str(lock.get("workflowId", "")) == workflow_id:
+            transaction.delete(lock_ref)
+        return {**current, "state": state, "generation": generation, "updatedAt": now}
+
+    return finalize(transaction)
+
+
+def release_gpu_workflow(workflow_id: str, *, owner: str = "", reason: str = "release") -> dict[str, Any]:
+    workflow = get_gpu_workflow(workflow_id, owner=owner)
+    if str(workflow.get("state", "")) in {"RELEASED", "COMPLETED", "FAILED"}:
+        return workflow
+    requested_state = "EXPIRE_REQUESTED" if reason == "expired" else "RELEASE_REQUESTED"
+    workflow = transition_gpu_workflow(
+        workflow_id,
+        allowed_states=GPU_WORKFLOW_ACTIVE_STATES,
+        next_state=requested_state,
+        owner=owner,
+        updates={"releaseReason": reason},
+    )
+    reservation_name = str(workflow.get("reservationName", ""))
+    zone = str((workflow.get("target") or {}).get("zone", ""))
+    if reservation_name and zone:
+        operation = compute_request("DELETE", capacity_reservation_url(zone, reservation_name), allow_404=True)
+        if isinstance(operation, dict):
+            wait_for_zone_operation(operation, timeout_seconds=90, zone=zone)
+        remaining = compute_request("GET", capacity_reservation_url(zone, reservation_name), allow_404=True)
+        if isinstance(remaining, dict):
+            transition_gpu_workflow(
+                workflow_id,
+                allowed_states={requested_state},
+                next_state="CLEANUP_PENDING",
+                owner=owner,
+                updates={"lastError": "Reservation deletion has not been confirmed yet."},
+            )
+            raise ApiError("GPU reservation release is still pending confirmation from Compute Engine.", 409)
+    return finalize_gpu_workflow_release(workflow)
+
+
+def cleanup_expired_gpu_workflows() -> dict[str, Any]:
+    released: list[str] = []
+    failed: list[dict[str, str]] = []
+    now = datetime.now(timezone.utc)
+    for snapshot in firestore_client().collection(workflow_collection_name("gpu-workflows")).stream():
+        workflow = firestore_snapshot_dict(snapshot)
+        state = str(workflow.get("state", ""))
+        if state not in GPU_WORKFLOW_ACTIVE_STATES or not gpu_workflow_expired(workflow, now):
+            continue
+        workflow_id = str(workflow.get("workflowId", snapshot.id))
+        try:
+            release_gpu_workflow(workflow_id, reason="expired")
+            released.append(workflow_id)
+        except ApiError as error:
+            failed.append({"workflowId": workflow_id, "error": error.message})
+    return {"releasedWorkflows": released, "failedWorkflows": failed}
+
+
 LIVE_ACCESS_PROBE_TIMEOUT_SECONDS: Final = 5
 
 
@@ -3728,6 +4068,8 @@ def handle_unexpected_error(error: Exception):
 @app.route("/api/capacity-reservations/scan-zone", methods=["POST", "OPTIONS"])
 @app.route("/api/capacity-reservations/release", methods=["POST", "OPTIONS"])
 @app.route("/api/scan-create/prepare", methods=["POST", "OPTIONS"])
+@app.route("/api/gpu-workflows/release", methods=["POST", "OPTIONS"])
+@app.route("/api/gpu-workflows/status", methods=["POST", "OPTIONS"])
 @app.route("/api/internal/capacity-reservations/cleanup", methods=["POST", "OPTIONS"])
 @app.route("/api/me", methods=["GET", "OPTIONS"])
 @app.route("/api/status", methods=["GET", "OPTIONS"])
@@ -4021,9 +4363,9 @@ def options_passthrough():
         return jsonify(scan_gpu_capacity_availability(payload))
 
     if request.path == "/api/capacity-reservations/scan-zone":
-        require_admin_user()
+        user = require_admin_user()
         payload = request.get_json(silent=True) or {}
-        return jsonify(scan_gpu_capacity_zone(payload))
+        return jsonify(scan_gpu_capacity_zone(payload, user))
 
     if request.path == "/api/capacity-reservations/release":
         require_admin_user()
@@ -4034,10 +4376,31 @@ def options_passthrough():
         payload = request.get_json(silent=True) or {}
         return jsonify(prepare_scan_create_target(payload, user))
 
+    if request.path == "/api/gpu-workflows/release":
+        user = require_admin_user()
+        payload = request.get_json(silent=True) or {}
+        workflow_id = str(payload.get("workflowId", ""))
+        if not workflow_id:
+            raise ApiError("GPU workflow ID is required.", 400)
+        workflow = release_gpu_workflow(
+            workflow_id,
+            owner=str(user.get("email", "")),
+            reason=str(payload.get("reason", "user")),
+        )
+        return jsonify({"workflow": workflow, **managed_capacity_reservation_summary()})
+
+    if request.path == "/api/gpu-workflows/status":
+        user = require_admin_user()
+        payload = request.get_json(silent=True) or {}
+        workflow = get_gpu_workflow(str(payload.get("workflowId", "")), owner=str(user.get("email", "")))
+        return jsonify({"workflow": workflow})
+
     if request.path == "/api/internal/capacity-reservations/cleanup":
         require_capacity_cleanup_token()
+        workflow_cleanup = cleanup_expired_gpu_workflows()
         result = release_managed_capacity_reservations(expired_only=True)
-        if result["failed"]:
+        result.update(workflow_cleanup)
+        if result["failed"] or workflow_cleanup["failedWorkflows"]:
             raise ApiError("Failed to release one or more expired GPU capacity reservations.", 502)
         return jsonify(result)
 
@@ -4186,7 +4549,15 @@ def authenticated_session_user(token: str) -> dict[str, Any]:
     }
 
 
-def create_scan_create_token(*, user: dict[str, Any], endpoint_id: str, hardware_id: str, zone: str) -> tuple[str, int]:
+def create_scan_create_token(
+    *,
+    user: dict[str, Any],
+    endpoint_id: str,
+    hardware_id: str,
+    zone: str,
+    workflow_id: str = "",
+    reservation_name: str = "",
+) -> tuple[str, int]:
     now = int(time.time())
     expires_at = now + SCAN_CREATE_TOKEN_TTL_SECONDS
     payload = {
@@ -4194,6 +4565,8 @@ def create_scan_create_token(*, user: dict[str, Any], endpoint_id: str, hardware
         "endpointId": endpoint_id,
         "hardwareId": hardware_id,
         "zone": zone,
+        "workflowId": workflow_id,
+        "reservationName": reservation_name,
         "iat": now,
         "exp": expires_at,
     }
@@ -4256,10 +4629,10 @@ def prepare_scan_create_target(payload: dict[str, Any], user: dict[str, Any]) ->
     }
 
 
-def validate_scan_create_preparation(payload: dict[str, Any], user: dict[str, Any]) -> None:
+def validate_scan_create_preparation(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any] | None:
     raw_token = payload.get("scanCreateToken")
     if not raw_token:
-        return
+        return None
     prepared = decode_scan_create_token(raw_token)
     if normalize_email(str(prepared.get("email", ""))) != normalize_email(str(user.get("email", ""))):
         raise ApiError("Scan & Create preparation belongs to a different user.", 403)
@@ -4271,6 +4644,25 @@ def validate_scan_create_preparation(payload: dict[str, Any], user: dict[str, An
         raise ApiError("Scan & Create preparation no longer matches the selected endpoint, hardware and zone.", 409)
     if not endpoint_available_for_scan_create(selected_endpoint(), selected_zone()):
         raise ApiError("The prepared endpoint is no longer free. Start a new capacity scan.", 409)
+    workflow_id = str(prepared.get("workflowId", ""))
+    if not workflow_id:
+        return None
+    if workflow_id != str(payload.get("gpuWorkflowId", "")):
+        raise ApiError("The held GPU workflow does not match the Scan & Create preparation.", 409)
+    workflow = get_gpu_workflow(workflow_id, owner=str(user.get("email", "")))
+    if str(workflow.get("state", "")) != "HELD":
+        raise ApiError(f"The held GPU workflow is {workflow.get('state', 'unknown')}, not ready for Create.", 409)
+    if gpu_workflow_expired(workflow):
+        raise ApiError("The held GPU reservation expired. Resume the capacity scan.", 409)
+    target = workflow.get("target") or {}
+    if (
+        str(target.get("endpointId", "")) != selected_endpoint_id()
+        or str(target.get("hardwareId", "")) != selected_hardware_id()
+        or str(target.get("zone", "")) != selected_zone()
+        or str(workflow.get("reservationName", "")) != str(prepared.get("reservationName", ""))
+    ):
+        raise ApiError("The held GPU workflow target was modified after reservation.", 409)
+    return workflow
 
 
 def authenticated_google_user(token: str | None = None) -> dict[str, Any]:
@@ -4642,6 +5034,20 @@ def managed_capacity_reservation_summary() -> dict[str, int]:
     }
 
 
+def active_gpu_workflow_reservation_names() -> set[str]:
+    names: set[str] = set()
+    try:
+        for snapshot in firestore_client().collection(workflow_collection_name("gpu-workflows")).stream():
+            workflow = firestore_snapshot_dict(snapshot)
+            if str(workflow.get("state", "")) in GPU_WORKFLOW_ACTIVE_STATES:
+                name = str(workflow.get("reservationName", ""))
+                if name:
+                    names.add(name)
+    except Exception as error:
+        logging.warning("Unable to load active GPU workflows while listing reservations: %s", error)
+    return names
+
+
 def reservation_has_expired(reservation: dict[str, Any]) -> bool:
     expires_at = parse_datetime_utc(str(reservation.get("deleteAtTime", "") or ""))
     return expires_at is not None and expires_at <= datetime.now(timezone.utc)
@@ -4659,12 +5065,17 @@ def delete_capacity_reservation(reservation: dict[str, Any]) -> None:
 
 def release_managed_capacity_reservations(*, expired_only: bool = False) -> dict[str, Any]:
     released: list[str] = []
+    skipped: list[str] = []
     failed: list[dict[str, str]] = []
     reservations = list_managed_capacity_reservations()
+    active_workflow_names = active_gpu_workflow_reservation_names()
     for reservation in reservations:
         if expired_only and not reservation_has_expired(reservation):
             continue
         name = str(reservation.get("name", "") or "unknown")
+        if name in active_workflow_names and not reservation_has_expired(reservation):
+            skipped.append(name)
+            continue
         try:
             delete_capacity_reservation(reservation)
             released.append(name)
@@ -4673,6 +5084,7 @@ def release_managed_capacity_reservations(*, expired_only: bool = False) -> dict
             failed.append({"name": name, "error": error.message})
     return {
         "released": released,
+        "skippedActiveWorkflows": skipped,
         "failed": failed,
         "managedCount": len(reservations),
         "expiredOnly": expired_only,
@@ -4776,9 +5188,15 @@ def scan_capacity_instance_properties(profile: dict[str, Any]) -> dict[str, Any]
     return instance_properties
 
 
-def probe_gpu_capacity_zone(profile: dict[str, Any], zone: str, token: str) -> dict[str, Any]:
+def probe_gpu_capacity_zone(
+    profile: dict[str, Any],
+    zone: str,
+    token: str,
+    *,
+    hold_workflow: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     reservation = {
-        "name": scan_capacity_reservation_name(profile, zone, token),
+        "name": str(hold_workflow.get("reservationName", "")) if hold_workflow else scan_capacity_reservation_name(profile, zone, token),
         "zone": zone,
     }
     expires_at = datetime.now(timezone.utc) + timedelta(seconds=CAPACITY_RESERVATION_TTL_SECONDS)
@@ -4809,10 +5227,17 @@ def probe_gpu_capacity_zone(profile: dict[str, Any], zone: str, token: str) -> d
         wait_for_zone_operation(operation, timeout_seconds=120, zone=zone)
         created = True
         available = True
+        if hold_workflow:
+            hold_workflow = transition_gpu_workflow(
+                str(hold_workflow["workflowId"]),
+                allowed_states={"PROBE_CREATING"},
+                next_state="HELD",
+                updates={"reservationReadyAt": datetime.now(timezone.utc)},
+            )
     except ApiError as error:
         error_message = error.message
     finally:
-        if created:
+        if created and not hold_workflow:
             try:
                 delete_capacity_reservation(reservation)
             except ApiError as error:
@@ -4822,25 +5247,70 @@ def probe_gpu_capacity_zone(profile: dict[str, Any], zone: str, token: str) -> d
                     error.message,
                 )
                 cleanup_failure = error.message
+        elif hold_workflow and not available:
+            try:
+                release_gpu_workflow(str(hold_workflow["workflowId"]), reason="probe-failed")
+            except ApiError as error:
+                cleanup_failure = error.message
 
     return {
         "zone": zone,
         "available": available,
         "error": error_message,
-        "releasedReservation": created and not cleanup_failure,
+        "releasedReservation": created and not hold_workflow and not cleanup_failure,
         "cleanupFailure": cleanup_failure,
+        "heldForCreate": bool(available and hold_workflow),
+        "workflowId": str(hold_workflow.get("workflowId", "")) if hold_workflow else "",
+        "reservation": {
+            "name": reservation["name"],
+            "zone": zone,
+            "expiresAt": format_datetime_utc(expires_at),
+            "state": "held" if available and hold_workflow else "released" if created and not cleanup_failure else "failed",
+        },
     }
 
 
-def scan_gpu_capacity_zone(payload: dict[str, Any]) -> dict[str, Any]:
+def scan_gpu_capacity_zone(payload: dict[str, Any], user: dict[str, Any] | None = None) -> dict[str, Any]:
     profile = gpu_hardware_profile(str(payload.get("hardwareId", "")))
     zone = str(payload.get("zone", "")).strip()
     if not zone:
         raise ApiError("GPU capacity scans require a zone.", 400)
     if zone not in {str(item) for item in profile.get("zones", [])}:
         raise ApiError("The selected zone is not compatible with this GPU profile.", 400)
-    result = probe_gpu_capacity_zone(profile, zone, secrets.token_hex(4))
+    hold_for_create = bool(payload.get("holdForCreate"))
+    workflow = None
+    if hold_for_create:
+        if not user:
+            raise ApiError("An administrator session is required to hold GPU capacity for Create.", 401)
+        workflow = begin_gpu_hold_workflow(
+            profile=profile,
+            zone=zone,
+            user=user,
+            scan_id=str(payload.get("scanId", "")),
+        )
+    result = probe_gpu_capacity_zone(
+        profile,
+        zone,
+        secrets.token_hex(4),
+        hold_workflow=workflow,
+    )
     result["hardwareId"] = str(profile["id"])
+    if result.get("available") and workflow:
+        endpoint = endpoint_by_id(str(workflow["endpointId"]))
+        token, _ = create_scan_create_token(
+            user=user,
+            endpoint_id=str(endpoint["id"]),
+            hardware_id=str(profile["id"]),
+            zone=zone,
+            workflow_id=str(workflow["workflowId"]),
+            reservation_name=str(workflow["reservationName"]),
+        )
+        result.update({
+            "endpoint": endpoint_public_payload(endpoint),
+            "target": dict(workflow["target"]),
+            "preparationToken": token,
+            "expiresAt": workflow["expiresAt"].isoformat(),
+        })
     return result
 
 
@@ -7836,15 +8306,24 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
                 "Start or delete the prepared migration target before creating another VM.",
                 409,
             )
-        validate_scan_create_preparation(payload, user)
+        scan_workflow = validate_scan_create_preparation(payload, user)
         if selected_gpu_count() > 0:
             gpu_hardware_profile(selected_hardware_id())
+            if scan_workflow is None:
+                assert_gpu_admission_available()
         application_ids = parse_create_application_ids(payload)
         if application_ids and selected_gpu_count() <= 0:
             raise ApiError("Automatic desktop application installation requires a GPU-enabled VM.", 409)
         post_create_application_token = generate_action_token() if application_ids else ""
         auto_stop_hours = parse_auto_stop_hours(payload)
         if current_instance is not None:
+            if scan_workflow is not None:
+                release_gpu_workflow(
+                    str(scan_workflow["workflowId"]),
+                    owner=str(user.get("email", "")),
+                    reason="instance-already-exists",
+                )
+                raise ApiError("The prepared endpoint already has a VM. The held GPU reservation was released.", 409)
             if current_status != "TERMINATED" or instance_hardware_matches_selection(current_instance):
                 raise ApiError("Instance already exists.", 400)
 
@@ -7884,23 +8363,49 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
             "password": generate_sunshine_password(),
         }
         ensure_firewall_rules()
-        operation = compute_request(
-            "POST",
-            instances_collection_url(),
-            json=build_instance_create_request(
-                auto_stop_hours=auto_stop_hours,
-                sunshine_credentials=sunshine_credentials,
-                post_create_application_ids=application_ids,
-                post_create_application_token=post_create_application_token,
-            ),
-        )
-        if not isinstance(operation, dict):
-            raise ApiError("Failed to create instance.", 502)
-        wait_for_zone_operation(operation, timeout_seconds=180)
-        poll_instance_status("RUNNING", timeout_seconds=240)
-        final_instance = wait_for_external_ip(timeout_seconds=180)
-        bind_selected_endpoint_to_instance(final_instance)
-        updated = update_duckdns(extract_external_ip(final_instance))
+        if scan_workflow is not None:
+            scan_workflow = claim_gpu_workflow_for_create(scan_workflow, user)
+            scan_workflow = mark_gpu_workflow_insert_pending(scan_workflow, user)
+        try:
+            insert_url = instances_collection_url()
+            if scan_workflow is not None:
+                insert_url = f"{insert_url}?requestId={scan_workflow['requestId']}"
+            operation = compute_request(
+                "POST",
+                insert_url,
+                json=build_instance_create_request(
+                    auto_stop_hours=auto_stop_hours,
+                    sunshine_credentials=sunshine_credentials,
+                    post_create_application_ids=application_ids,
+                    post_create_application_token=post_create_application_token,
+                ),
+            )
+            if not isinstance(operation, dict):
+                raise ApiError("Failed to create instance.", 502)
+            wait_for_zone_operation(operation, timeout_seconds=180)
+            poll_instance_status("RUNNING", timeout_seconds=240)
+            final_instance = wait_for_external_ip(timeout_seconds=180)
+            bind_selected_endpoint_to_instance(final_instance)
+            updated = update_duckdns(extract_external_ip(final_instance))
+            if scan_workflow is not None:
+                complete_gpu_workflow_after_create(scan_workflow, final_instance, user)
+        except ApiError as error:
+            if scan_workflow is not None:
+                if error.status_code >= 500:
+                    transition_gpu_workflow(
+                        str(scan_workflow["workflowId"]),
+                        allowed_states={"INSERT_PENDING"},
+                        next_state="INSERT_UNKNOWN",
+                        owner=str(user.get("email", "")),
+                        updates={"lastError": error.message},
+                    )
+                else:
+                    release_gpu_workflow(
+                        str(scan_workflow["workflowId"]),
+                        owner=str(user.get("email", "")),
+                        reason="create-rejected",
+                    )
+            raise
         return build_status_payload(
             final_instance,
             user=user,

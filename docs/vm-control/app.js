@@ -168,6 +168,7 @@
     scanAllGpuZones: document.querySelector("#scan-all-gpu-zones"),
     pauseGpuScan: document.querySelector("#pause-gpu-scan"),
     cancelGpuScan: document.querySelector("#cancel-gpu-scan"),
+    autoCreateFirstGpu: document.querySelector("#auto-create-first-gpu"),
     hardwareOptionsStatus: document.querySelector("#hardware-options-status"),
     hardwarePriceEstimate: document.querySelector("#hardware-price-estimate"),
     refreshInstances: document.querySelector("#refresh-instances"),
@@ -226,6 +227,7 @@
     pageLoadingToken: 0,
     operationProgressCommand: "",
     scanCreateResultRun: null,
+    activeHeldGpuWorkflow: null,
     scrolledInitialHash: "",
   };
 
@@ -1233,6 +1235,9 @@
     if (elements.gpuScanScope) {
       elements.gpuScanScope.disabled = state.isBusy || !state.user || running;
     }
+    if (elements.autoCreateFirstGpu) {
+      elements.autoCreateFirstGpu.disabled = state.isBusy || !state.user || running;
+    }
     if (elements.gpuScanProfiles) {
       elements.gpuScanProfiles.querySelectorAll("input, [data-hardware-select]").forEach((input) => {
         input.disabled = state.isBusy || !state.user || running;
@@ -1382,6 +1387,103 @@
     }
     renderGpuAvailabilityScanProgress(run);
     updateGpuAvailabilityScanButton();
+  }
+
+  function autoCreateFirstAvailableGpuEnabled() {
+    return Boolean(elements.autoCreateFirstGpu && elements.autoCreateFirstGpu.checked);
+  }
+
+  function gpuScanRequestPayload(run, target) {
+    if (!autoCreateFirstAvailableGpuEnabled()) {
+      return target;
+    }
+    if (!run.scanId) {
+      run.scanId = window.crypto && typeof window.crypto.randomUUID === "function"
+        ? window.crypto.randomUUID()
+        : `scan-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    }
+    return { ...target, holdForCreate: true, scanId: run.scanId };
+  }
+
+  async function releaseHeldGpuWorkflow(workflowId, reason) {
+    const data = await fetchApi("/api/gpu-workflows/release", {
+      method: "POST",
+      body: JSON.stringify({ workflowId, reason }),
+    });
+    await refreshGpuCapacityReservationCount();
+    return data;
+  }
+
+  async function waitForHeldScanResume(run) {
+    run.pauseRequested = true;
+    run.paused = true;
+    renderGpuAvailabilityScanProgress(run);
+    updateGpuAvailabilityScanButton();
+    setBusy(false);
+    await new Promise((resolve) => {
+      run.resume = resolve;
+    });
+    if (!run.cancelRequested) {
+      setBusy(true);
+    }
+  }
+
+  async function handleHeldGpuCapacity(run, prepared) {
+    const workflowId = String(prepared && prepared.workflowId || "");
+    const target = prepared && prepared.target ? prepared.target : null;
+    if (!workflowId || !target || !prepared.preparationToken) {
+      throw new Error("The backend returned an incomplete held GPU reservation.");
+    }
+    state.activeHeldGpuWorkflow = { workflowId, ...prepared };
+    renderGpuAvailabilityScanProgress(run);
+    const choice = await selectPostCreateApplications(target, { heldWorkflow: prepared });
+    const action = choice && choice.action ? choice.action : "pause";
+    if (action !== "create") {
+      setCommandStatus("Releasing the held GPU reservation before continuing...", "warning");
+      await releaseHeldGpuWorkflow(workflowId, action);
+      state.activeHeldGpuWorkflow = null;
+      if (action === "cancel-scan") {
+        run.cancelRequested = true;
+        return "cancelled";
+      }
+      if (action === "pause") {
+        await waitForHeldScanResume(run);
+      }
+      return "continue";
+    }
+
+    run.createStarted = true;
+    const loadingToken = setPageLoading(`GPU reserved. Creating ${String(target.hardwareId || "GPU")} VM in ${zoneDisplayLabel(target.zone)}...`);
+    setBusy(true);
+    setCommandStatus("GPU capacity is held. Submitting Create against the reservation...", "warning");
+    try {
+      const body = {
+        command: "create",
+        ...target,
+        scanCreateToken: prepared.preparationToken,
+        gpuWorkflowId: workflowId,
+        applicationIds: choice.applicationIds || [],
+      };
+      const autoStopHours = readAutoStopHours("create");
+      if (autoStopHours) body.autoStopHours = autoStopHours;
+      let data = await fetchApi("/api/command", { method: "POST", body: JSON.stringify(body) });
+      renderStatusPayload(data);
+      data = await waitForStatusSettled("create", data);
+      renderStatusPayload(data);
+      await refreshInstances({ silent: true, autoSelect: true });
+      setCommandStatus(commandCompletionMessage("create", data), "success");
+      setBanner(statusBannerMessage("Reserved GPU VM created", data), "success");
+      return "created";
+    } catch (error) {
+      const message = commandFailureMessage("create", error);
+      setCommandStatus(message, "error");
+      setBanner(message, "error");
+      return "failed";
+    } finally {
+      state.activeHeldGpuWorkflow = null;
+      await refreshGpuCapacityReservationCount();
+      markPageReady("Ready.", loadingToken);
+    }
   }
 
   function selectedTargetParams() {
@@ -1798,12 +1900,17 @@
         try {
           const data = await fetchApi("/api/capacity-reservations/scan-zone", {
             method: "POST",
-            body: JSON.stringify({ ...run.target, zone }),
+            body: JSON.stringify(gpuScanRequestPayload(run, { ...run.target, zone })),
             signal: run.abortController.signal,
           });
           if (data && data.available) {
             run.availableZones.push(zone);
-            await appendScanCreateCandidate(run, profile, zone);
+            if (data.heldForCreate) {
+              const outcome = await handleHeldGpuCapacity(run, data);
+              if (["created", "failed", "cancelled"].includes(outcome)) break;
+            } else {
+              await appendScanCreateCandidate(run, profile, zone);
+            }
           }
           if (data && data.cleanupFailure) {
             run.cleanupFailures.push({ zone, error: String(data.cleanupFailure) });
@@ -1922,7 +2029,7 @@
         try {
           const data = await fetchApi("/api/capacity-reservations/scan-zone", {
             method: "POST",
-            body: JSON.stringify(targetParamsForHardwareProfile(target.profile, target.zone)),
+            body: JSON.stringify(gpuScanRequestPayload(run, targetParamsForHardwareProfile(target.profile, target.zone))),
             signal: run.abortController.signal,
           });
           if (data && data.available) {
@@ -1931,7 +2038,12 @@
             zones.push(String(target.zone));
             run.availableZonesByHardwareId[hardwareId] = zones;
             run.availablePairCount += 1;
-            await appendScanCreateCandidate(run, target.profile, target.zone);
+            if (data.heldForCreate) {
+              const outcome = await handleHeldGpuCapacity(run, data);
+              if (["created", "failed", "cancelled"].includes(outcome)) break;
+            } else {
+              await appendScanCreateCandidate(run, target.profile, target.zone);
+            }
           }
           if (data && data.cleanupFailure) {
             run.cleanupFailures.push({ target, error: String(data.cleanupFailure) });
@@ -2034,12 +2146,17 @@
         try {
           const data = await fetchApi("/api/capacity-reservations/scan-zone", {
             method: "POST",
-            body: JSON.stringify(targetParamsForHardwareProfile(profile, zone)),
+            body: JSON.stringify(gpuScanRequestPayload(run, targetParamsForHardwareProfile(profile, zone))),
             signal: run.abortController.signal,
           });
           if (data && data.available) {
             run.availableHardwareIds.push(String(profile.id));
-            await appendScanCreateCandidate(run, profile, zone);
+            if (data.heldForCreate) {
+              const outcome = await handleHeldGpuCapacity(run, data);
+              if (["created", "failed", "cancelled"].includes(outcome)) break;
+            } else {
+              await appendScanCreateCandidate(run, profile, zone);
+            }
           }
           if (data && data.cleanupFailure) {
             run.cleanupFailures.push({ profile, error: String(data.cleanupFailure) });
@@ -2144,7 +2261,7 @@
         try {
           const data = await fetchApi("/api/capacity-reservations/scan-zone", {
             method: "POST",
-            body: JSON.stringify(targetParamsForHardwareProfile(target.profile, target.zone)),
+            body: JSON.stringify(gpuScanRequestPayload(run, targetParamsForHardwareProfile(target.profile, target.zone))),
             signal: run.abortController.signal,
           });
           if (data && data.available) {
@@ -2153,7 +2270,12 @@
             zones.push(target.zone);
             run.availableZonesByHardwareId[hardwareId] = zones;
             run.availablePairCount += 1;
-            await appendScanCreateCandidate(run, target.profile, target.zone);
+            if (data.heldForCreate) {
+              const outcome = await handleHeldGpuCapacity(run, data);
+              if (["created", "failed", "cancelled"].includes(outcome)) break;
+            } else {
+              await appendScanCreateCandidate(run, target.profile, target.zone);
+            }
           }
           if (data && data.cleanupFailure) {
             run.cleanupFailures.push({ target, error: String(data.cleanupFailure) });
@@ -3236,12 +3358,16 @@
     return catalog.filter((application) => application && application.id && application.label);
   }
 
-  function selectPostCreateApplications(target) {
+  function selectPostCreateApplications(target, options = {}) {
     const dialog = document.querySelector("#create-applications-dialog");
     const form = dialog && dialog.querySelector("form");
     const summary = document.querySelector("#create-applications-summary");
     const list = document.querySelector("#create-applications-list");
     const selectedButton = document.querySelector("#create-with-applications");
+    const cancelButton = document.querySelector("#create-dialog-cancel");
+    const skipButton = document.querySelector("#create-dialog-skip");
+    const pauseButton = document.querySelector("#create-dialog-pause");
+    const cancelScanButton = document.querySelector("#create-dialog-cancel-scan");
     if (!dialog || !form || !summary || !list || !selectedButton) {
       return Promise.resolve([]);
     }
@@ -3251,9 +3377,15 @@
     const targetLabel = [selectedEndpoint() && selectedEndpoint().domain, selectedHardwareLabel(), target && target.zone]
       .filter(Boolean)
       .join(" · ");
+    const heldWorkflow = options.heldWorkflow || null;
+    const expiresAt = heldWorkflow && heldWorkflow.expiresAt ? new Date(heldWorkflow.expiresAt).toLocaleTimeString() : "";
     summary.textContent = gpuEnabled
-      ? `Target: ${targetLabel}. Selected applications will be installed after the VM and Sunshine are ready.`
+      ? `Target: ${targetLabel}. ${heldWorkflow ? `GPU capacity is reserved until approximately ${expiresAt}. ` : ""}Selected applications will be installed after the VM and Sunshine are ready.`
       : `Target: ${targetLabel}. Desktop application installation requires a GPU-enabled VM, so this VM will be created without applications.`;
+    [skipButton, pauseButton, cancelScanButton].forEach((button) => {
+      if (button) button.hidden = !heldWorkflow;
+    });
+    if (cancelButton) cancelButton.hidden = Boolean(heldWorkflow);
     list.replaceChildren();
     if (!applicationCatalog.length) {
       const empty = document.createElement("p");
@@ -3295,14 +3427,25 @@
         dialog.removeEventListener("close", onClose);
         form.removeEventListener("submit", onSubmit);
         if (choice === "create-selected") {
-          resolve(Array.from(list.querySelectorAll('input[type="checkbox"]:checked'))
-            .map((checkbox) => String(checkbox.value)));
+          resolve({
+            action: "create",
+            applicationIds: Array.from(list.querySelectorAll('input[type="checkbox"]:checked'))
+              .map((checkbox) => String(checkbox.value)),
+          });
           return;
         }
-        resolve(choice === "create-empty" ? [] : null);
+        if (choice === "create-empty") {
+          resolve({ action: "create", applicationIds: [] });
+          return;
+        }
+        if (heldWorkflow) {
+          resolve({ action: choice === "skip" ? "skip" : choice === "cancel-scan" ? "cancel-scan" : "pause", applicationIds: [] });
+          return;
+        }
+        resolve(null);
       };
       const onClose = () => {
-        finish(dialog.returnValue);
+        finish(dialog.returnValue || (heldWorkflow ? "pause" : "cancel"));
       };
       const onSubmit = (event) => {
         event.preventDefault();
@@ -3343,13 +3486,14 @@
       state.pendingMinecraftServerType = requestedMinecraftServerType;
     }
 
-    const createApplicationIds = command === "create"
+    const createApplicationChoice = command === "create"
       ? await selectPostCreateApplications(commandTargetParams)
-      : [];
-    if (command === "create" && createApplicationIds === null) {
+      : { action: "create", applicationIds: [] };
+    if (command === "create" && createApplicationChoice === null) {
       setBanner("Create cancelled.", "warning");
       return;
     }
+    const createApplicationIds = createApplicationChoice.applicationIds;
 
     if (command === "delete") {
       const confirmed = window.confirm("Delete will stop and remove the VM without creating a backup. Continue?");
@@ -4188,6 +4332,14 @@
       setBusy(false);
       markPageReady("Ready.", loadingToken);
     }
+  }
+
+  if (elements.autoCreateFirstGpu) {
+    const savedAutoCreate = window.localStorage.getItem("vm-control-auto-create-first-gpu");
+    elements.autoCreateFirstGpu.checked = savedAutoCreate === null ? true : savedAutoCreate === "true";
+    elements.autoCreateFirstGpu.addEventListener("change", () => {
+      window.localStorage.setItem("vm-control-auto-create-first-gpu", String(elements.autoCreateFirstGpu.checked));
+    });
   }
 
   if (!embeddedVmControl) {

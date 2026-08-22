@@ -790,6 +790,35 @@ select {
   margin: 0;
 }
 
+.auto-create-first-gpu {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 13px 14px;
+  border: 1px solid rgba(242, 198, 109, 0.34);
+  border-radius: 14px;
+  background: rgba(242, 198, 109, 0.07);
+  cursor: pointer;
+}
+
+.auto-create-first-gpu input {
+  width: 18px;
+  height: 18px;
+  margin: 2px 0 0;
+}
+
+.auto-create-first-gpu span {
+  display: grid;
+  gap: 4px;
+}
+
+.auto-create-first-gpu small {
+  color: var(--muted);
+  line-height: 1.45;
+}
+
 .native-hardware-select {
   position: absolute;
   width: 1px;

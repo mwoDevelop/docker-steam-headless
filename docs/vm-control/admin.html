@@ -173,6 +173,13 @@
                 </div>
               </div>
             </div>
+            <label class="auto-create-first-gpu">
+              <input id="auto-create-first-gpu" type="checkbox" checked>
+              <span>
+                <strong>Create after first available GPU</strong>
+                <small>Stop on the first successful capacity reservation, keep it briefly, and open the application selection dialog. GPU reservation cost is incurred while you decide.</small>
+              </span>
+            </label>
             <p class="gpu-compatibility-legend">
               <span class="sunshine-verified">Green: tested with Sunshine</span>
               <span class="sunshine-incompatible">Red: tested and fails with Sunshine</span>
@@ -509,7 +516,10 @@
           <p id="create-applications-summary" class="access-meta"></p>
           <div id="create-applications-list" class="create-applications-list"></div>
           <div class="create-applications-actions">
-            <button value="cancel" class="ghost" type="submit">Cancel</button>
+            <button id="create-dialog-cancel" value="cancel" class="ghost" type="submit">Cancel</button>
+            <button id="create-dialog-skip" value="skip" class="ghost" type="submit" hidden>Cancel and continue scan</button>
+            <button id="create-dialog-pause" value="pause" class="ghost" type="submit" hidden>Pause scan</button>
+            <button id="create-dialog-cancel-scan" value="cancel-scan" class="ghost" type="submit" hidden>Cancel scan</button>
             <button value="create-empty" class="action" type="submit">Create without applications</button>
             <button id="create-with-applications" value="create-selected" class="action create" type="submit" disabled>Create and install selected</button>
           </div>
@@ -518,6 +528,6 @@
     </main>
 
     <script src="./admin.js?v=loader-handoff-20260812"></script>
-    <script src="./app.js?v=create-applications-submit-20260813"></script>
+    <script src="./app.js?v=hold-first-gpu-create-20260822"></script>
   </body>
 </html>
