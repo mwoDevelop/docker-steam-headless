@@ -1511,8 +1511,14 @@
           method: "POST",
           body: JSON.stringify({ action: "start", migrationId: migration.id, gpuWorkflowId: workflowId, scanCreateToken: prepared.preparationToken }),
         });
+        let relocationStatus = await refreshStatus({ silent: true, forceRender: true });
+        relocationStatus = await waitForStatusSettled("start", relocationStatus);
+        renderStatusPayload(relocationStatus);
         await refreshInstances({ silent: true, autoSelect: true });
-        setCommandStatus(`Reserved GPU VM relocated and started in ${zoneDisplayLabel(target.zone)}.`, "success");
+        setCommandStatus(
+          statusBannerMessage(`Reserved GPU VM relocated and started in ${zoneDisplayLabel(target.zone)}`, relocationStatus),
+          statusMessageTone(relocationStatus),
+        );
         return "created";
       }
       let data = await fetchApi("/api/command", { method: "POST", body: JSON.stringify(body) });
@@ -3123,7 +3129,7 @@
       }
       const sunshineState = String(payload.sunshineStatus && payload.sunshineStatus.state || "").trim().toLowerCase();
       const sunshineVersion = String(payload.sunshineStatus && payload.sunshineStatus.version || "").trim();
-      if (command === "create" && sunshineState === "ready" && !sunshineVersion && !sunshineVersionGraceDeadline) {
+      if (["create", "start"].includes(command) && sunshineState === "ready" && !sunshineVersion && !sunshineVersionGraceDeadline) {
         sunshineVersionGraceDeadline = Math.min(deadline, Date.now() + 30000);
         setCommandStatus("VM and Sunshine are ready. Waiting for Sunshine version detection...", "warning");
       }
