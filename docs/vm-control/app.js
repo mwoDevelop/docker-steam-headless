@@ -4695,6 +4695,7 @@
       setBusy(true);
       setCapacityButtonResult(elements.checkGpuCapacity, "Reserving Selected GPU...", "neutral");
       let data;
+      let quotaRecoveryPerformed = false;
       try {
         data = await fetchApi("/api/capacity-reservations/probe", {
           method: "POST",
@@ -4706,10 +4707,14 @@
           setCapacityButtonResult(elements.checkGpuCapacity, "GPU Reservation Cancelled", "neutral");
           return;
         }
+        quotaRecoveryPerformed = true;
         data = await fetchApi("/api/capacity-reservations/probe", {
           method: "POST",
           body: JSON.stringify(target),
         });
+      }
+      if (quotaRecoveryPerformed) {
+        await refreshInstances({ silent: true, autoSelect: false });
       }
       const expiresAt = data && data.reservation && data.reservation.expiresAt
         ? ` until ${data.reservation.expiresAt}`
