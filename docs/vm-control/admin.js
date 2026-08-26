@@ -15,6 +15,10 @@
     authStatus: document.querySelector("#auth-status"),
     googleSignIn: document.querySelector("#google-sign-in"),
     signOut: document.querySelector("#sign-out"),
+    adminProtectedContent: document.querySelector("#admin-protected-content"),
+    adminAccessDenied: document.querySelector("#admin-access-denied"),
+    accessDeniedEmail: document.querySelector("#access-denied-email"),
+    accessDeniedChangeAccount: document.querySelector("#access-denied-change-account"),
     adminSummary: document.querySelector("#admin-summary"),
     addUserForm: document.querySelector("#add-user-form"),
     userEmail: document.querySelector("#user-email"),
@@ -74,6 +78,8 @@
     googleTokenClient: null,
     token: "",
     user: null,
+    viewer: null,
+    accessDenied: false,
     isBusy: false,
     usersPayload: null,
     endpointsPayload: null,
@@ -229,9 +235,24 @@
   }
 
   function updateUi() {
-    elements.googleSignIn.classList.toggle("hidden", Boolean(state.user));
+    const authorized = Boolean(state.user && state.user.isAdmin);
+    const denied = Boolean(state.accessDenied && !authorized);
+    const viewerEmail = String(state.viewer && state.viewer.email || "");
+    elements.adminProtectedContent.hidden = !authorized;
+    elements.adminAccessDenied.hidden = !denied;
+    elements.accessDeniedEmail.textContent = viewerEmail || "the currently signed-in account";
+    elements.googleSignIn.classList.toggle("hidden", authorized);
+    elements.googleSignIn.textContent = denied ? "Use another Google account" : "Sign in with Google";
     if (state.user) {
       setAuthStatus(`Signed in as ${state.user.email}`, "success");
+      elements.signOut.classList.remove("hidden");
+    } else if (denied) {
+      setAuthStatus(
+        viewerEmail
+          ? `Signed in as ${viewerEmail}. This account is not an administrator.`
+          : "This authenticated Google account is not an administrator.",
+        "error",
+      );
       elements.signOut.classList.remove("hidden");
     } else if (state.backendConfig) {
       setAuthStatus("Backend connected. Sign in with the administrator Google account.", "warning");
@@ -707,7 +728,7 @@
     }
     updateUi();
     if (state.token) {
-      await loadUsers();
+      await verifyAdminSession();
     }
   }
 
@@ -744,7 +765,7 @@
     if (!state.backendConfig) return;
     try {
       setBusy(true);
-      await loadUsers();
+      await verifyAdminSession();
     } catch (error) {
       handleError(error);
     } finally {
@@ -763,6 +784,8 @@
     state.automaticRefreshInFlight = false;
     storeSessionToken("");
     state.user = null;
+    state.viewer = null;
+    state.accessDenied = false;
     state.usersPayload = null;
     state.endpointsPayload = null;
     state.migrationsPayload = null;
@@ -786,9 +809,11 @@
       }
       setBusy(true);
       storeSessionToken(response.access_token || "");
-      await loadUsers();
+      await verifyAdminSession();
     } catch (error) {
-      clearSession();
+      if (!state.accessDenied) {
+        clearSession();
+      }
       handleError(error);
     } finally {
       setBusy(false);
@@ -819,15 +844,39 @@
     });
     const payload = await response.json().catch(() => null);
     if (!response.ok) {
-      if (response.status === 401 || response.status === 403) {
+      if (response.status === 401) {
         state.user = null;
+        state.viewer = null;
+        state.accessDenied = false;
+      } else if (response.status === 403 && (path === "/api/me" || path.startsWith("/api/admin/"))) {
+        state.viewer = state.viewer || state.user;
+        state.user = null;
+        state.accessDenied = true;
       }
       throw new Error((payload && payload.error) || `API returned ${response.status}.`);
     }
     return payload;
   }
 
+  async function verifyAdminSession(options) {
+    const payload = await fetchApi("/api/me", { method: "GET" });
+    const viewer = payload && payload.user ? payload.user : null;
+    state.viewer = viewer;
+    if (!viewer || !viewer.isAdmin) {
+      state.user = null;
+      state.accessDenied = true;
+      setMessage("Administrator access denied for this Google account.", "error");
+      updateUi();
+      return false;
+    }
+    state.accessDenied = false;
+    return loadUsers(options);
+  }
+
   async function loadUsers(options) {
+    if (!state.viewer || !state.viewer.isAdmin) {
+      throw new Error("Administrator session verification is required.");
+    }
     const silent = Boolean(options && options.silent);
     const refreshRevision = state.refreshRevision;
     const [payload, endpoints, migrations, runtimeImages, compatibility] = await Promise.all([
@@ -841,6 +890,8 @@
       return false;
     }
     state.user = payload.user;
+    state.viewer = payload.user;
+    state.accessDenied = false;
     state.usersPayload = payload;
     state.endpointsPayload = endpoints;
     state.migrationsPayload = migrations;
@@ -1254,6 +1305,19 @@
         await connectBackend({ silent: true });
       }
       state.googleTokenClient.requestAccessToken();
+    } catch (error) {
+      handleError(error);
+      setBusy(false);
+    }
+  });
+
+  elements.accessDeniedChangeAccount.addEventListener("click", async () => {
+    try {
+      setBusy(true);
+      if (!state.googleTokenClient) {
+        await connectBackend({ silent: true });
+      }
+      state.googleTokenClient.requestAccessToken({ prompt: "select_account" });
     } catch (error) {
       handleError(error);
       setBusy(false);

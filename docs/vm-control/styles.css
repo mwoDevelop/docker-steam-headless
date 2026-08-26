@@ -574,6 +574,63 @@ select {
   font-size: 0.92rem;
 }
 
+.admin-access-denied {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: clamp(20px, 4vw, 48px);
+  border-color: rgba(255, 126, 103, 0.42);
+  background:
+    radial-gradient(circle at 10% 10%, rgba(255, 126, 103, 0.13), transparent 34%),
+    linear-gradient(135deg, rgba(43, 20, 25, 0.96), rgba(17, 26, 39, 0.98));
+}
+
+.admin-access-denied[hidden] {
+  display: none;
+}
+
+.access-denied-mark {
+  display: grid;
+  place-items: center;
+  width: clamp(96px, 14vw, 150px);
+  aspect-ratio: 1;
+  border: 1px solid rgba(255, 126, 103, 0.48);
+  border-radius: 32px 12px 32px 12px;
+  color: #ffb6a8;
+  background: rgba(255, 126, 103, 0.08);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: clamp(1.8rem, 4vw, 3.4rem);
+  font-weight: 500;
+  letter-spacing: -0.08em;
+}
+
+.admin-access-denied h2 {
+  margin-top: 0;
+}
+
+.admin-access-denied p:not(.eyebrow) {
+  max-width: 64ch;
+  color: var(--muted);
+  line-height: 1.65;
+}
+
+.access-denied-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 22px;
+}
+
+@media (max-width: 640px) {
+  .admin-access-denied {
+    grid-template-columns: 1fr;
+  }
+
+  .access-denied-mark {
+    width: 96px;
+  }
+}
+
 .connection-summary p {
   margin: 0 0 10px;
   color: var(--muted);

@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;700&display=swap"
       rel="stylesheet"
     >
-    <link rel="stylesheet" href="./styles.css?v=create-applications-20260813">
+    <link rel="stylesheet" href="./styles.css?v=admin-access-gate-20260826">
     <script src="https://accounts.google.com/gsi/client" async defer></script>
   </head>
   <body>
@@ -68,6 +68,24 @@
         </div>
       </section>
 
+      <section id="admin-access-denied" class="panel admin-access-denied" role="alert" hidden>
+        <div class="access-denied-mark" aria-hidden="true">403</div>
+        <div>
+          <p class="eyebrow">Access denied</p>
+          <h2>Administrator permission required</h2>
+          <p>
+            The Google account <strong id="access-denied-email">currently signed in</strong> is authenticated,
+            but it is not allowed to open administration controls.
+          </p>
+          <p class="access-meta">Return to the read-only VM view or choose an administrator Google account.</p>
+          <div class="access-denied-actions">
+            <a class="ghost button-link" href="./index.html">Back to VM Control</a>
+            <button id="access-denied-change-account" class="action" type="button">Use another Google account</button>
+          </div>
+        </div>
+      </section>
+
+      <div id="admin-protected-content" hidden>
       <nav class="admin-tabs" aria-label="Administration sections" role="tablist">
         <button class="admin-tab is-active" type="button" data-admin-tab="vm-control" role="tab" aria-selected="true">VM Control</button>
         <button class="admin-tab" type="button" data-admin-tab="migrations" role="tab" aria-selected="false">Migrations</button>
@@ -545,9 +563,10 @@
           </div>
         </form>
       </dialog>
+      </div>
     </main>
 
-    <script src="./admin.js?v=loader-handoff-20260812"></script>
+    <script src="./admin.js?v=admin-access-gate-20260826"></script>
     <script src="./app.js?v=gpu-scan-cancel-20260823-3"></script>
   </body>
 </html>
