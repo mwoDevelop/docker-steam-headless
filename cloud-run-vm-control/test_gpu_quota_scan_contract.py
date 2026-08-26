@@ -86,6 +86,10 @@ class GpuQuotaScanContractTests(unittest.TestCase):
         self.assertIn('setCapacityButtonResult(elements.checkGpuCapacity, "GPU Reservation Cancelled", "neutral")', javascript)
         self.assertIn('if (quotaRecoveryPerformed) {', javascript)
         self.assertIn('mergeCurrentStatus: false', javascript)
+        self.assertIn('function activeGpuAvailabilityScanRun()', javascript)
+        self.assertIn('dataset.scanActionActive === "true"', javascript)
+        self.assertIn('const cancellingScan = action === "cancel-scan";', javascript)
+        self.assertIn('window.setTimeout(() => abortController.abort(), 20000)', javascript)
         self.assertIn('const explicitlySelected = instances.find(', javascript)
         self.assertIn('String(endpoint && endpoint.id || "") === endpointId', javascript)
 

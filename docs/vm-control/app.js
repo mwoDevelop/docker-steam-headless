@@ -1402,8 +1402,13 @@
     }
   }
 
-  function pauseGpuAvailabilityScan() {
+  function activeGpuAvailabilityScanRun() {
     const run = state.gpuAvailabilityScanRun || state.selectedZoneGpuAvailabilityScanRun || state.allGpuZoneAvailabilityScanRun;
+    return run && !run.finished ? run : null;
+  }
+
+  function pauseGpuAvailabilityScan() {
+    const run = activeGpuAvailabilityScanRun();
     if (!run || run.finished || run.cancelRequested) {
       return;
     }
@@ -1457,7 +1462,7 @@
   }
 
   function cancelGpuAvailabilityScan() {
-    const run = state.gpuAvailabilityScanRun || state.selectedZoneGpuAvailabilityScanRun || state.allGpuZoneAvailabilityScanRun;
+    const run = activeGpuAvailabilityScanRun();
     if (!run || run.finished || run.cancelRequested) {
       return;
     }
@@ -1568,12 +1573,19 @@
   }
 
   async function releaseHeldGpuWorkflow(workflowId, reason) {
-    const data = await fetchApi("/api/gpu-workflows/release", {
-      method: "POST",
-      body: JSON.stringify({ workflowId, reason }),
-    });
-    await refreshGpuCapacityReservationCount();
-    return data;
+    const abortController = new AbortController();
+    const timeoutId = window.setTimeout(() => abortController.abort(), 20000);
+    try {
+      const data = await fetchApi("/api/gpu-workflows/release", {
+        method: "POST",
+        body: JSON.stringify({ workflowId, reason }),
+        signal: abortController.signal,
+      });
+      await refreshGpuCapacityReservationCount();
+      return data;
+    } finally {
+      window.clearTimeout(timeoutId);
+    }
   }
 
   function gpuQuotaBlocked(value) {
@@ -1669,10 +1681,18 @@
     const action = choice && choice.action ? choice.action : "pause";
     if (!["create", "start"].includes(action)) {
       setCommandStatus("Releasing the held GPU reservation before continuing...", "warning");
-      await releaseHeldGpuWorkflow(workflowId, action);
-      state.activeHeldGpuWorkflow = null;
-      if (action === "cancel-scan") {
+      const cancellingScan = action === "cancel-scan";
+      if (cancellingScan) {
         run.cancelRequested = true;
+      }
+      try {
+        await releaseHeldGpuWorkflow(workflowId, action);
+      } catch (error) {
+        if (!cancellingScan) throw error;
+        run.cleanupFailures.push({ error: formatErrorMessage(error) });
+      }
+      state.activeHeldGpuWorkflow = null;
+      if (cancellingScan) {
         return "cancelled";
       }
       if (action === "pause") {
@@ -5067,12 +5087,17 @@
 
   if (elements.refreshHardware) {
     elements.refreshHardware.addEventListener("click", async () => {
+      if (state.isBusy || activeGpuAvailabilityScanRun() || elements.refreshHardware.dataset.scanActionActive === "true") {
+        return;
+      }
+      elements.refreshHardware.dataset.scanActionActive = "true";
       const restoringZones = Boolean(state.gpuAvailabilityScan);
       const scope = selectedGpuScanScope();
       const profiles = selectedGpuScanProfiles();
       const targetCount = gpuScanTargetCount(profiles, scope);
       if (!restoringZones && profiles.length > 1 && !window.confirm(`This will create and immediately release ${targetCount} short-lived GPU capacity reservations for ${profiles.length} selected GPU profiles. It may take several minutes and may be cancelled. Continue?`)) {
         setCommandStatus("Selected GPU capacity scan cancelled before it started.", "neutral");
+        delete elements.refreshHardware.dataset.scanActionActive;
         return;
       }
       const loadingToken = setPageLoading(restoringZones
@@ -5088,6 +5113,7 @@
       } finally {
         setBusy(false);
         markPageReady("Ready.", loadingToken);
+        delete elements.refreshHardware.dataset.scanActionActive;
       }
     });
   }
@@ -5156,6 +5182,9 @@
 
   if (elements.scanSelectedGpu) {
     elements.scanSelectedGpu.addEventListener("click", async () => {
+      if (state.isBusy || activeGpuAvailabilityScanRun()) {
+        return;
+      }
       const restoringProfiles = Boolean(activeSelectedZoneGpuAvailabilityScan(selectedZone()));
       const loadingToken = setPageLoading(restoringProfiles ? "Restoring declared GPU profiles..." : "Scanning all GPU profiles in the selected zone...");
       try {
@@ -5174,11 +5203,16 @@
 
   if (elements.scanAllGpuZones) {
     elements.scanAllGpuZones.addEventListener("click", async () => {
+      if (state.isBusy || activeGpuAvailabilityScanRun() || elements.scanAllGpuZones.dataset.scanActionActive === "true") {
+        return;
+      }
+      elements.scanAllGpuZones.dataset.scanActionActive = "true";
       const restoringCatalog = Boolean(activeAllGpuZoneAvailabilityScan());
       const profiles = eligibleGpuScanProfiles();
       const targetCount = profiles.reduce((total, profile) => total + profile.zones.length, 0);
       if (!restoringCatalog && profiles.length && !window.confirm(`This will create and immediately release ${targetCount} short-lived GPU capacity reservations across ${profiles.length} GPU profiles. It can take several minutes and may be cancelled. Continue?`)) {
         setCommandStatus("Full GPU capacity scan cancelled before it started.", "neutral");
+        delete elements.scanAllGpuZones.dataset.scanActionActive;
         return;
       }
       const loadingToken = setPageLoading(restoringCatalog ? "Restoring all configured GPU profiles and zones..." : "Scanning all configured GPU profiles in all compatible zones...");
@@ -5192,6 +5226,7 @@
         setBusy(false);
         updateGpuAvailabilityScanButton();
         markPageReady("Ready.", loadingToken);
+        delete elements.scanAllGpuZones.dataset.scanActionActive;
       }
     });
   }
