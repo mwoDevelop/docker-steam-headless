@@ -1,4 +1,5 @@
 import os
+import inspect
 import sys
 import unittest
 from unittest.mock import patch
@@ -83,6 +84,10 @@ class GpuQuotaScanContractTests(unittest.TestCase):
         self.assertIn('GPU capacity scan stopped without changing the running VM.', javascript)
         self.assertIn('const explicitlySelected = instances.find(', javascript)
         self.assertIn('String(endpoint && endpoint.id || "") === endpointId', javascript)
+
+    def test_standalone_capacity_probe_does_not_depend_on_hold_workflow(self):
+        source = inspect.getsource(vm_control.create_capacity_reservation_probe)
+        self.assertNotIn("hold_workflow", source)
 
 
 if __name__ == "__main__":

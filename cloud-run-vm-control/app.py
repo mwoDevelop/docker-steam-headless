@@ -5299,8 +5299,7 @@ def create_capacity_reservation_probe() -> dict[str, Any]:
             }
         delete_capacity_reservation(existing)
 
-    workflow_deadline = (hold_workflow or {}).get("operationDeadline")
-    expires_at = workflow_deadline if isinstance(workflow_deadline, datetime) else datetime.now(timezone.utc) + timedelta(seconds=CAPACITY_RESERVATION_TTL_SECONDS)
+    expires_at = datetime.now(timezone.utc) + timedelta(seconds=CAPACITY_RESERVATION_TTL_SECONDS)
     instance_properties: dict[str, Any] = {"machineType": selected_machine_type()}
     if selected_accelerator_mode() == "attached":
         instance_properties["guestAccelerators"] = [
