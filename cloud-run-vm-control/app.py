@@ -4214,6 +4214,7 @@ def handle_unexpected_error(error: Exception):
 @app.route("/api/capacity-reservations/probe", methods=["POST", "OPTIONS"])
 @app.route("/api/capacity-reservations/scan", methods=["POST", "OPTIONS"])
 @app.route("/api/capacity-reservations/scan-zone", methods=["POST", "OPTIONS"])
+@app.route("/api/capacity-reservations/prepare-scan", methods=["POST", "OPTIONS"])
 @app.route("/api/capacity-reservations/release", methods=["POST", "OPTIONS"])
 @app.route("/api/scan-create/prepare", methods=["POST", "OPTIONS"])
 @app.route("/api/gpu-workflows/release", methods=["POST", "OPTIONS"])
@@ -4515,6 +4516,11 @@ def options_passthrough():
         user = require_admin_user()
         payload = request.get_json(silent=True) or {}
         return jsonify(scan_gpu_capacity_zone(payload, user))
+
+    if request.path == "/api/capacity-reservations/prepare-scan":
+        require_admin_user()
+        payload = request.get_json(silent=True) or {}
+        return jsonify(prepare_gpu_capacity_scan(payload))
 
     if request.path == "/api/capacity-reservations/release":
         require_admin_user()
@@ -5370,6 +5376,130 @@ def scan_capacity_instance_properties(profile: dict[str, Any]) -> dict[str, Any]
     return instance_properties
 
 
+def gpu_capacity_failure_details(error: ApiError) -> dict[str, Any]:
+    serialized = f"{error.message} {json.dumps(error.details, sort_keys=True)}"
+    normalized = serialized.upper()
+    if any(marker in normalized for marker in (
+        "RATE_LIMIT_EXCEEDED",
+        "RATELIMITEXCEEDED",
+        "GLOBALREADSPERMINUTEPERPROJECT",
+        "GLOBAL_READS",
+        "READ REQUESTS PER MINUTE",
+    )):
+        return {
+            "failureCode": "COMPUTE_API_RATE_LIMITED",
+            "scanFatal": True,
+            "quotaBlocked": False,
+        }
+    if any(marker in normalized for marker in (
+        "QUOTA_EXCEEDED",
+        "QUOTA EXCEEDED",
+        "QUOTALIMIT",
+        "EXCEEDED FOR QUOTA METRIC",
+        "RESOURCE QUOTA",
+    )):
+        return {
+            "failureCode": "GPU_QUOTA_EXHAUSTED",
+            "scanFatal": True,
+            "quotaBlocked": True,
+        }
+    if "RESERVATION" in normalized and "WAS CONSUMED" in normalized:
+        return {
+            "failureCode": "GPU_RESERVATION_ALREADY_CONSUMED",
+            "scanFatal": True,
+            "quotaBlocked": True,
+        }
+    if any(marker in normalized for marker in (
+        "ZONE_RESOURCE_POOL_EXHAUSTED",
+        "RESOURCE_POOL_EXHAUSTED",
+        "RESOURCE AVAILABILITY",
+        "CURRENTLY UNAVAILABLE",
+    )):
+        return {
+            "failureCode": "GPU_CAPACITY_UNAVAILABLE",
+            "scanFatal": False,
+            "quotaBlocked": False,
+        }
+    return {
+        "failureCode": "GPU_CAPACITY_PROBE_FAILED",
+        "scanFatal": False,
+        "quotaBlocked": False,
+    }
+
+
+def running_managed_gpu_instances() -> list[dict[str, Any]]:
+    return [
+        instance
+        for instance in list_managed_compute_instances()
+        if str(instance.get("status", "")).upper() == "RUNNING"
+        and int(instance_hardware_selection(instance).get("gpuCount", 0) or 0) > 0
+    ]
+
+
+def running_gpu_instance_public_payload(instance: dict[str, Any]) -> dict[str, Any]:
+    hardware = instance_hardware_selection(instance)
+    endpoint = endpoint_for_instance(instance)
+    return {
+        "name": str(instance.get("name", "")),
+        "zone": instance_zone_name(instance),
+        "endpointId": str(endpoint.get("id", "")) if endpoint else "",
+        "hardwareId": str(hardware.get("id", "")),
+        "hardwareLabel": str(hardware.get("label", "") or hardware.get("id", "") or "GPU"),
+        "gpuType": str(hardware.get("gpuType", "")),
+        "gpuCount": int(hardware.get("gpuCount", 0) or 0),
+    }
+
+
+def safe_running_gpu_instance_payloads() -> list[dict[str, Any]]:
+    try:
+        return [running_gpu_instance_public_payload(instance) for instance in running_managed_gpu_instances()]
+    except ApiError as error:
+        logging.warning("Failed to inspect running GPU VMs after a capacity error: %s", error.message)
+        return []
+
+
+def prepare_gpu_capacity_scan(payload: dict[str, Any]) -> dict[str, Any]:
+    instances = running_managed_gpu_instances()
+    running = [running_gpu_instance_public_payload(instance) for instance in instances]
+    if not bool(payload.get("stopRunningGpuInstances")):
+        return {
+            "ready": not running,
+            "requiresStop": bool(running),
+            "runningGpuInstances": running,
+            "stoppedGpuInstances": [],
+        }
+
+    stopped: list[dict[str, Any]] = []
+    for instance in instances:
+        require_no_active_power_action(instance, "GPU capacity scan")
+        require_live_backup_ready(instance, "GPU capacity scan")
+        updated_instance, token = request_live_power_action(
+            instance,
+            action="stop",
+            status_detail="Stopping this GPU VM to release quota for a capacity scan.",
+        )
+        final_instance = poll_specific_instance_status(updated_instance, "TERMINATED", timeout_seconds=900)
+        set_instance_metadata_values(
+            final_instance,
+            {
+                AUTO_STOP_METADATA_KEY: None,
+                AUTO_STOP_AT_METADATA_KEY: None,
+                SUNSHINE_STATUS_METADATA_KEY: "stopped",
+                SUNSHINE_STATUS_DETAIL_METADATA_KEY: None,
+                POWER_ACTION_STATUS_METADATA_KEY: f"stopped:stop:{token}",
+                POWER_ACTION_METADATA_KEY: None,
+            },
+        )
+        stopped.append(running_gpu_instance_public_payload(final_instance))
+
+    return {
+        "ready": True,
+        "requiresStop": False,
+        "runningGpuInstances": [],
+        "stoppedGpuInstances": stopped,
+    }
+
+
 def probe_gpu_capacity_zone(
     profile: dict[str, Any],
     zone: str,
@@ -5386,6 +5516,11 @@ def probe_gpu_capacity_zone(
     available = False
     error_message = ""
     cleanup_failure = ""
+    failure_details: dict[str, Any] = {
+        "failureCode": "",
+        "scanFatal": False,
+        "quotaBlocked": False,
+    }
     try:
         operation = compute_request(
             "POST",
@@ -5408,6 +5543,13 @@ def probe_gpu_capacity_zone(
             raise ApiError("Failed to create the GPU capacity scan reservation.", 502)
         wait_for_zone_operation(operation, timeout_seconds=120, zone=zone)
         created = True
+        current_reservation = compute_request("GET", capacity_reservation_url(zone, reservation["name"]))
+        in_use_count = int((current_reservation or {}).get("specificReservation", {}).get("inUseCount", 0) or 0)
+        if in_use_count > 0:
+            raise ApiError(
+                "GPU capacity reservation was consumed by an existing matching VM before it could be assigned to this operation.",
+                409,
+            )
         available = True
         if hold_workflow:
             hold_workflow = transition_gpu_workflow(
@@ -5418,6 +5560,9 @@ def probe_gpu_capacity_zone(
             )
     except ApiError as error:
         error_message = error.message
+        failure_details = gpu_capacity_failure_details(error)
+        if failure_details["quotaBlocked"]:
+            failure_details["runningGpuInstances"] = safe_running_gpu_instance_payloads()
     finally:
         if created and not hold_workflow:
             try:
@@ -5441,6 +5586,7 @@ def probe_gpu_capacity_zone(
         "error": error_message,
         "releasedReservation": created and not hold_workflow and not cleanup_failure,
         "cleanupFailure": cleanup_failure,
+        **failure_details,
         "heldForCreate": bool(available and hold_workflow and str(hold_workflow.get("operation", "create")) == "create"),
         "heldForOperation": bool(available and hold_workflow),
         "operation": str(hold_workflow.get("operation", "create")) if hold_workflow else "",
@@ -5543,6 +5689,8 @@ def scan_gpu_capacity_availability(payload: dict[str, Any]) -> dict[str, Any]:
             released_reservation_count += 1
         if result["cleanupFailure"]:
             cleanup_failures.append({"zone": zone, "error": str(result["cleanupFailure"])})
+        if result.get("scanFatal"):
+            break
 
     return {
         "hardwareId": str(profile["id"]),
@@ -5551,6 +5699,8 @@ def scan_gpu_capacity_availability(payload: dict[str, Any]) -> dict[str, Any]:
         "unavailableZones": unavailable_zones,
         "releasedReservationCount": released_reservation_count,
         "cleanupFailures": cleanup_failures,
+        "stoppedEarly": len(available_zones) + len(unavailable_zones) < len(zones),
+        "failureCode": str(result.get("failureCode", "")) if zones else "",
     }
 
 

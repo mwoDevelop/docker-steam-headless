@@ -1,0 +1,87 @@
+import os
+import sys
+import unittest
+from unittest.mock import patch
+
+sys.path.insert(0, os.path.dirname(__file__))
+
+import app as vm_control
+
+
+class GpuQuotaScanContractTests(unittest.TestCase):
+    def setUp(self):
+        self.original_project = vm_control.CONFIG["project"]
+        vm_control.CONFIG["project"] = "unit-test-project"
+
+    def tearDown(self):
+        vm_control.CONFIG["project"] = self.original_project
+
+    def test_quota_failure_stops_scan_and_is_not_capacity_failure(self):
+        result = vm_control.gpu_capacity_failure_details(
+            vm_control.ApiError("Quota exceeded for quota metric 'GPUs (all regions)'.", 403)
+        )
+        self.assertEqual(result["failureCode"], "GPU_QUOTA_EXHAUSTED")
+        self.assertTrue(result["scanFatal"])
+        self.assertTrue(result["quotaBlocked"])
+
+    def test_rate_limit_stops_scan_without_requesting_vm_stop(self):
+        result = vm_control.gpu_capacity_failure_details(
+            vm_control.ApiError("RATE_LIMIT_EXCEEDED: GlobalReadsPerMinutePerProject", 403)
+        )
+        self.assertEqual(result["failureCode"], "COMPUTE_API_RATE_LIMITED")
+        self.assertTrue(result["scanFatal"])
+        self.assertFalse(result["quotaBlocked"])
+
+    def test_capacity_exhaustion_allows_next_zone(self):
+        result = vm_control.gpu_capacity_failure_details(
+            vm_control.ApiError("ZONE_RESOURCE_POOL_EXHAUSTED: currently unavailable", 409)
+        )
+        self.assertEqual(result["failureCode"], "GPU_CAPACITY_UNAVAILABLE")
+        self.assertFalse(result["scanFatal"])
+
+    def test_probe_rejects_reservation_consumed_by_existing_vm(self):
+        profile = {
+            "id": "t4",
+            "machineType": "n1-standard-4",
+            "gpuType": "nvidia-tesla-t4",
+            "gpuCount": 1,
+            "acceleratorMode": "attached",
+        }
+        workflow = {
+            "workflowId": "gpu-workflow-1",
+            "reservationName": "gpu-reservation-1",
+            "operation": "create",
+        }
+        responses = [
+            {"name": "operation-1"},
+            {"specificReservation": {"inUseCount": "1"}},
+        ]
+        with (
+            patch.object(vm_control, "compute_request", side_effect=responses),
+            patch.object(vm_control, "wait_for_zone_operation"),
+            patch.object(vm_control, "release_gpu_workflow"),
+            patch.object(vm_control, "safe_running_gpu_instance_payloads", return_value=[{"name": "running-gpu"}]),
+        ):
+            result = vm_control.probe_gpu_capacity_zone(
+                profile,
+                "europe-central2-b",
+                "token",
+                hold_workflow=workflow,
+            )
+
+        self.assertFalse(result["available"])
+        self.assertEqual(result["failureCode"], "GPU_RESERVATION_ALREADY_CONSUMED")
+        self.assertTrue(result["scanFatal"])
+        self.assertEqual(result["runningGpuInstances"][0]["name"], "running-gpu")
+
+    def test_frontend_routes_every_zone_probe_through_quota_recovery(self):
+        root = os.path.dirname(os.path.dirname(__file__))
+        with open(os.path.join(root, "docs", "vm-control", "app.js"), encoding="utf-8") as source:
+            javascript = source.read()
+        self.assertEqual(javascript.count("const data = await scanGpuZoneWithQuotaRecovery("), 4)
+        self.assertIn('/api/capacity-reservations/prepare-scan', javascript)
+        self.assertIn('GPU capacity scan stopped without changing the running VM.', javascript)
+
+
+if __name__ == "__main__":
+    unittest.main()

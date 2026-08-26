@@ -1564,6 +1564,67 @@
     return data;
   }
 
+  function gpuQuotaBlocked(value) {
+    const text = typeof value === "string" ? value : JSON.stringify(value || {});
+    return String(value && value.failureCode || "") === "GPU_QUOTA_EXHAUSTED"
+      || String(value && value.failureCode || "") === "GPU_RESERVATION_ALREADY_CONSUMED"
+      || /QUOTA[_ ]EXCEEDED|quota metric|resource quota/i.test(text);
+  }
+
+  async function prepareGpuQuotaRetry(failure) {
+    if (!gpuQuotaBlocked(failure)) return false;
+    const status = await fetchApi("/api/capacity-reservations/prepare-scan", {
+      method: "POST",
+      body: JSON.stringify({ stopRunningGpuInstances: false }),
+    });
+    const running = Array.isArray(status.runningGpuInstances) ? status.runningGpuInstances : [];
+    if (!running.length) {
+      setCommandStatus("GPU quota is exhausted, but no running managed GPU VM can be stopped automatically. Release external reservations or increase quota before retrying.", "error");
+      return false;
+    }
+    const summary = running.map((instance) => `${instance.name} (${instance.hardwareLabel || instance.gpuType || "GPU"}, ${zoneDisplayLabel(instance.zone)})`).join(", ");
+    if (!window.confirm(`GPU quota is currently occupied by: ${summary}. Stop ${running.length === 1 ? "this VM" : "these VMs"}, wait for TERMINATED, and retry the same capacity check?`)) {
+      setCommandStatus("GPU capacity scan stopped without changing the running VM.", "warning");
+      return false;
+    }
+    setCommandStatus(`Stopping ${summary} to release GPU quota before retrying the same capacity check...`, "warning");
+    const prepared = await fetchApi("/api/capacity-reservations/prepare-scan", {
+      method: "POST",
+      body: JSON.stringify({ stopRunningGpuInstances: true }),
+    });
+    const stopped = Array.isArray(prepared.stoppedGpuInstances) ? prepared.stoppedGpuInstances : [];
+    if (!prepared.ready || stopped.length !== running.length) {
+      throw new Error("The running GPU VM was not fully stopped; capacity scanning was not resumed.");
+    }
+    setCommandStatus(`Stopped ${stopped.length} GPU VM${stopped.length === 1 ? "" : "s"}. Retrying the same GPU capacity check...`, "warning");
+    return true;
+  }
+
+  async function scanGpuZoneWithQuotaRecovery(run, payload) {
+    let data = await fetchApi("/api/capacity-reservations/scan-zone", {
+      method: "POST",
+      body: JSON.stringify(payload),
+      signal: run.abortController.signal,
+    });
+    if (!gpuQuotaBlocked(data)) return data;
+    if (run.quotaRecoveryAttempted || !await prepareGpuQuotaRetry(data)) {
+      run.cancelRequested = true;
+      run.stopReason = String(data.error || "GPU quota is exhausted.");
+      return data;
+    }
+    run.quotaRecoveryAttempted = true;
+    data = await fetchApi("/api/capacity-reservations/scan-zone", {
+      method: "POST",
+      body: JSON.stringify(payload),
+      signal: run.abortController.signal,
+    });
+    if (gpuQuotaBlocked(data)) {
+      run.cancelRequested = true;
+      run.stopReason = String(data.error || "GPU quota remains exhausted after stopping the managed GPU VM.");
+    }
+    return data;
+  }
+
   async function waitForHeldScanResume(run) {
     run.pauseRequested = true;
     run.paused = true;
@@ -1820,10 +1881,16 @@
     try {
       setBusy(true);
       candidate.error = "";
-      const prepared = await fetchApi("/api/gpu-workflows/reserve", {
+      let prepared = await fetchApi("/api/gpu-workflows/reserve", {
         method: "POST",
         body: JSON.stringify({ ...candidate.target, operation: candidate.operation, sourceEndpointId: candidate.sourceEndpointId, scanId: run.scanId || `manual-${Date.now()}` }),
       });
+      if (gpuQuotaBlocked(prepared) && await prepareGpuQuotaRetry(prepared)) {
+        prepared = await fetchApi("/api/gpu-workflows/reserve", {
+          method: "POST",
+          body: JSON.stringify({ ...candidate.target, operation: candidate.operation, sourceEndpointId: candidate.sourceEndpointId, scanId: run.scanId || `manual-${Date.now()}` }),
+        });
+      }
       if (!prepared.available || !prepared.heldForOperation) throw new Error(prepared.error || "GPU capacity is no longer available.");
       await handleHeldGpuCapacity(run, prepared);
     } catch (error) {
@@ -2158,11 +2225,7 @@
         run.currentZone = zone;
         renderGpuAvailabilityScanProgress(run);
         try {
-          const data = await fetchApi("/api/capacity-reservations/scan-zone", {
-            method: "POST",
-            body: JSON.stringify(gpuScanRequestPayload(run, { ...run.target, zone })),
-            signal: run.abortController.signal,
-          });
+          const data = await scanGpuZoneWithQuotaRecovery(run, gpuScanRequestPayload(run, { ...run.target, zone }));
           if (data && data.available) {
             run.availableZones.push(zone);
             if (data.heldForOperation) {
@@ -2291,11 +2354,7 @@
         run.currentTarget = target;
         renderGpuAvailabilityScanProgress(run);
         try {
-          const data = await fetchApi("/api/capacity-reservations/scan-zone", {
-            method: "POST",
-            body: JSON.stringify(gpuScanRequestPayload(run, targetParamsForHardwareProfile(target.profile, target.zone))),
-            signal: run.abortController.signal,
-          });
+          const data = await scanGpuZoneWithQuotaRecovery(run, gpuScanRequestPayload(run, targetParamsForHardwareProfile(target.profile, target.zone)));
           if (data && data.available) {
             const hardwareId = String(target.profile.id);
             const zones = run.availableZonesByHardwareId[hardwareId] || [];
@@ -2415,11 +2474,7 @@
         run.currentProfile = profile;
         renderGpuAvailabilityScanProgress(run);
         try {
-          const data = await fetchApi("/api/capacity-reservations/scan-zone", {
-            method: "POST",
-            body: JSON.stringify(gpuScanRequestPayload(run, targetParamsForHardwareProfile(profile, zone))),
-            signal: run.abortController.signal,
-          });
+          const data = await scanGpuZoneWithQuotaRecovery(run, gpuScanRequestPayload(run, targetParamsForHardwareProfile(profile, zone)));
           if (data && data.available) {
             run.availableHardwareIds.push(String(profile.id));
             if (data.heldForOperation) {
@@ -2537,11 +2592,7 @@
         run.currentTarget = target;
         renderGpuAvailabilityScanProgress(run);
         try {
-          const data = await fetchApi("/api/capacity-reservations/scan-zone", {
-            method: "POST",
-            body: JSON.stringify(gpuScanRequestPayload(run, targetParamsForHardwareProfile(target.profile, target.zone))),
-            signal: run.abortController.signal,
-          });
+          const data = await scanGpuZoneWithQuotaRecovery(run, gpuScanRequestPayload(run, targetParamsForHardwareProfile(target.profile, target.zone)));
           if (data && data.available) {
             const hardwareId = String(target.profile.id);
             const zones = run.availableZonesByHardwareId[hardwareId] || [];
@@ -4629,10 +4680,19 @@
     try {
       setBusy(true);
       setCapacityButtonResult(elements.checkGpuCapacity, "Reserving Selected GPU...", "neutral");
-      const data = await fetchApi("/api/capacity-reservations/probe", {
-        method: "POST",
-        body: JSON.stringify(target),
-      });
+      let data;
+      try {
+        data = await fetchApi("/api/capacity-reservations/probe", {
+          method: "POST",
+          body: JSON.stringify(target),
+        });
+      } catch (error) {
+        if (!await prepareGpuQuotaRetry(error)) throw error;
+        data = await fetchApi("/api/capacity-reservations/probe", {
+          method: "POST",
+          body: JSON.stringify(target),
+        });
+      }
       const expiresAt = data && data.reservation && data.reservation.expiresAt
         ? ` until ${data.reservation.expiresAt}`
         : "";
