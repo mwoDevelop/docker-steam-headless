@@ -89,6 +89,34 @@ class GpuQuotaScanContractTests(unittest.TestCase):
         source = inspect.getsource(vm_control.create_capacity_reservation_probe)
         self.assertNotIn("hold_workflow", source)
 
+    def test_standalone_capacity_probe_rejects_reservation_consumed_by_running_vm(self):
+        responses = [
+            None,
+            {"name": "operation-1"},
+            {
+                "name": "steam-gpu-capacity-probe",
+                "specificReservation": {"inUseCount": "1"},
+            },
+        ]
+        with (
+            patch.object(vm_control, "selected_gpu_count", return_value=1),
+            patch.object(vm_control, "selected_gpu_type", return_value="nvidia-tesla-p100"),
+            patch.object(vm_control, "selected_machine_type", return_value="n1-standard-4"),
+            patch.object(vm_control, "selected_accelerator_mode", return_value="attached"),
+            patch.object(vm_control, "selected_zone", return_value="europe-west1-b"),
+            patch.object(vm_control, "capacity_reservation_name", return_value="steam-gpu-capacity-probe"),
+            patch.object(vm_control, "compute_request", side_effect=responses),
+            patch.object(vm_control, "wait_for_zone_operation"),
+            patch.object(vm_control, "delete_capacity_reservation") as delete_reservation,
+            patch.object(vm_control, "safe_running_gpu_instance_payloads", return_value=[{"name": "running-p100"}]),
+        ):
+            with self.assertRaises(vm_control.ApiError) as raised:
+                vm_control.create_capacity_reservation_probe()
+
+        self.assertEqual(raised.exception.details["failureCode"], "GPU_RESERVATION_ALREADY_CONSUMED")
+        self.assertEqual(raised.exception.details["runningGpuInstances"][0]["name"], "running-p100")
+        delete_reservation.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

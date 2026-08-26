@@ -5287,16 +5287,13 @@ def create_capacity_reservation_probe() -> dict[str, Any]:
     existing = compute_request("GET", capacity_reservation_url(zone, name), allow_404=True)
     if isinstance(existing, dict):
         if int(existing.get("specificReservation", {}).get("inUseCount", 0) or 0) > 0:
-            return {
-                "available": True,
-                "reservation": {
-                    "name": name,
-                    "zone": zone,
-                    "expiresAt": existing.get("deleteAtTime", ""),
-                    "state": "consumed",
-                },
-                "message": "The selected VM already consumes the matching GPU capacity reservation.",
-            }
+            delete_capacity_reservation(existing)
+            message = "The GPU capacity reservation was consumed by an existing matching VM."
+            details = gpu_capacity_failure_details(
+                ApiError(message, 409)
+            )
+            details["runningGpuInstances"] = safe_running_gpu_instance_payloads()
+            raise ApiError(message, 409, details)
         delete_capacity_reservation(existing)
 
     expires_at = datetime.now(timezone.utc) + timedelta(seconds=CAPACITY_RESERVATION_TTL_SECONDS)
@@ -5325,6 +5322,15 @@ def create_capacity_reservation_probe() -> dict[str, Any]:
     if not isinstance(operation, dict):
         raise ApiError("Failed to create the GPU capacity reservation.", 502)
     wait_for_zone_operation(operation, timeout_seconds=120, zone=zone)
+    reservation = compute_request("GET", capacity_reservation_url(zone, name))
+    if isinstance(reservation, dict) and int(reservation.get("specificReservation", {}).get("inUseCount", 0) or 0) > 0:
+        delete_capacity_reservation(reservation)
+        message = "The GPU capacity reservation was consumed by an existing matching VM."
+        details = gpu_capacity_failure_details(
+            ApiError(message, 409)
+        )
+        details["runningGpuInstances"] = safe_running_gpu_instance_payloads()
+        raise ApiError(message, 409, details)
     return {
         "available": True,
         "reservation": {
