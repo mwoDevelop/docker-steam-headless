@@ -5443,10 +5443,20 @@ def running_managed_gpu_instances() -> list[dict[str, Any]]:
 
 def running_gpu_instance_public_payload(instance: dict[str, Any]) -> dict[str, Any]:
     hardware = instance_hardware_selection(instance)
-    endpoint = endpoint_for_instance(instance)
+    instance_name = str(instance.get("name", "") or "")
+    instance_zone = instance_zone_name(instance)
+    endpoint = next(
+        (
+            item
+            for item in read_endpoint_records()
+            if str(item.get("instanceName", "") or "") == instance_name
+            and str(item.get("zone", "") or "") == instance_zone
+        ),
+        None,
+    )
     return {
-        "name": str(instance.get("name", "")),
-        "zone": instance_zone_name(instance),
+        "name": instance_name,
+        "zone": instance_zone,
         "endpointId": str(endpoint.get("id", "")) if endpoint else "",
         "hardwareId": str(hardware.get("id", "")),
         "hardwareLabel": str(hardware.get("label", "") or hardware.get("id", "") or "GPU"),

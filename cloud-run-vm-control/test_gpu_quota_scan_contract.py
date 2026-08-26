@@ -89,6 +89,31 @@ class GpuQuotaScanContractTests(unittest.TestCase):
         source = inspect.getsource(vm_control.create_capacity_reservation_probe)
         self.assertNotIn("hold_workflow", source)
 
+    def test_running_gpu_payload_maps_endpoint_by_instance_and_zone(self):
+        instance = {
+            "name": "running-p100",
+            "zone": "projects/unit-test-project/zones/europe-west1-b",
+        }
+        with (
+            patch.object(
+                vm_control,
+                "instance_hardware_selection",
+                return_value={"id": "p100", "label": "GPU P100", "gpuType": "nvidia-tesla-p100", "gpuCount": 1},
+            ),
+            patch.object(
+                vm_control,
+                "read_endpoint_records",
+                return_value=[
+                    {"id": "wrong-zone", "instanceName": "running-p100", "zone": "europe-west1-c"},
+                    {"id": "mwo-vm2", "instanceName": "running-p100", "zone": "europe-west1-b"},
+                ],
+            ),
+        ):
+            result = vm_control.running_gpu_instance_public_payload(instance)
+
+        self.assertEqual(result["endpointId"], "mwo-vm2")
+        self.assertEqual(result["zone"], "europe-west1-b")
+
     def test_standalone_capacity_probe_rejects_reservation_consumed_by_running_vm(self):
         responses = [
             None,
