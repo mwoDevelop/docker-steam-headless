@@ -1579,7 +1579,7 @@
   function gpuQuotaBlocked(value) {
     const text = typeof value === "string"
       ? value
-      : `${String(value && value.message || "")} ${JSON.stringify(value || {})}`;
+      : String(value && value.message || "");
     return String(value && value.failureCode || "") === "GPU_QUOTA_EXHAUSTED"
       || String(value && value.failureCode || "") === "GPU_RESERVATION_ALREADY_CONSUMED"
       || /QUOTA[_ ]EXCEEDED|quota metric|resource quota|reservation was consumed/i.test(text);
