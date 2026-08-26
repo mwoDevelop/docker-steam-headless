@@ -3710,10 +3710,15 @@
 
     const gpuEnabled = Number(target && target.gpuCount || 0) > 0;
     const applicationCatalog = createApplicationCatalog();
-    const targetLabel = [selectedEndpoint() && selectedEndpoint().domain, selectedHardwareLabel(), target && target.zone]
+    const heldWorkflow = options.heldWorkflow || null;
+    const reservedGpu = heldWorkflow ? reservedGpuDetails(target, heldWorkflow) : null;
+    const targetLabel = [
+      heldWorkflow && heldWorkflow.endpoint && heldWorkflow.endpoint.domain || selectedEndpoint() && selectedEndpoint().domain,
+      reservedGpu && reservedGpu.hardwareLabel || selectedHardwareLabel(),
+      reservedGpu && reservedGpu.zoneLabel || target && target.zone,
+    ]
       .filter(Boolean)
       .join(" · ");
-    const heldWorkflow = options.heldWorkflow || null;
     if (gpuEnabled && heldWorkflow) {
       renderReservedGpuSummary(
         summary,
