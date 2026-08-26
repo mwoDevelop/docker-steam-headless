@@ -82,6 +82,7 @@ class GpuQuotaScanContractTests(unittest.TestCase):
         self.assertEqual(javascript.count("const data = await scanGpuZoneWithQuotaRecovery("), 4)
         self.assertIn('/api/capacity-reservations/prepare-scan', javascript)
         self.assertIn('GPU capacity scan stopped without changing the running VM.', javascript)
+        self.assertIn('String(value && value.message || "")', javascript)
         self.assertIn('const explicitlySelected = instances.find(', javascript)
         self.assertIn('String(endpoint && endpoint.id || "") === endpointId', javascript)
 
