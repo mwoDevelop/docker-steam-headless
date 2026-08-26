@@ -85,6 +85,7 @@ class GpuQuotaScanContractTests(unittest.TestCase):
         self.assertIn(': String(value && value.message || "");', javascript)
         self.assertIn('setCapacityButtonResult(elements.checkGpuCapacity, "GPU Reservation Cancelled", "neutral")', javascript)
         self.assertIn('if (quotaRecoveryPerformed) {', javascript)
+        self.assertIn('mergeCurrentStatus: false', javascript)
         self.assertIn('const explicitlySelected = instances.find(', javascript)
         self.assertIn('String(endpoint && endpoint.id || "") === endpointId', javascript)
 

@@ -2832,6 +2832,7 @@
   async function refreshInstances(options) {
     const silent = Boolean(options && options.silent);
     const autoSelect = Boolean(options && options.autoSelect);
+    const mergeCurrentStatus = !options || options.mergeCurrentStatus !== false;
     if (!state.user) {
       throw new Error("Sign in with Google first.");
     }
@@ -2839,9 +2840,10 @@
       elements.instancesStatus.textContent = "Refreshing created instances...";
     }
     await refreshEndpointRegistry();
-    const data = mergeCurrentStatusIntoInstancesPayload(
-      await fetchApi("/api/instances", { method: "GET" }),
-    );
+    const instancesPayload = await fetchApi("/api/instances", { method: "GET" });
+    const data = mergeCurrentStatus
+      ? mergeCurrentStatusIntoInstancesPayload(instancesPayload)
+      : instancesPayload;
     renderInstanceOptions(data);
     if (autoSelect) {
       await autoSelectCreatedInstanceIfNeeded({ silent: true });
@@ -4714,7 +4716,7 @@
         });
       }
       if (quotaRecoveryPerformed) {
-        await refreshInstances({ silent: true, autoSelect: false });
+        await refreshInstances({ silent: true, autoSelect: false, mergeCurrentStatus: false });
       }
       const expiresAt = data && data.reservation && data.reservation.expiresAt
         ? ` until ${data.reservation.expiresAt}`
