@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;700&display=swap"
       rel="stylesheet"
     >
-    <link rel="stylesheet" href="./styles.css?v=admin-access-gate-20260826">
+    <link rel="stylesheet" href="./styles.css?v=reserved-gpu-modal-20260826">
     <script src="https://accounts.google.com/gsi/client" async defer></script>
   </head>
   <body>
@@ -538,7 +538,7 @@
         <form method="dialog" class="create-applications-form">
           <p class="eyebrow">Create VM</p>
           <h2 id="create-applications-title">Install desktop applications</h2>
-          <p id="create-applications-summary" class="access-meta"></p>
+          <div id="create-applications-summary" class="access-meta"></div>
           <div id="create-applications-list" class="create-applications-list"></div>
           <div class="create-applications-actions">
             <button id="create-dialog-cancel" value="cancel" class="ghost" type="submit">Cancel</button>
@@ -554,7 +554,7 @@
         <form method="dialog" class="create-applications-form">
           <p class="eyebrow">Start existing VM</p>
           <h2 id="start-reserved-title">Use reserved GPU capacity</h2>
-          <p id="start-reserved-summary" class="access-meta"></p>
+          <div id="start-reserved-summary" class="access-meta"></div>
           <div class="create-applications-actions">
             <button value="skip" class="ghost" type="submit">Cancel and continue scan</button>
             <button value="pause" class="ghost" type="submit">Release and pause scan</button>
@@ -567,6 +567,6 @@
     </main>
 
     <script src="./admin.js?v=admin-access-gate-20260826"></script>
-    <script src="./app.js?v=gpu-scan-cancel-20260823-3"></script>
+    <script src="./app.js?v=reserved-gpu-modal-20260826"></script>
   </body>
 </html>

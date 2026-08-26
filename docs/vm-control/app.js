@@ -1607,9 +1607,10 @@
     }
 
     run.createStarted = true;
-    const loadingToken = setPageLoading(`GPU reserved. ${operation === "start" ? "Starting" : "Creating"} ${String(target.hardwareId || "GPU")} VM in ${zoneDisplayLabel(target.zone)}...`);
+    const reservedGpu = reservedGpuDetails(target, prepared);
+    const loadingToken = setPageLoading(`GPU reserved. ${operation === "start" ? "Starting" : "Creating"} ${reservedGpu.hardwareLabel} VM in ${reservedGpu.zoneLabel}...`);
     setBusy(true);
-    setCommandStatus(`GPU capacity is held. Submitting ${operation === "start" ? "Start" : "Create"} against the reservation...`, "warning");
+    setCommandStatus(`${reservedGpu.hardwareLabel} in ${reservedGpu.zoneLabel} is reserved. Submitting ${operation === "start" ? "Start" : "Create"} against the reservation...`, "warning");
     try {
       const body = {
         command: operation,
@@ -1662,6 +1663,53 @@
     }
   }
 
+  function reservedGpuDetails(target, prepared = {}) {
+    const hardwareId = String(target && target.hardwareId || "");
+    const profile = getHardwareProfiles().find((item) => String(item.id) === hardwareId) || null;
+    const hardwareLabel = String(
+      target && target.hardwareLabel
+      || prepared && prepared.hardwareLabel
+      || profile && profile.label
+      || hardwareId
+      || "Reserved GPU",
+    );
+    const gpuType = String(target && target.gpuType || profile && profile.gpuType || "GPU type not reported");
+    const zone = String(target && target.zone || prepared && prepared.reservation && prepared.reservation.zone || "");
+    const reservationName = String(
+      prepared && prepared.reservation && prepared.reservation.name
+      || prepared && prepared.reservationName
+      || prepared && prepared.workflowId
+      || "not reported",
+    );
+    const expiresAtValue = String(prepared && (prepared.expiresAt || prepared.reservation && prepared.reservation.expiresAt) || "");
+    const expiresAtDate = expiresAtValue ? new Date(expiresAtValue) : null;
+    return {
+      hardwareLabel,
+      gpuType,
+      zoneLabel: zone ? zoneDisplayLabel(zone) : "Zone not reported",
+      reservationName,
+      expiresAt: expiresAtDate && !Number.isNaN(expiresAtDate.getTime()) ? expiresAtDate.toLocaleString() : "Not reported",
+    };
+  }
+
+  function renderReservedGpuSummary(container, target, prepared, description) {
+    const details = reservedGpuDetails(target, prepared);
+    container.innerHTML = `
+      <section class="reserved-gpu-card" aria-label="Reserved GPU details">
+        <span class="reserved-gpu-kicker">Reserved GPU</span>
+        <strong class="reserved-gpu-name">${escapeHtml(details.hardwareLabel)}</strong>
+        <dl class="reserved-gpu-details">
+          <div><dt>GPU type</dt><dd><code>${escapeHtml(details.gpuType)}</code></dd></div>
+          <div><dt>Zone</dt><dd><code>${escapeHtml(details.zoneLabel)}</code></dd></div>
+          <div><dt>Reserved until</dt><dd>${escapeHtml(details.expiresAt)}</dd></div>
+          <div><dt>Reservation</dt><dd><code>${escapeHtml(details.reservationName)}</code></dd></div>
+        </dl>
+      </section>
+      <p class="reserved-gpu-description">${escapeHtml(description)}</p>
+    `;
+    return details;
+  }
+
   function selectReservedStart(target, prepared) {
     const dialog = document.querySelector("#start-reserved-dialog");
     const form = dialog && dialog.querySelector("form");
@@ -1670,7 +1718,12 @@
     if (!dialog || !form || !summary || !confirm) return Promise.resolve({ action: "pause" });
     const source = prepared.source || {};
     const relocation = String(source.zone || "") !== String(target.zone || "");
-    summary.textContent = `${source.instanceName || "Selected VM"} · ${target.hardwareId} · ${zoneDisplayLabel(target.zone)}. ${relocation ? `The VM will be relocated from ${zoneDisplayLabel(source.zone)} before Start.` : "The VM will start in its current zone."} Reservation: ${prepared.reservation && prepared.reservation.name || prepared.workflowId}.`;
+    renderReservedGpuSummary(
+      summary,
+      target,
+      prepared,
+      `${source.instanceName || "Selected VM"}. ${relocation ? `The VM will be relocated from ${zoneDisplayLabel(source.zone)} before Start.` : "The VM will start in its current zone."}`,
+    );
     confirm.textContent = relocation ? "Migrate and start reserved VM" : "Start reserved VM";
     return new Promise((resolve) => {
       const onClose = () => {
@@ -3661,10 +3714,18 @@
       .filter(Boolean)
       .join(" · ");
     const heldWorkflow = options.heldWorkflow || null;
-    const expiresAt = heldWorkflow && heldWorkflow.expiresAt ? new Date(heldWorkflow.expiresAt).toLocaleTimeString() : "";
-    summary.textContent = gpuEnabled
-      ? `Target: ${targetLabel}. ${heldWorkflow ? `GPU capacity is reserved until approximately ${expiresAt}. ` : ""}Selected applications will be installed after the VM and Sunshine are ready.`
-      : `Target: ${targetLabel}. Desktop application installation requires a GPU-enabled VM, so this VM will be created without applications.`;
+    if (gpuEnabled && heldWorkflow) {
+      renderReservedGpuSummary(
+        summary,
+        target,
+        heldWorkflow,
+        `Target: ${targetLabel}. Selected applications will be installed after the VM and Sunshine are ready.`,
+      );
+    } else {
+      summary.textContent = gpuEnabled
+        ? `Target: ${targetLabel}. Selected applications will be installed after the VM and Sunshine are ready.`
+        : `Target: ${targetLabel}. Desktop application installation requires a GPU-enabled VM, so this VM will be created without applications.`;
+    }
     [skipButton, pauseButton, cancelScanButton].forEach((button) => {
       if (button) button.hidden = !heldWorkflow;
     });

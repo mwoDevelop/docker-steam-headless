@@ -2415,6 +2415,7 @@ def begin_gpu_hold_workflow(
         target = {
             "endpointId": str(selected_endpoint["id"]),
             "hardwareId": str(profile["id"]),
+            "hardwareLabel": str(profile.get("label") or profile["id"]),
             "machineType": str(profile["machineType"]),
             "gpuType": str(profile["gpuType"]),
             "gpuCount": int(profile["gpuCount"]),
@@ -4777,6 +4778,7 @@ def prepare_scan_create_target(payload: dict[str, Any], user: dict[str, Any]) ->
         "target": {
             "endpointId": endpoint["id"],
             "hardwareId": str(profile["id"]),
+            "hardwareLabel": str(profile.get("label") or profile["id"]),
             "machineType": str(profile["machineType"]),
             "gpuType": str(profile["gpuType"]),
             "gpuCount": int(profile["gpuCount"]),
