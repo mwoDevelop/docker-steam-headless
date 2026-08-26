@@ -1528,7 +1528,19 @@
   }
 
   function selectedStartScanSource() {
-    return getCreatedInstances().find((instance) => String(instance.name || "") === String(state.startScanSourceInstanceName || "")) || null;
+    const instances = getCreatedInstances();
+    const explicitlySelected = instances.find((instance) => String(instance.name || "") === String(state.startScanSourceInstanceName || "")) || null;
+    if (explicitlySelected) return explicitlySelected;
+    const endpointId = selectedEndpointId();
+    const hardwareId = String(selectedHardwareProfile() && selectedHardwareProfile().id || "");
+    const zone = selectedZone();
+    return instances.find((instance) => {
+      const endpoint = endpointForInstance(instance);
+      const hardware = instance && instance.hardware || {};
+      return String(endpoint && endpoint.id || "") === endpointId
+        && String(hardware.id || "") === hardwareId
+        && String(instance.zone || "") === zone;
+    }) || null;
   }
 
   function startSelectedVmScanEnabled() {
