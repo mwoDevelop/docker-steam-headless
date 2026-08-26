@@ -4701,7 +4701,11 @@
           body: JSON.stringify(target),
         });
       } catch (error) {
-        if (!await prepareGpuQuotaRetry(error)) throw error;
+        if (!gpuQuotaBlocked(error)) throw error;
+        if (!await prepareGpuQuotaRetry(error)) {
+          setCapacityButtonResult(elements.checkGpuCapacity, "GPU Reservation Cancelled", "neutral");
+          return;
+        }
         data = await fetchApi("/api/capacity-reservations/probe", {
           method: "POST",
           body: JSON.stringify(target),
