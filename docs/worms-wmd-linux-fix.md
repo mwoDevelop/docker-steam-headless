@@ -1,10 +1,10 @@
-# Robaki W.M.D. Poprawka dotycząca uruchamiania Linuksa
+# Poprawka uruchamiania Worms W.M.D. na Linuksie
 
-## Problem
+## Kiedy stosować
 
-`Worms W.M.D.` można poprawnie zainstalować na Steamie, ale natywna kompilacja Linuksa może zakończyć się kilka sekund po uruchomieniu.
-
-W kontenerze `steam-headless` było to spowodowane niekompatybilnymi starszymi bibliotekami dołączonymi do gry:
+Natywna wersja `Worms W.M.D.` może zakończyć działanie kilka sekund po
+uruchomieniu. Opisana poprawka dotyczy przypadku, w którym log lub `ldd`
+potwierdza co najmniej jeden z poniższych błędów:
 
 ```text
 ./Worms W.M.Dx64: error while loading shared libraries: libidn.so.11: cannot open shared object file: No such file or directory
@@ -12,18 +12,64 @@ W kontenerze `steam-headless` było to spowodowane niekompatybilnymi starszymi b
 ./Worms W.M.Dx64: error while loading shared libraries: libwavpack.so.1: cannot open shared object file: No such file or directory
 ```
 
-Kontener działa na Debianie 12, który udostępnia `libidn.so.12` i nowszy system `libstdc++`. Gra oczekuje starszego `libidn.so.11`, po czym ładuje własne, stare `libstdc++.so.6`, które koliduje z bieżącymi bibliotekami systemowymi. Środowisko wykonawcze Steam może również nie udostępnić `libwavpack.so.1` grze, nawet jeśli biblioteka jest dostępna w kontenerze.
+Projekt domyślnie używa zmiennego obrazu `josh5/steam-headless:latest`.
+Zawartość obrazu może się zmienić, dlatego przed zastosowaniem poprawki należy
+wykonać opisaną niżej weryfikację. Nie należy stosować jej do innych błędów
+uruchamiania gry.
 
-## Napraw działającą maszynę wirtualną
+W środowisku, w którym odtworzono problem, gra oczekiwała starszego
+`libidn.so.11`, ładowała dołączony, niekompatybilny `libstdc++.so.6` i nie
+widziała `libwavpack.so.1` dostępnego w kontenerze.
 
-Uruchom to na stacji roboczej z dostępem `gcloud` do maszyny wirtualnej:
+## Wybór maszyny wirtualnej
+
+Nazwy VM i strefy są dynamiczne. Odczytaj je z panelu administracyjnego albo
+poleceniem:
 
 ```bash
-gcloud compute ssh steam \
-  --zone=europe-central2-b \
+gcloud compute instances list \
   --project=docker-414215 \
+  --filter='name~^steam-mwo-'
+```
+
+Ustaw wartości odpowiadające właściwej VM:
+
+```bash
+PROJECT_ID="docker-414215"
+VM_NAME="steam-mwo-vm1-t4-europe-central2-c"
+ZONE="europe-central2-c"
+```
+
+VM musi być uruchomiona, a gra zainstalowana.
+
+## Weryfikacja problemu
+
+```bash
+gcloud compute ssh "$VM_NAME" \
+  --zone="$ZONE" \
+  --project="$PROJECT_ID" \
   --command '
 CID=$(sudo docker ps -qf name=steam-headless | head -n1)
+test -n "$CID" || { echo "Kontener steam-headless nie działa" >&2; exit 1; }
+sudo docker exec "$CID" bash -lc "
+  cd /mnt/games/GameLibrary/Steam/steamapps/common/WormsWMD
+  ldd \"Worms W.M.Dx64\" 2>&1 | grep -E \"libidn|libwavpack|GLIBCXX\" || true
+"
+'
+```
+
+Jeżeli wynik nie zawiera problemów wymienionych w sekcji „Kiedy stosować”, nie
+stosuj poniższej poprawki.
+
+## Zastosowanie poprawki
+
+```bash
+gcloud compute ssh "$VM_NAME" \
+  --zone="$ZONE" \
+  --project="$PROJECT_ID" \
+  --command '
+CID=$(sudo docker ps -qf name=steam-headless | head -n1)
+test -n "$CID" || { echo "Kontener steam-headless nie działa" >&2; exit 1; }
 sudo docker exec "$CID" bash -lc "
   set -euo pipefail
   cd /mnt/games/GameLibrary/Steam/steamapps/common/WormsWMD
@@ -47,31 +93,20 @@ sudo docker exec "$CID" bash -lc "
 
 Następnie ponownie uruchom grę ze Steam.
 
-## Polecenia ręcznej weryfikacji
+Pliki gry znajdują się na dysku stanu, więc poprawka powinna przetrwać zwykłe
+zatrzymanie, uruchomienie i migrację VM. Aktualizacja gry lub sprawdzenie
+spójności plików w Steam może przywrócić oryginalne biblioteki; w takim
+przypadku wykonaj ponownie weryfikację przed ponownym zastosowaniem poprawki.
 
-Aby potwierdzić pierwotny problem:
-
-```bash
-gcloud compute ssh steam \
-  --zone=europe-central2-b \
-  --project=docker-414215 \
-  --command '
-CID=$(sudo docker ps -qf name=steam-headless | head -n1)
-sudo docker exec "$CID" bash -lc "
-  cd /mnt/games/GameLibrary/Steam/steamapps/common/WormsWMD
-  ldd \"Worms W.M.Dx64\" 2>&1 | grep -E \"libidn|libwavpack|GLIBCXX\" || true
-"
-'
-```
-
-Aby sprawdzić, czy poprawka została już zastosowana:
+## Sprawdzenie zastosowanej poprawki
 
 ```bash
-gcloud compute ssh steam \
-  --zone=europe-central2-b \
-  --project=docker-414215 \
+gcloud compute ssh "$VM_NAME" \
+  --zone="$ZONE" \
+  --project="$PROJECT_ID" \
   --command '
 CID=$(sudo docker ps -qf name=steam-headless | head -n1)
+test -n "$CID" || { echo "Kontener steam-headless nie działa" >&2; exit 1; }
 sudo docker exec "$CID" bash -lc "
   cd /mnt/games/GameLibrary/Steam/steamapps/common/WormsWMD
   ls -l lib/libidn.so.11 lib/libstdc++.so.6.bundled-disabled lib/libwavpack.so.1
@@ -79,16 +114,15 @@ sudo docker exec "$CID" bash -lc "
 '
 ```
 
-## Przywracanie poprawki
-
-W razie potrzeby:
+## Wycofanie poprawki
 
 ```bash
-gcloud compute ssh steam \
-  --zone=europe-central2-b \
-  --project=docker-414215 \
+gcloud compute ssh "$VM_NAME" \
+  --zone="$ZONE" \
+  --project="$PROJECT_ID" \
   --command '
 CID=$(sudo docker ps -qf name=steam-headless | head -n1)
+test -n "$CID" || { echo "Kontener steam-headless nie działa" >&2; exit 1; }
 sudo docker exec "$CID" bash -lc "
   set -euo pipefail
   cd /mnt/games/GameLibrary/Steam/steamapps/common/WormsWMD
