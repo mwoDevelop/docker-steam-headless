@@ -66,6 +66,9 @@
     softwareMinecraftServer: document.querySelector("#software-minecraft-server"),
     softwareMinecraftNewServer: document.querySelector("#software-minecraft-new-server"),
     softwareMinecraftCreateHint: document.querySelector("#software-minecraft-create-hint"),
+    softwareMinecraftCreatePanel: document.querySelector("#software-minecraft-create-panel"),
+    softwareMinecraftExistingPanel: document.querySelector("#software-minecraft-existing-panel"),
+    softwareMinecraftServerSummary: document.querySelector("#software-minecraft-server-summary"),
     softwareRefreshMinecraftVersions: document.querySelector("#software-refresh-minecraft-versions"),
     softwareActions: document.querySelector("#software-actions"),
     softwareStatus: document.querySelector("#software-status"),
@@ -92,6 +95,7 @@
     sunshinePasswordVisible: false,
     softwarePayload: null,
     softwareEndpointId: "",
+    softwareMinecraftSelection: "",
     refreshRevision: 0,
     automaticRefreshInFlight: false,
   };
@@ -1088,6 +1092,9 @@
       elements.softwareApplication.innerHTML = '<option value="">No applications loaded</option>';
       elements.softwareApplicationState.textContent = "Installed applications are unavailable.";
       elements.softwareMinecraftVersion.innerHTML = '<option value="">No versions loaded</option>';
+      elements.softwareMinecraftServer.innerHTML = '<option value="__new__">+ Create new server</option>';
+      elements.softwareMinecraftCreatePanel.hidden = false;
+      elements.softwareMinecraftExistingPanel.hidden = true;
       elements.softwareStatus.textContent = state.user
         ? "No VM endpoint is available. Create a VM before managing applications or Minecraft."
         : "Sign in to load applications and Minecraft server state.";
@@ -1100,7 +1107,7 @@
     const previousApplication = elements.softwareApplication.value;
     const previousVersion = elements.softwareMinecraftVersion.value;
     const previousServerType = elements.softwareMinecraftServerType.value;
-    const previousMinecraftServer = elements.softwareMinecraftServer.value;
+    const previousMinecraftServer = state.softwareMinecraftSelection || elements.softwareMinecraftServer.value;
     elements.softwareEndpoint.innerHTML = endpoints.length
       ? endpoints.map((endpoint) => {
         const id = String(endpoint.id || "");
@@ -1154,12 +1161,20 @@
     elements.softwareMinecraftVersion.innerHTML = optionList(minecraftVersions, selectedVersion, "Refresh Minecraft Versions to load this runtime catalog");
     const servers = Array.isArray(status.minecraftServers) ? status.minecraftServers : (Array.isArray(payload.minecraftServers) ? payload.minecraftServers : []);
     const activeServers = servers.filter((server) => String(server && server.state || "").trim().toLowerCase() !== "removed");
-    const selectedMinecraftServer = activeServers.some((server) => String(server.id || "") === previousMinecraftServer)
-      ? previousMinecraftServer
-      : String(activeServers[0] && activeServers[0].id || "");
-    elements.softwareMinecraftServer.innerHTML = activeServers.length
-      ? activeServers.map((server) => `<option value="${escapeHtml(String(server.id || ""))}" ${String(server.id || "") === selectedMinecraftServer ? "selected" : ""}>${escapeHtml(String(server.id || ""))} · ${escapeHtml(String(server.serverType || "paper"))} ${escapeHtml(String(server.version || "LATEST"))} · :${escapeHtml(String(server.gamePort || ""))} · ${escapeHtml(String(server.state || ""))}</option>`).join("")
-      : '<option value="">No active servers</option>';
+    const selectedMinecraftServer = previousMinecraftServer === "__new__"
+      ? "__new__"
+      : activeServers.some((server) => String(server.id || "") === previousMinecraftServer)
+        ? previousMinecraftServer
+        : String(activeServers[0] && activeServers[0].id || "__new__");
+    state.softwareMinecraftSelection = selectedMinecraftServer;
+    elements.softwareMinecraftServer.innerHTML = `<option value="__new__" ${selectedMinecraftServer === "__new__" ? "selected" : ""}>+ Create new server</option>${activeServers.map((server) => `<option value="${escapeHtml(String(server.id || ""))}" ${String(server.id || "") === selectedMinecraftServer ? "selected" : ""}>${escapeHtml(String(server.id || ""))} · ${escapeHtml(String(server.serverType || "paper"))} ${escapeHtml(String(server.version || "LATEST"))} · :${escapeHtml(String(server.gamePort || ""))} · ${escapeHtml(String(server.state || ""))}</option>`).join("")}`;
+    const createMinecraftMode = selectedMinecraftServer === "__new__";
+    elements.softwareMinecraftCreatePanel.hidden = !createMinecraftMode;
+    elements.softwareMinecraftExistingPanel.hidden = createMinecraftMode;
+    const selectedMinecraftRecord = activeServers.find((server) => String(server.id || "") === selectedMinecraftServer) || null;
+    elements.softwareMinecraftServerSummary.textContent = selectedMinecraftRecord
+      ? `${selectedMinecraftRecord.id} · ${selectedMinecraftRecord.serverType || "paper"} ${selectedMinecraftRecord.version || "LATEST"} · port ${selectedMinecraftRecord.gamePort || "not assigned"} · ${selectedMinecraftRecord.state || "unknown"}.`
+      : "Select an installed server to manage it.";
     const allowedCommands = new Set(Array.isArray(status.allowedCommands) ? status.allowedCommands : []);
     const instanceState = String(status.instanceState || status.vmState || status.status || "NOT_FOUND");
     const minecraftState = String(
@@ -1198,7 +1213,9 @@
         || (command === "install-app" && selectedApplicationInstalled)
         || (command === "uninstall-app" && !selectedApplicationInstalled)
         || (needsVersion && !elements.softwareMinecraftVersion.value)
+        || (command === "install-minecraft" && !createMinecraftMode)
         || (command === "install-minecraft" && !validNewServer)
+        || (needsExistingServer && createMinecraftMode)
         || (needsExistingServer && !selectedServer)
         || (needsExistingServer && invalidLifecycleState)
       );
@@ -1299,6 +1316,9 @@
     state.softwareEndpointId = endpointId;
     if (command === "install-minecraft") {
       elements.softwareMinecraftNewServer.value = "";
+      state.softwareMinecraftSelection = minecraftServerId.trim().toLowerCase();
+    } else if (command === "remove-minecraft") {
+      state.softwareMinecraftSelection = "";
     }
     const labels = {
       "install-app": "Application installation started.",
@@ -1671,6 +1691,7 @@
   elements.softwareEndpoint.addEventListener("change", async () => {
     try {
       state.softwareEndpointId = String(elements.softwareEndpoint.value || "");
+      state.softwareMinecraftSelection = "";
       setBusy(true, "Loading selected VM software...");
       await loadSoftware();
     } catch (error) {
@@ -1682,6 +1703,9 @@
 
   [elements.softwareApplication, elements.softwareMinecraftVersion, elements.softwareMinecraftServerType, elements.softwareMinecraftServer].forEach((input) => {
     input.addEventListener("change", () => {
+      if (input === elements.softwareMinecraftServer) {
+        state.softwareMinecraftSelection = String(input.value || "__new__");
+      }
       renderSoftware();
       setBusy(state.isBusy);
     });

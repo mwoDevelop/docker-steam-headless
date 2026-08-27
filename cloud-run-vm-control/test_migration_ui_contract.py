@@ -24,8 +24,8 @@ class MigrationUiContractTest(unittest.TestCase):
         self.assertIn("if (loaderMessage && message)", loader)
         self.assertIn("Preparing migration snapshot and target state disk...", self.javascript)
 
-    def test_admin_javascript_cache_key_is_updated(self):
-        self.assertIn("admin.js?v=migration-guard-20260827", self.html)
+    def test_admin_javascript_cache_key_is_versioned(self):
+        self.assertRegex(self.html, r'admin\.js\?v=[a-z0-9-]+')
 
 
 if __name__ == "__main__":

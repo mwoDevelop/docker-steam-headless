@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;700&display=swap"
       rel="stylesheet"
     >
-    <link rel="stylesheet" href="./styles.css?v=reserved-gpu-modal-20260826">
+    <link rel="stylesheet" href="./styles.css?v=unified-minecraft-panel-20260827">
     <script src="https://accounts.google.com/gsi/client" async defer></script>
   </head>
   <body>
@@ -413,43 +413,48 @@
               <button class="action delete" type="button" data-software-command="uninstall-app">Uninstall application</button>
             </div>
           </article>
-          <article class="access-card accent">
-            <h3>Create Minecraft server</h3>
-            <p class="access-meta">Create a separate server with its own ID, runtime, version and port.</p>
-            <label>
-              <span>New server ID</span>
-              <input id="software-minecraft-new-server" type="text" pattern="[a-z0-9][a-z0-9\-]{0,30}" placeholder="survival" maxlength="31" autocomplete="off">
-            </label>
-            <label>
-              <span>Runtime</span>
-              <select id="software-minecraft-server-type">
-                <option value="paper">Paper (plugins)</option>
-                <option value="purpur">Purpur (plugins)</option>
-                <option value="fabric">Fabric (mods)</option>
-                <option value="forge">Forge (mods)</option>
-                <option value="neoforge">NeoForge (mods)</option>
-              </select>
-            </label>
-            <label>
-              <span>Server version</span>
-              <select id="software-minecraft-version"></select>
-            </label>
-            <button class="action create" type="button" data-software-command="install-minecraft">Create Minecraft server</button>
-            <p id="software-minecraft-create-hint" class="access-meta">Enter a new server ID to enable creation.</p>
-            <button id="software-refresh-minecraft-versions" class="ghost" type="button">Refresh version list</button>
-          </article>
-          <article class="access-card">
-            <h3>Existing Minecraft server</h3>
-            <p class="access-meta">Select an installed server to start, stop, restart or remove it.</p>
+          <article class="access-card accent minecraft-server-card">
+            <h3>Minecraft servers</h3>
+            <p class="access-meta">Create a server or select an installed one to manage its lifecycle.</p>
             <label>
               <span>Server</span>
               <select id="software-minecraft-server"></select>
             </label>
-            <div class="inline-action-group app-action-group">
-              <button class="action start" type="button" data-software-command="start-minecraft">Start server</button>
-              <button class="action stop" type="button" data-software-command="stop-minecraft">Stop server</button>
-              <button class="action restart" type="button" data-software-command="restart-minecraft">Restart server</button>
-              <button class="action delete" type="button" data-software-command="remove-minecraft">Remove server</button>
+            <div id="software-minecraft-create-panel" class="minecraft-server-mode">
+              <div class="form-grid">
+                <label>
+                  <span>New server ID</span>
+                  <input id="software-minecraft-new-server" type="text" pattern="[a-z0-9][a-z0-9\-]{0,30}" placeholder="survival" maxlength="31" autocomplete="off">
+                </label>
+                <label>
+                  <span>Runtime</span>
+                  <select id="software-minecraft-server-type">
+                    <option value="paper">Paper (plugins)</option>
+                    <option value="purpur">Purpur (plugins)</option>
+                    <option value="fabric">Fabric (mods)</option>
+                    <option value="forge">Forge (mods)</option>
+                    <option value="neoforge">NeoForge (mods)</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Server version</span>
+                  <select id="software-minecraft-version"></select>
+                </label>
+              </div>
+              <p id="software-minecraft-create-hint" class="access-meta">Enter a new server ID to enable creation.</p>
+              <div class="inline-action-group app-action-group">
+                <button class="action create" type="button" data-software-command="install-minecraft">Create Minecraft server</button>
+                <button id="software-refresh-minecraft-versions" class="ghost" type="button">Refresh version list</button>
+              </div>
+            </div>
+            <div id="software-minecraft-existing-panel" class="minecraft-server-mode" hidden>
+              <p id="software-minecraft-server-summary" class="minecraft-server-summary">Select an installed server to manage it.</p>
+              <div class="inline-action-group minecraft-action-group">
+                <button class="action start" type="button" data-software-command="start-minecraft">Start server</button>
+                <button class="action stop" type="button" data-software-command="stop-minecraft">Stop server</button>
+                <button class="action restart" type="button" data-software-command="restart-minecraft">Restart server</button>
+                <button class="action delete" type="button" data-software-command="remove-minecraft">Remove server</button>
+              </div>
             </div>
           </article>
         </div>
@@ -567,7 +572,7 @@
       </div>
     </main>
 
-    <script src="./admin.js?v=migration-guard-20260827"></script>
+    <script src="./admin.js?v=unified-minecraft-panel-20260827"></script>
     <script src="./app.js?v=held-zone-sync-20260827"></script>
   </body>
 </html>

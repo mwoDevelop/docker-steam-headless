@@ -1045,6 +1045,32 @@ select {
   grid-template-columns: repeat(2, minmax(104px, 1fr));
 }
 
+.minecraft-server-card {
+  grid-column: 1 / -1;
+}
+
+.minecraft-server-mode {
+  display: grid;
+  gap: 14px;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.minecraft-server-mode[hidden] {
+  display: none;
+}
+
+.minecraft-server-summary {
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.86rem;
+}
+
 .minecraft-action-group {
   grid-column: 1 / -1;
   grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
