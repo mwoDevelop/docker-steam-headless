@@ -130,7 +130,7 @@
       loader.setAttribute("aria-busy", "false");
       return;
     }
-    if (loaderMessage) {
+    if (loaderMessage && message) {
       loaderMessage.textContent = message || "Updating administrator controls...";
     }
     const showWhenVmControlLoaderIsGone = () => {
@@ -459,10 +459,18 @@
       return;
     }
     const sources = Array.isArray(payload.sources) ? payload.sources : [];
+    const targetsPayload = Array.isArray(payload.targets) ? payload.targets : [];
+    const blockingMigrationStates = new Set(["preparing", "prepared", "starting", "failed", "cleanup_pending"]);
+    const blockingTargets = targetsPayload.filter((target) => blockingMigrationStates.has(String(target.state || "")));
+    const blockedSourceIds = new Set(blockingTargets.map((target) => String(target.sourceEndpointId || "")));
+    const blockedEndpointIds = new Set(blockingTargets.map((target) => String(target.endpointId || "")));
     const snapshotCount = Math.max(0, Number(payload.snapshotCount || 0));
     elements.migrationSnapshotCount.textContent = String(snapshotCount);
     elements.migrationSnapshotCount.setAttribute("aria-label", `${snapshotCount} managed migration snapshots`);
-    const eligible = sources.filter((source) => Boolean(source.eligible));
+    const eligible = sources.filter((source) => (
+      Boolean(source.eligible)
+      && !blockedSourceIds.has(String(source.endpoint && source.endpoint.id || ""))
+    ));
     const previousSource = String(elements.migrationSource.value || "");
     elements.migrationSource.innerHTML = eligible.length ? eligible.map((source) => {
       const endpoint = source.endpoint || {};
@@ -487,7 +495,11 @@
     const endpoints = Array.isArray(payload.endpoints) ? payload.endpoints : [];
     const targets = mode === "move"
       ? endpoints.filter((endpoint) => String(endpoint.id || "") === sourceId)
-      : endpoints.filter((endpoint) => !String(endpoint.instanceName || "").trim() && !String(endpoint.zone || "").trim());
+      : endpoints.filter((endpoint) => (
+        !String(endpoint.instanceName || "").trim()
+        && !String(endpoint.zone || "").trim()
+        && !blockedEndpointIds.has(String(endpoint.id || ""))
+      ));
     const previousTarget = String(elements.migrationTargetEndpoint.value || "");
     elements.migrationTargetEndpoint.innerHTML = targets.length ? targets.map((endpoint) => {
       const label = mode === "move" ? `${endpoint.id} · retain source endpoint` : `${endpoint.id} · ${endpoint.domain || "no DNS"}`;
@@ -499,7 +511,6 @@
     elements.prepareMigration.dataset.migrationDisabled = String(!canPrepare);
     elements.migrationStatus.textContent = payload.scopeNote || "Migration copies the persistent state disk only.";
     elements.migrationStatus.dataset.tone = eligible.length ? "neutral" : "warning";
-    const targetsPayload = Array.isArray(payload.targets) ? payload.targets : [];
     elements.migrationTargets.innerHTML = targetsPayload.length ? targetsPayload.map((target) => {
       const status = String(target.state || "unknown");
       const canStart = status === "prepared";

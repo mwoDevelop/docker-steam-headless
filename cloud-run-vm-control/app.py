@@ -2028,7 +2028,7 @@ def execute_admin_migration_action(admin_user: dict[str, Any], payload: dict[str
             if not endpoint_available_for_scan_create(target_endpoint, target_zone):
                 raise ApiError("Copy requires a free endpoint compatible with the target region.", 409)
         existing = read_migration_targets()
-        if any(item["state"] in {"preparing", "prepared", "starting"} and (item["sourceEndpointId"] == source_endpoint_id or item["endpointId"] == target_endpoint_id or (item["targetZone"] == target_zone and item["hardware"] == instance_hardware_selection(source_instance))) for item in existing):
+        if any(item["state"] in {"preparing", "prepared", "starting", "failed", "cleanup_pending"} and (item["sourceEndpointId"] == source_endpoint_id or item["endpointId"] == target_endpoint_id or (item["targetZone"] == target_zone and item["hardware"] == instance_hardware_selection(source_instance))) for item in existing):
             raise ApiError("A conflicting migration is already prepared or running.", 409)
         relocation_workflow = None
         if mode == "relocate-start":
