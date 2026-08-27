@@ -1684,8 +1684,16 @@
     elements.hardwareSelect.value = hardwareId;
     elements.zoneSelect.dataset.savedValue = zone;
     renderHardwareOptions(state.hardwarePayload);
+    if (![...elements.zoneSelect.options].some((option) => String(option.value) === zone)) {
+      elements.zoneSelect.add(new Option(zoneDisplayLabel(zone), zone));
+    }
+    elements.zoneSelect.value = zone;
+    elements.zoneSelect.dataset.savedValue = "";
     state.lastStatus = null;
     state.lastStatusTargetKey = "";
+    saveConfig();
+    updateHardwareZoneAvailability();
+    renderHardwarePriceEstimate(selectedPriceEstimate());
   }
 
   async function handleHeldGpuCapacity(run, prepared) {
