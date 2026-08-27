@@ -91,6 +91,12 @@ class GpuQuotaScanContractTests(unittest.TestCase):
         self.assertIn("function confirmGpuScanStart(message)", javascript)
         self.assertIn("!await confirmGpuScanStart(`This will create and immediately release", javascript)
         self.assertNotIn("profiles.length > 1 && !window.confirm", javascript)
+        self.assertIn("function applyHeldGpuTargetSelection(target)", javascript)
+        held_handler = javascript.split("async function handleHeldGpuCapacity(run, prepared)", 1)[1].split("\n  function ", 1)[0]
+        self.assertLess(
+            held_handler.index("applyHeldGpuTargetSelection(target);"),
+            held_handler.index("run.createStarted = true;"),
+        )
         self.assertIn('const cancellingScan = action === "cancel-scan";', javascript)
         self.assertIn('window.setTimeout(() => abortController.abort(), 20000)', javascript)
         self.assertIn('const explicitlySelected = instances.find(', javascript)

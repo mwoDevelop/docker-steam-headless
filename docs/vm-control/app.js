@@ -1665,6 +1665,29 @@
     }
   }
 
+  function applyHeldGpuTargetSelection(target) {
+    const endpointId = String(target && target.endpointId || "");
+    const hardwareId = String(target && target.hardwareId || "");
+    const zone = String(target && target.zone || "");
+    const profile = getHardwareProfiles().find((item) => String(item.id || "") === hardwareId);
+    if (!endpointId || !profile || !zone) {
+      throw new Error("The held GPU target cannot be selected in the current hardware catalog.");
+    }
+    if (elements.endpointSelect) {
+      elements.endpointSelect.value = endpointId;
+      state.selectedEndpointId = endpointId;
+      state.endpointSelectionLocked = true;
+      renderEndpointStatus();
+    }
+    if (!Array.isArray(profile.zones)) profile.zones = [];
+    if (!profile.zones.includes(zone)) profile.zones = [zone, ...profile.zones];
+    elements.hardwareSelect.value = hardwareId;
+    elements.zoneSelect.dataset.savedValue = zone;
+    renderHardwareOptions(state.hardwarePayload);
+    state.lastStatus = null;
+    state.lastStatusTargetKey = "";
+  }
+
   async function handleHeldGpuCapacity(run, prepared) {
     const workflowId = String(prepared && prepared.workflowId || "");
     const target = prepared && prepared.target ? prepared.target : null;
@@ -1701,6 +1724,7 @@
       return "continue";
     }
 
+    applyHeldGpuTargetSelection(target);
     run.createStarted = true;
     const reservedGpu = reservedGpuDetails(target, prepared);
     const loadingToken = setPageLoading(`GPU reserved. ${operation === "start" ? "Starting" : "Creating"} ${reservedGpu.hardwareLabel} VM in ${reservedGpu.zoneLabel}...`);

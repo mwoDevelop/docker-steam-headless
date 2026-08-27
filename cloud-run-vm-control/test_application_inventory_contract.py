@@ -37,10 +37,9 @@ class ApplicationInventoryContractTests(unittest.TestCase):
             script = source.read()
         self.assertIn('INSTALLED_APPLICATION_IDS_METADATA_KEY="vm-installed-application-ids"', script)
         self.assertIn('update_installed_applications_metadata "$action" "$app_id"', script)
-        self.assertGreaterEqual(
-            script.count('set_power_action_status "$action" "$token" "running" "${action}:${token}"'),
-            2,
-        )
+        self.assertIn('run_application_action "install-app" "$token" "$action"', script)
+        self.assertIn('visible_action="${parent_action:-$action}"', script)
+        self.assertIn('[[ -n "$parent_action" ]] && failure_phase="running"', script)
 
     def test_admin_gui_renders_and_enforces_application_inventory(self):
         root = os.path.dirname(os.path.dirname(__file__))

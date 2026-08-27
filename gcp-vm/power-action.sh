@@ -1120,7 +1120,11 @@ remove_manual_backup() {
 run_application_action() {
   local action="$1"
   local token="$2"
-  local app_id container_id target_phase
+  local parent_action="${3:-}"
+  local app_id container_id target_phase visible_action failure_phase
+  visible_action="${parent_action:-$action}"
+  failure_phase="failed"
+  [[ -n "$parent_action" ]] && failure_phase="running"
 
   app_id="$(metadata_get "$SELECTED_APPLICATION_METADATA_KEY" || true)"
   case "$app_id" in
@@ -1128,7 +1132,7 @@ run_application_action() {
       ;;
     *)
       log "Unsupported application id: ${app_id:-<empty>}"
-      set_power_action_status "$action" "$token" "failed" ""
+      set_power_action_status "$visible_action" "$token" "$failure_phase"
       return 1
       ;;
   esac
@@ -1141,12 +1145,12 @@ run_application_action() {
     else
       set_sunshine_status "error" "Steam Headless container is not running; application change could not be completed."
     fi
-    set_power_action_status "$action" "$token" "failed" ""
+    set_power_action_status "$visible_action" "$token" "$failure_phase"
     return 1
   fi
 
   log "Running ${action} for application ${app_id}"
-  set_power_action_status "$action" "$token" "running"
+  set_power_action_status "$visible_action" "$token" "running"
   set_sunshine_status "starting" "Updating application ${app_id}."
 
   if ! docker exec -i "$container_id" bash -s -- "$action" "$app_id" <<'PAYLOAD'
@@ -1285,7 +1289,7 @@ chown default:default "$apps_file" || true
 supervisorctl restart sunshine || true
 PAYLOAD
   then
-    set_power_action_status "$action" "$token" "failed" ""
+    set_power_action_status "$visible_action" "$token" "$failure_phase"
     return 1
   fi
 
@@ -1294,8 +1298,9 @@ PAYLOAD
   if [[ "$action" == "uninstall-app" ]]; then
     target_phase="uninstalled"
   fi
+  [[ -n "$parent_action" ]] && target_phase="running"
   update_installed_applications_metadata "$action" "$app_id"
-  set_power_action_status "$action" "$token" "$target_phase" ""
+  set_power_action_status "$visible_action" "$token" "$target_phase" "$([[ -n "$parent_action" ]] && printf '%s:%s' "$parent_action" "$token")"
 }
 
 update_installed_applications_metadata() {
@@ -1368,12 +1373,10 @@ run_post_create_applications() {
     set_sunshine_status "starting" "Installing selected application ${index}/${total}: ${app_id}."
     set_instance_metadata_value "$SELECTED_APPLICATION_METADATA_KEY" "$app_id" || true
     for app_attempt in $(seq 1 "$max_app_attempts"); do
-      if run_application_action "install-app" "$token"; then
+      if run_application_action "install-app" "$token" "$action"; then
         completed=$((completed + 1))
-        set_power_action_status "$action" "$token" "running" "${action}:${token}"
         break
       fi
-      set_power_action_status "$action" "$token" "running" "${action}:${token}"
       if [[ "$app_attempt" -lt "$max_app_attempts" ]]; then
         log "Selected application ${app_id} did not install on attempt ${app_attempt}/${max_app_attempts}; retrying the application action."
         set_sunshine_status "starting" "Retrying selected application ${index}/${total}: ${app_id} (${app_attempt}/${max_app_attempts})."

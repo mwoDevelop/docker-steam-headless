@@ -31,7 +31,7 @@ class ReservedGpuModalContractTests(unittest.TestCase):
         for label in ("Reserved GPU", "GPU type", "Zone", "Reserved until", "Reservation"):
             self.assertIn(label, renderer)
         self.assertIn('class="reserved-gpu-card"', renderer)
-        self.assertIn("gpu-scan-dialog-20260827", self.html)
+        self.assertIn("held-target-sync-20260827", self.html)
 
     def test_reserved_create_target_uses_workflow_endpoint_not_stale_selection(self):
         create_modal = self.javascript.split("function selectPostCreateApplications(target, options = {}) {", 1)[1].split(
