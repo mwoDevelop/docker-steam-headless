@@ -24,6 +24,7 @@ MINECRAFT_GAME_PORT_METADATA_KEY="vm-minecraft-game-port"
 MINECRAFT_SERVERS_METADATA_KEY="vm-minecraft-servers"
 STEAM_ENV_METADATA_KEY="steam-headless-env"
 SELECTED_APPLICATION_METADATA_KEY="vm-selected-application-id"
+INSTALLED_APPLICATION_IDS_METADATA_KEY="vm-installed-application-ids"
 POST_CREATE_APPLICATION_IDS_METADATA_KEY="vm-post-create-application-ids"
 POST_CREATE_APPLICATIONS_RESULT_METADATA_KEY="vm-post-create-applications-result"
 ENVF=/opt/container-services/steam-headless/.env
@@ -1293,7 +1294,28 @@ PAYLOAD
   if [[ "$action" == "uninstall-app" ]]; then
     target_phase="uninstalled"
   fi
+  update_installed_applications_metadata "$action" "$app_id"
   set_power_action_status "$action" "$token" "$target_phase" ""
+}
+
+update_installed_applications_metadata() {
+  local action="$1"
+  local app_id="$2"
+  local current item updated="" found=0
+  current="$(metadata_get "$INSTALLED_APPLICATION_IDS_METADATA_KEY" | tr -d '\r' || true)"
+  IFS=',' read -r -a installed_ids <<< "$current"
+  for item in "${installed_ids[@]}"; do
+    [[ -n "$item" ]] || continue
+    if [[ "$item" == "$app_id" ]]; then
+      found=1
+      [[ "$action" == "uninstall-app" ]] && continue
+    fi
+    updated="${updated}${updated:+,}${item}"
+  done
+  if [[ "$action" == "install-app" && "$found" -eq 0 ]]; then
+    updated="${updated}${updated:+,}${app_id}"
+  fi
+  set_instance_metadata_value "$INSTALLED_APPLICATION_IDS_METADATA_KEY" "$updated" || true
 }
 
 wait_for_steam_headless_container() {
@@ -1348,8 +1370,10 @@ run_post_create_applications() {
     for app_attempt in $(seq 1 "$max_app_attempts"); do
       if run_application_action "install-app" "$token"; then
         completed=$((completed + 1))
+        set_power_action_status "$action" "$token" "running" "${action}:${token}"
         break
       fi
+      set_power_action_status "$action" "$token" "running" "${action}:${token}"
       if [[ "$app_attempt" -lt "$max_app_attempts" ]]; then
         log "Selected application ${app_id} did not install on attempt ${app_attempt}/${max_app_attempts}; retrying the application action."
         set_sunshine_status "starting" "Retrying selected application ${index}/${total}: ${app_id} (${app_attempt}/${max_app_attempts})."

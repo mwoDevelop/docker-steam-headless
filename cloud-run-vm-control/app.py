@@ -230,6 +230,7 @@ RESTORE_STATUS_METADATA_KEY = "vm-restore-status"
 RESTORE_DETAIL_METADATA_KEY = "vm-restore-detail"
 SELECTED_BACKUP_METADATA_KEY = "vm-selected-backup-id"
 SELECTED_APPLICATION_METADATA_KEY = "vm-selected-application-id"
+INSTALLED_APPLICATION_IDS_METADATA_KEY = "vm-installed-application-ids"
 POST_CREATE_APPLICATION_IDS_METADATA_KEY = "vm-post-create-application-ids"
 POST_CREATE_APPLICATIONS_RESULT_METADATA_KEY = "vm-post-create-applications-result"
 POST_CREATE_APPLICATIONS_ACTION = "post-create-applications"
@@ -8046,6 +8047,27 @@ def build_post_create_applications_status(instance: dict[str, Any] | None) -> di
     }
 
 
+def installed_application_ids_from_instance(instance: dict[str, Any] | None) -> list[str]:
+    if instance is None:
+        return []
+    installed = [
+        application_id
+        for application_id in metadata_value(instance, INSTALLED_APPLICATION_IDS_METADATA_KEY).split(",")
+        if application_id in APPLICATION_IDS
+    ]
+    if installed:
+        return list(dict.fromkeys(installed))
+    requested = [
+        application_id
+        for application_id in metadata_value(instance, POST_CREATE_APPLICATION_IDS_METADATA_KEY).split(",")
+        if application_id in APPLICATION_IDS
+    ]
+    result = metadata_value(instance, POST_CREATE_APPLICATIONS_RESULT_METADATA_KEY).strip()
+    if requested and result == f"completed:{len(requested)}/{len(requested)}":
+        return list(dict.fromkeys(requested))
+    return []
+
+
 def reconcile_completed_restart_action(instance: dict[str, Any] | None) -> dict[str, Any] | None:
     """Finalize a guest reboot when the originating Cloud Run request did not survive it."""
     if instance is None or str(instance.get("status", "")).upper() != "RUNNING":
@@ -8136,6 +8158,7 @@ def build_status_payload(
             "applications": {
                 "catalog": APPLICATION_CATALOG,
                 "selected": "",
+                "installed": [],
             },
             "postCreateApplications": build_post_create_applications_status(None),
         }
@@ -8204,6 +8227,7 @@ def build_status_payload(
         "applications": {
             "catalog": APPLICATION_CATALOG,
             "selected": metadata_value(instance, SELECTED_APPLICATION_METADATA_KEY),
+            "installed": installed_application_ids_from_instance(instance),
         },
         "postCreateApplications": build_post_create_applications_status(instance),
     }

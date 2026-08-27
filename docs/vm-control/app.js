@@ -5085,6 +5085,32 @@
     });
   }
 
+  function confirmGpuScanStart(message) {
+    return new Promise((resolve) => {
+      document.querySelector("#gpu-scan-confirm-dialog")?.remove();
+      const dialog = document.createElement("dialog");
+      dialog.id = "gpu-scan-confirm-dialog";
+      dialog.className = "create-applications-dialog";
+      dialog.innerHTML = `
+        <form method="dialog" class="create-applications-form">
+          <p class="eyebrow">GPU capacity scan</p>
+          <h2>Confirm capacity scan</h2>
+          <p class="access-meta">${escapeHtml(message)}</p>
+          <div class="create-applications-actions">
+            <button class="ghost" type="submit" value="cancel">Cancel</button>
+            <button class="action create" type="submit" value="confirm">Continue scan</button>
+          </div>
+        </form>`;
+      dialog.addEventListener("close", () => {
+        const confirmed = dialog.returnValue === "confirm";
+        dialog.remove();
+        resolve(confirmed);
+      }, { once: true });
+      document.body.append(dialog);
+      dialog.showModal();
+    });
+  }
+
   if (elements.refreshHardware) {
     elements.refreshHardware.addEventListener("click", async () => {
       if (state.isBusy || activeGpuAvailabilityScanRun() || elements.refreshHardware.dataset.scanActionActive === "true") {
@@ -5095,7 +5121,7 @@
       const scope = selectedGpuScanScope();
       const profiles = selectedGpuScanProfiles();
       const targetCount = gpuScanTargetCount(profiles, scope);
-      if (!restoringZones && profiles.length > 1 && !window.confirm(`This will create and immediately release ${targetCount} short-lived GPU capacity reservations for ${profiles.length} selected GPU profiles. It may take several minutes and may be cancelled. Continue?`)) {
+      if (!restoringZones && profiles.length > 1 && !await confirmGpuScanStart(`This will create and immediately release ${targetCount} short-lived GPU capacity reservations for ${profiles.length} selected GPU profiles. It may take several minutes and may be cancelled. Continue?`)) {
         setCommandStatus("Selected GPU capacity scan cancelled before it started.", "neutral");
         delete elements.refreshHardware.dataset.scanActionActive;
         return;
@@ -5210,7 +5236,7 @@
       const restoringCatalog = Boolean(activeAllGpuZoneAvailabilityScan());
       const profiles = eligibleGpuScanProfiles();
       const targetCount = profiles.reduce((total, profile) => total + profile.zones.length, 0);
-      if (!restoringCatalog && profiles.length && !window.confirm(`This will create and immediately release ${targetCount} short-lived GPU capacity reservations across ${profiles.length} GPU profiles. It can take several minutes and may be cancelled. Continue?`)) {
+      if (!restoringCatalog && profiles.length && !await confirmGpuScanStart(`This will create and immediately release ${targetCount} short-lived GPU capacity reservations across ${profiles.length} GPU profiles. It can take several minutes and may be cancelled. Continue?`)) {
         setCommandStatus("Full GPU capacity scan cancelled before it started.", "neutral");
         delete elements.scanAllGpuZones.dataset.scanActionActive;
         return;

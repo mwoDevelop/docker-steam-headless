@@ -60,6 +60,7 @@
     sunshinePasswordSubmit: document.querySelector("#sunshine-password-submit"),
     softwareEndpoint: document.querySelector("#software-endpoint"),
     softwareApplication: document.querySelector("#software-application"),
+    softwareApplicationState: document.querySelector("#software-application-state"),
     softwareMinecraftVersion: document.querySelector("#software-minecraft-version"),
     softwareMinecraftServerType: document.querySelector("#software-minecraft-server-type"),
     softwareMinecraftServer: document.querySelector("#software-minecraft-server"),
@@ -1074,6 +1075,7 @@
       elements.softwareEndpoint.innerHTML = '<option value="">No VM endpoint available</option>';
       elements.softwareEndpoint.disabled = true;
       elements.softwareApplication.innerHTML = '<option value="">No applications loaded</option>';
+      elements.softwareApplicationState.textContent = "Installed applications are unavailable.";
       elements.softwareMinecraftVersion.innerHTML = '<option value="">No versions loaded</option>';
       elements.softwareStatus.textContent = state.user
         ? "No VM endpoint is available. Create a VM before managing applications or Minecraft."
@@ -1098,7 +1100,24 @@
     elements.softwareEndpoint.disabled = !endpoints.length;
 
     const applications = Array.isArray(payload.applicationCatalog) ? payload.applicationCatalog : [];
-    elements.softwareApplication.innerHTML = optionList(applications, previousApplication, "No applications available");
+    const status = payload.status || {};
+    const installedApplications = new Set(Array.isArray(status.applications && status.applications.installed)
+      ? status.applications.installed.map(String)
+      : []);
+    elements.softwareApplication.innerHTML = applications.length
+      ? applications.map((application) => {
+        const id = String(application.id || application.value || "");
+        const label = String(application.label || application.name || id);
+        const stateLabel = installedApplications.has(id) ? "Installed" : "Not installed";
+        return `<option value="${escapeHtml(id)}" ${id === String(previousApplication || "") ? "selected" : ""}>${escapeHtml(label)} · ${stateLabel}</option>`;
+      }).join("")
+      : '<option value="">No applications available</option>';
+    const installedLabels = applications
+      .filter((application) => installedApplications.has(String(application.id || application.value || "")))
+      .map((application) => String(application.label || application.name || application.id || application.value || ""));
+    elements.softwareApplicationState.textContent = installedLabels.length
+      ? `Installed applications (${installedLabels.length}/${applications.length}): ${installedLabels.join(", ")}.`
+      : `No desktop applications installed (0/${applications.length}).`;
     const minecraft = payload.minecraftServer || {};
     const serverTypes = Array.isArray(minecraft.serverTypes) ? minecraft.serverTypes : [];
     const selectedServerType = previousServerType || minecraft.serverType || "paper";
@@ -1122,7 +1141,6 @@
       ? previousVersion
       : (versionCatalog.defaultVersion || minecraftVersions[0] || "");
     elements.softwareMinecraftVersion.innerHTML = optionList(minecraftVersions, selectedVersion, "Refresh Minecraft Versions to load this runtime catalog");
-    const status = payload.status || {};
     const servers = Array.isArray(status.minecraftServers) ? status.minecraftServers : (Array.isArray(payload.minecraftServers) ? payload.minecraftServers : []);
     const activeServers = servers.filter((server) => String(server && server.state || "").trim().toLowerCase() !== "removed");
     const selectedMinecraftServer = activeServers.some((server) => String(server.id || "") === previousMinecraftServer)
@@ -1141,7 +1159,7 @@
     const catalogDetail = versionCatalog.lastError
       ? `Version list error: ${versionCatalog.lastError}`
       : `${minecraftVersions.length} ${activeServerType} versions available${versionCatalog.source ? ` from ${versionCatalog.source}` : ""}.`;
-    elements.softwareStatus.textContent = `${payload.endpoint && payload.endpoint.id ? payload.endpoint.id : "Selected endpoint"} · VM ${instanceState} · Minecraft ${minecraftState}`;
+    elements.softwareStatus.textContent = `${payload.endpoint && payload.endpoint.id ? payload.endpoint.id : "Selected endpoint"} · VM ${instanceState} · Applications ${installedApplications.size}/${applications.length} installed · Minecraft ${minecraftState}`;
     elements.softwareStatus.dataset.tone = versionCatalog.lastError ? "warning" : (instanceState === "RUNNING" ? "success" : "neutral");
     const newServer = String(elements.softwareMinecraftNewServer.value || "").trim().toLowerCase();
     const validNewServer = /^[a-z0-9][a-z0-9-]{0,30}$/.test(newServer);
@@ -1155,6 +1173,7 @@
     document.querySelectorAll("[data-software-command]").forEach((button) => {
       const command = button.dataset.softwareCommand || "";
       const needsApplication = command === "install-app" || command === "uninstall-app";
+      const selectedApplicationInstalled = installedApplications.has(String(elements.softwareApplication.value || ""));
       const needsVersion = command === "install-minecraft";
       const selectedServer = String(elements.softwareMinecraftServer.value || "");
       const needsExistingServer = ["start-minecraft", "stop-minecraft", "restart-minecraft", "remove-minecraft"].includes(command);
@@ -1165,6 +1184,8 @@
       button.dataset.softwareDisabled = String(
         !allowedCommands.has(command)
         || (needsApplication && !elements.softwareApplication.value)
+        || (command === "install-app" && selectedApplicationInstalled)
+        || (command === "uninstall-app" && !selectedApplicationInstalled)
         || (needsVersion && !elements.softwareMinecraftVersion.value)
         || (command === "install-minecraft" && !validNewServer)
         || (needsExistingServer && !selectedServer)
