@@ -1778,6 +1778,12 @@ def normalize_migration_target(raw_value: Any) -> dict[str, Any] | None:
     mode = str(raw_value.get("mode", "") or "").strip().lower()
     state = str(raw_value.get("state", "") or "").strip().lower()
     hardware = raw_value.get("hardware") if isinstance(raw_value.get("hardware"), dict) else {}
+    try:
+        auto_stop_hours = int(raw_value["autoStopHours"]) if raw_value.get("autoStopHours") not in (None, "", False) else None
+    except (TypeError, ValueError):
+        auto_stop_hours = None
+    if auto_stop_hours is not None and not (MIN_AUTO_STOP_HOURS <= auto_stop_hours <= MAX_AUTO_STOP_HOURS):
+        auto_stop_hours = None
     if (
         not re.fullmatch(r"migration-[a-z0-9-]{8,80}", target_id)
         or not source_endpoint_id
@@ -1809,6 +1815,7 @@ def normalize_migration_target(raw_value: Any) -> dict[str, Any] | None:
         "diskUrl": str(raw_value.get("diskUrl", "") or ""),
         "sourceDiskUrl": str(raw_value.get("sourceDiskUrl", "") or ""),
         "gpuWorkflowId": str(raw_value.get("gpuWorkflowId", "") or ""),
+        "autoStopHours": auto_stop_hours,
         "diskSizeGb": str(raw_value.get("diskSizeGb", "") or ""),
         "detail": str(raw_value.get("detail", "") or "")[:1000],
         "createdAt": str(raw_value.get("createdAt", "") or ""),
@@ -2005,6 +2012,7 @@ def execute_admin_migration_action(admin_user: dict[str, Any], payload: dict[str
         target_endpoint_id = normalize_endpoint_id(payload.get("targetEndpointId"))
         if mode not in {"copy", "move", "relocate-start"}:
             raise ApiError("Migration mode must be copy, move or relocate-start.", 400)
+        auto_stop_hours = parse_auto_stop_hours(payload) if mode == "relocate-start" else None
         source_endpoint = endpoint_by_id(source_endpoint_id)
         source_instance = endpoint_instance_or_none(source_endpoint)
         if source_instance is None:
@@ -2069,6 +2077,7 @@ def execute_admin_migration_action(admin_user: dict[str, Any], payload: dict[str
             "diskUrl": "",
             "sourceDiskUrl": str(state_disk.get("source", "") or ""),
             "gpuWorkflowId": str(payload.get("gpuWorkflowId", "") or ""),
+            "autoStopHours": auto_stop_hours,
             "diskSizeGb": str(state_disk.get("diskSizeGb", "") or parse_disk_size_gb(CONFIG["data_disk_size"])),
             "detail": "Creating migration snapshot.",
             "createdAt": now,
@@ -2179,7 +2188,15 @@ def execute_admin_migration_action(admin_user: dict[str, Any], payload: dict[str
             insert_url = instances_collection_url()
             if scan_workflow is not None:
                 insert_url = f"{insert_url}?requestId={scan_workflow['requestId']}"
-            operation = compute_request("POST", insert_url, json=build_instance_create_request(auto_stop_hours=None, sunshine_credentials=credentials, existing_data_disk_url=target["diskUrl"]))
+            operation = compute_request(
+                "POST",
+                insert_url,
+                json=build_instance_create_request(
+                    auto_stop_hours=target.get("autoStopHours"),
+                    sunshine_credentials=credentials,
+                    existing_data_disk_url=target["diskUrl"],
+                ),
+            )
             if not isinstance(operation, dict):
                 raise ApiError("Failed to create the VM from the prepared migration.", 502)
             wait_for_zone_operation(operation, timeout_seconds=300, zone=target["targetZone"])

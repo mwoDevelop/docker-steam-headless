@@ -31,7 +31,7 @@ class ReservedGpuModalContractTests(unittest.TestCase):
         for label in ("Reserved GPU", "GPU type", "Zone", "Reserved until", "Reservation"):
             self.assertIn(label, renderer)
         self.assertIn('class="reserved-gpu-card"', renderer)
-        self.assertIn("held-zone-sync-20260827", self.html)
+        self.assertIn("reserved-auto-stop-20260828", self.html)
 
     def test_held_gpu_target_is_applied_after_zone_options_are_rendered(self):
         selector = self.javascript.split("function applyHeldGpuTargetSelection(target) {", 1)[1].split(
@@ -46,6 +46,22 @@ class ReservedGpuModalContractTests(unittest.TestCase):
             "\n  function ", 1
         )[0]
         self.assertIn("heldWorkflow.endpoint && heldWorkflow.endpoint.domain", create_modal)
+
+    def test_reserved_relocation_persists_auto_stop_before_migration_start(self):
+        workflow = self.javascript.split("async function handleHeldGpuCapacity(run, prepared) {", 1)[1].split(
+            "\n  function ", 1
+        )[0]
+        self.assertIn("const autoStopHours = readAutoStopHours(operation);", workflow)
+        self.assertIn("migrationPrepareBody.autoStopHours = autoStopHours", workflow)
+        self.assertIn("body: JSON.stringify(migrationPrepareBody)", workflow)
+
+    def test_backend_uses_persisted_auto_stop_for_relocated_vm(self):
+        migration = self.backend.split("def execute_admin_migration_action(", 1)[1].split(
+            "\ndef ", 1
+        )[0]
+        self.assertIn('auto_stop_hours = parse_auto_stop_hours(payload) if mode == "relocate-start" else None', migration)
+        self.assertIn('"autoStopHours": auto_stop_hours', migration)
+        self.assertIn('auto_stop_hours=target.get("autoStopHours")', migration)
 
 
 if __name__ == "__main__":

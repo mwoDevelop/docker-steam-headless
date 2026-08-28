@@ -1749,9 +1749,19 @@
       const autoStopHours = readAutoStopHours(operation);
       if (autoStopHours) body.autoStopHours = autoStopHours;
       if (operation === "start" && String(prepared.source && prepared.source.zone || "") !== String(target.zone || "")) {
+        const migrationPrepareBody = {
+          action: "prepare",
+          mode: "relocate-start",
+          sourceEndpointId: String(prepared.source.endpointId || ""),
+          targetEndpointId: String(prepared.source.endpointId || ""),
+          targetZone: String(target.zone || ""),
+          gpuWorkflowId: workflowId,
+          scanCreateToken: prepared.preparationToken,
+        };
+        if (autoStopHours) migrationPrepareBody.autoStopHours = autoStopHours;
         await fetchApi("/api/admin/migrations", {
           method: "POST",
-          body: JSON.stringify({ action: "prepare", mode: "relocate-start", sourceEndpointId: String(prepared.source.endpointId || ""), targetEndpointId: String(prepared.source.endpointId || ""), targetZone: String(target.zone || ""), gpuWorkflowId: workflowId, scanCreateToken: prepared.preparationToken }),
+          body: JSON.stringify(migrationPrepareBody),
         });
         const migrations = await fetchApi("/api/admin/migrations", { method: "GET" });
         const migration = (migrations.targets || []).find((item) => item.mode === "relocate-start" && item.gpuWorkflowId === workflowId && item.state === "prepared");

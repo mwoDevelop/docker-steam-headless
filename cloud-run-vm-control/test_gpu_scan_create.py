@@ -132,11 +132,32 @@ class GpuScanCreateContractTests(unittest.TestCase):
             "hardware": {"id": "nvidia-tesla-t4", "machineType": "n1-standard-4", "gpuType": "nvidia-tesla-t4", "gpuCount": 1, "acceleratorMode": "attached"},
             "sourceDiskUrl": "projects/p/zones/europe-central2-b/disks/source-state",
             "gpuWorkflowId": "gpu-workflow-1",
+            "autoStopHours": 4,
         })
 
         self.assertIsNotNone(target)
         self.assertEqual(target["mode"], "relocate-start")
         self.assertEqual(target["gpuWorkflowId"], "gpu-workflow-1")
+        self.assertEqual(target["autoStopHours"], 4)
+
+    def test_invalid_relocate_start_auto_stop_is_not_restored_from_registry(self):
+        target = vm_control.normalize_migration_target({
+            "id": "migration-12345678",
+            "sourceEndpointId": "mwo-vm2",
+            "sourceInstanceName": "steam-mwo-vm2-t4-europe-central2-b",
+            "sourceZone": "europe-central2-b",
+            "endpointId": "mwo-vm2",
+            "targetZone": "europe-central2-c",
+            "mode": "relocate-start",
+            "state": "prepared",
+            "hardware": {"id": "nvidia-tesla-t4", "machineType": "n1-standard-4", "gpuType": "nvidia-tesla-t4", "gpuCount": 1, "acceleratorMode": "attached"},
+            "sourceDiskUrl": "projects/p/zones/europe-central2-b/disks/source-state",
+            "gpuWorkflowId": "gpu-workflow-1",
+            "autoStopHours": 25,
+        })
+
+        self.assertIsNotNone(target)
+        self.assertIsNone(target["autoStopHours"])
 
 
 if __name__ == "__main__":
