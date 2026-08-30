@@ -57,6 +57,29 @@ class GpuScanCancelContractTests(unittest.TestCase):
     def test_cancel_message_does_not_claim_cleanup_is_already_complete(self):
         self.assertIn("Managed reservation cleanup was requested and is being verified", self.javascript)
 
+    def test_reserved_start_modal_has_safe_automatic_countdown(self):
+        self.assertIn('id="start-reserved-countdown"', self.html)
+        body = self.javascript.split("function selectReservedStart(target, prepared) {", 1)[1].split(
+            "\n  function selectedTargetParams()", 1
+        )[0]
+        self.assertIn("const autoStartDelayMs = 30000", body)
+        self.assertIn("const reservationSafetyMarginMs = 5000", body)
+        self.assertIn('dialog.returnValue = ""', body)
+        self.assertIn("activeWorkflowMatches()", body)
+        self.assertIn('finish("start")', body)
+        self.assertIn('finish("pause")', body)
+        self.assertIn('dialog.addEventListener("cancel", onCancel)', body)
+        self.assertIn('form.addEventListener("submit", onSubmit)', body)
+        self.assertIn("window.clearInterval(timerId)", body)
+
+    def test_reserved_start_countdown_reuses_existing_start_paths(self):
+        body = self.javascript.split("async function handleHeldGpuCapacity(run, prepared) {", 1)[1].split(
+            "\n  function reservedGpuDetails", 1
+        )[0]
+        self.assertIn('if (operation === "start"', body)
+        self.assertIn('mode: "relocate-start"', body)
+        self.assertIn('fetchApi("/api/command"', body)
+
 
 if __name__ == "__main__":
     unittest.main()

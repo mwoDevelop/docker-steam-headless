@@ -1881,8 +1881,9 @@
     const dialog = document.querySelector("#start-reserved-dialog");
     const form = dialog && dialog.querySelector("form");
     const summary = document.querySelector("#start-reserved-summary");
+    const countdown = document.querySelector("#start-reserved-countdown");
     const confirm = document.querySelector("#start-reserved-confirm");
-    if (!dialog || !form || !summary || !confirm) return Promise.resolve({ action: "pause" });
+    if (!dialog || !form || !summary || !countdown || !confirm) return Promise.resolve({ action: "pause" });
     const source = prepared.source || {};
     const relocation = String(source.zone || "") !== String(target.zone || "");
     renderReservedGpuSummary(
@@ -1892,13 +1893,85 @@
       `${source.instanceName || "Selected VM"}. ${relocation ? `The VM will be relocated from ${zoneDisplayLabel(source.zone)} before Start.` : "The VM will start in its current zone."}`,
     );
     confirm.textContent = relocation ? "Migrate and start reserved VM" : "Start reserved VM";
+    dialog.returnValue = "";
     return new Promise((resolve) => {
-      const onClose = () => {
-        dialog.removeEventListener("close", onClose);
-        resolve({ action: dialog.returnValue || "pause", applicationIds: [] });
+      const autoStartDelayMs = 30000;
+      const reservationSafetyMarginMs = 5000;
+      const deadline = Date.now() + autoStartDelayMs;
+      const expiresAt = new Date(String(prepared.expiresAt || prepared.reservation && prepared.reservation.expiresAt || "")).getTime();
+      const workflowId = String(prepared.workflowId || "");
+      const preparationToken = String(prepared.preparationToken || "");
+      const sourceSignature = [source.endpointId, source.instanceName, source.zone].map((value) => String(value || "")).join("|");
+      const targetSignature = [target.endpointId, target.hardwareId, target.zone].map((value) => String(value || "")).join("|");
+      const hasSafeTtl = Number.isFinite(expiresAt) && expiresAt - deadline >= reservationSafetyMarginMs;
+      let settled = false;
+      let timerId = 0;
+
+      const activeWorkflowMatches = () => {
+        const active = state.activeHeldGpuWorkflow || {};
+        const activeSource = active.source || {};
+        const activeTarget = active.target || {};
+        return String(active.workflowId || "") === workflowId
+          && String(active.preparationToken || "") === preparationToken
+          && [activeSource.endpointId, activeSource.instanceName, activeSource.zone].map((value) => String(value || "")).join("|") === sourceSignature
+          && [activeTarget.endpointId, activeTarget.hardwareId, activeTarget.zone].map((value) => String(value || "")).join("|") === targetSignature;
       };
+
+      const cleanup = () => {
+        if (timerId) window.clearInterval(timerId);
+        timerId = 0;
+        form.removeEventListener("submit", onSubmit);
+        dialog.removeEventListener("cancel", onCancel);
+        dialog.removeEventListener("close", onClose);
+        document.removeEventListener("visibilitychange", renderCountdown);
+      };
+
+      const finish = (action) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        if (dialog.open) dialog.close(action);
+        resolve({ action, applicationIds: [] });
+      };
+
+      const renderCountdown = () => {
+        if (settled) return;
+        if (!hasSafeTtl) {
+          countdown.textContent = "Automatic Start is unavailable because the GPU reservation expires too soon. Choose an action manually.";
+          return;
+        }
+        const seconds = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+        countdown.textContent = relocation
+          ? `Migrating and starting automatically in ${seconds} seconds unless you choose another action.`
+          : `Starting automatically in ${seconds} seconds unless you choose another action.`;
+        if (seconds > 0) return;
+        if (!dialog.open || !activeWorkflowMatches() || Date.now() + reservationSafetyMarginMs >= expiresAt) {
+          finish("pause");
+          return;
+        }
+        finish("start");
+      };
+
+      function onSubmit(event) {
+        event.preventDefault();
+        finish(String(event.submitter && event.submitter.value || "pause"));
+      }
+
+      function onCancel(event) {
+        event.preventDefault();
+        finish("pause");
+      }
+
+      const onClose = () => {
+        finish(String(dialog.returnValue || "pause"));
+      };
+      form.addEventListener("submit", onSubmit);
+      dialog.addEventListener("cancel", onCancel);
       dialog.addEventListener("close", onClose);
       dialog.showModal();
+      renderCountdown();
+      if (hasSafeTtl) timerId = window.setInterval(renderCountdown, 250);
+      document.addEventListener("visibilitychange", renderCountdown);
     });
   }
 
