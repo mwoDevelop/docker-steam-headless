@@ -13,6 +13,34 @@
   const minecraftManagementSessionResponse = "vm-control-minecraft-session-response";
   const adminSessionRequest = "vm-control-admin-session-request";
   const adminSessionResponse = "vm-control-admin-session-response";
+  const sessionSyncRequest = "vm-control-session-sync-request";
+  const sessionSyncResponse = "vm-control-session-sync-response";
+  const sessionSyncChannel = typeof BroadcastChannel === "function"
+    ? new BroadcastChannel("vm-control-session-sync")
+    : null;
+
+  function currentSharedSession() {
+    const token = window.sessionStorage.getItem(storageKeys.sessionToken) || "";
+    const expiresAt = Math.max(
+      0,
+      Number.parseInt(window.sessionStorage.getItem(storageKeys.sessionTokenExpiresAt) || "0", 10) || 0,
+    );
+    if (!token || (expiresAt && expiresAt <= Date.now())) return null;
+    return { token, expiresAt };
+  }
+
+  if (sessionSyncChannel) {
+    sessionSyncChannel.addEventListener("message", (event) => {
+      if (event.data?.type !== sessionSyncRequest || !event.data.requestId) return;
+      const session = currentSharedSession();
+      if (!session) return;
+      sessionSyncChannel.postMessage({
+        type: sessionSyncResponse,
+        requestId: String(event.data.requestId),
+        ...session,
+      });
+    });
+  }
 
   window.addEventListener("message", (event) => {
     if (event.origin !== window.location.origin) return;
@@ -22,11 +50,11 @@
         ? adminSessionResponse
         : "";
     if (!responseType) return;
-    const token = window.sessionStorage.getItem(storageKeys.sessionToken) || "";
-    if (!token || !event.source) return;
+    const session = currentSharedSession();
+    if (!session || !event.source) return;
     event.source.postMessage({
       type: responseType,
-      token,
+      ...session,
     }, event.origin);
   });
   const SUNSHINE_POLL_INTERVAL_MS = 3000;
@@ -423,7 +451,9 @@
         if (event.origin !== window.location.origin || event.data?.type !== adminSessionResponse) return;
         const token = String(event.data?.token || "");
         if (!token) return;
-        storeSessionToken(token);
+        const expiresAt = Number(event.data?.expiresAt || 0);
+        const expiresInSeconds = expiresAt > Date.now() ? (expiresAt - Date.now()) / 1000 : undefined;
+        storeSessionToken(token, expiresInSeconds);
         finish(true);
       };
       window.addEventListener("message", receiveSession);

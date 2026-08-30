@@ -3,10 +3,16 @@
   const storageKeys = {
     config: "vm-control-cloudrun-config",
     sessionToken: "vm-control-google-session-token",
+    sessionTokenExpiresAt: "vm-control-google-session-token-expires-at",
     history: "vm-control-session-history",
   };
   const adminSessionRequest = "vm-control-admin-session-request";
   const adminSessionResponse = "vm-control-admin-session-response";
+  const sessionSyncRequest = "vm-control-session-sync-request";
+  const sessionSyncResponse = "vm-control-session-sync-response";
+  const sessionSyncChannel = typeof BroadcastChannel === "function"
+    ? new BroadcastChannel("vm-control-session-sync")
+    : null;
   const ADMIN_REFRESH_INTERVAL_MS = 15_000;
 
   const elements = {
@@ -81,6 +87,7 @@
     googleInitializedFor: "",
     googleTokenClient: null,
     token: "",
+    tokenExpiresAt: 0,
     user: null,
     viewer: null,
     accessDenied: false,
@@ -101,11 +108,22 @@
   };
   let automaticRefreshTimer = 0;
   let adminLoaderDeferredTimer = 0;
+  let sessionSyncRequestId = "";
 
   function loadConfig() {
     const saved = JSON.parse(window.localStorage.getItem(storageKeys.config) || "{}");
     state.backendUrl = saved.backendUrl || defaultBackendUrl;
     state.token = window.sessionStorage.getItem(storageKeys.sessionToken) || "";
+    state.tokenExpiresAt = Math.max(
+      0,
+      Number.parseInt(window.sessionStorage.getItem(storageKeys.sessionTokenExpiresAt) || "0", 10) || 0,
+    );
+    if (state.token && state.tokenExpiresAt && state.tokenExpiresAt <= Date.now()) {
+      state.token = "";
+      state.tokenExpiresAt = 0;
+      window.sessionStorage.removeItem(storageKeys.sessionToken);
+      window.sessionStorage.removeItem(storageKeys.sessionTokenExpiresAt);
+    }
     elements.backendUrl.value = state.backendUrl;
     updateUi();
   }
@@ -763,21 +781,30 @@
     state.googleInitializedFor = clientId;
   }
 
-  function storeSessionToken(token) {
+  function storeSessionToken(token, expiresAt) {
     state.token = token || "";
     if (state.token) {
       window.sessionStorage.setItem(storageKeys.sessionToken, state.token);
+      const parsedExpiresAt = Math.max(0, Number(expiresAt) || 0);
+      state.tokenExpiresAt = parsedExpiresAt > Date.now() ? parsedExpiresAt : 0;
+      if (state.tokenExpiresAt) {
+        window.sessionStorage.setItem(storageKeys.sessionTokenExpiresAt, String(state.tokenExpiresAt));
+      } else {
+        window.sessionStorage.removeItem(storageKeys.sessionTokenExpiresAt);
+      }
     } else {
       window.sessionStorage.removeItem(storageKeys.sessionToken);
+      window.sessionStorage.removeItem(storageKeys.sessionTokenExpiresAt);
+      state.tokenExpiresAt = 0;
     }
     window.dispatchEvent(new CustomEvent("vm-control:session-changed"));
   }
 
-  window.addEventListener("message", async (event) => {
-    if (event.origin !== window.location.origin || event.data?.type !== adminSessionResponse) return;
-    const token = String(event.data.token || "");
-    if (!token) return;
-    storeSessionToken(token);
+  async function acceptSharedSession(data) {
+    const token = String(data?.token || "");
+    const expiresAt = Math.max(0, Number(data?.expiresAt) || 0);
+    if (!token || (expiresAt && expiresAt <= Date.now())) return;
+    storeSessionToken(token, expiresAt);
     if (!state.backendConfig) return;
     try {
       setBusy(true);
@@ -787,6 +814,35 @@
     } finally {
       setBusy(false);
     }
+  }
+
+  function requestSessionFromOtherTabs() {
+    if (state.token || !sessionSyncChannel) return;
+    sessionSyncRequestId = window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`;
+    sessionSyncChannel.postMessage({
+      type: sessionSyncRequest,
+      requestId: sessionSyncRequestId,
+    });
+    window.setTimeout(() => {
+      sessionSyncRequestId = "";
+    }, 1500);
+  }
+
+  if (sessionSyncChannel) {
+    sessionSyncChannel.addEventListener("message", (event) => {
+      if (
+        event.data?.type !== sessionSyncResponse
+        || !sessionSyncRequestId
+        || String(event.data.requestId || "") !== sessionSyncRequestId
+      ) return;
+      sessionSyncRequestId = "";
+      void acceptSharedSession(event.data);
+    });
+  }
+
+  window.addEventListener("message", (event) => {
+    if (event.origin !== window.location.origin || event.data?.type !== adminSessionResponse) return;
+    void acceptSharedSession(event.data);
   });
 
   function clearSession(options) {
@@ -824,7 +880,11 @@
         throw new Error(response.error_description || response.error);
       }
       setBusy(true);
-      storeSessionToken(response.access_token || "");
+      const expiresInSeconds = Math.max(0, Number(response.expires_in) || 0);
+      storeSessionToken(
+        response.access_token || "",
+        expiresInSeconds ? Date.now() + (expiresInSeconds * 1000) : 0,
+      );
       await verifyAdminSession();
     } catch (error) {
       if (!state.accessDenied) {
@@ -1763,6 +1823,7 @@
     return;
   }
   loadConfig();
+  requestSessionFromOtherTabs();
   setBusy(false);
   if (state.backendUrl) {
     setBusy(true);

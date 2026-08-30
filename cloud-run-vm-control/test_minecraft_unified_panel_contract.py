@@ -32,7 +32,7 @@ class MinecraftUnifiedPanelContractTest(unittest.TestCase):
         self.assertIn("state.softwareMinecraftSelection = minecraftServerId.trim().toLowerCase();", self.javascript)
         self.assertIn('command === "remove-minecraft"', self.javascript)
         self.assertIn('state.softwareMinecraftSelection = "";', self.javascript)
-        self.assertIn("admin.js?v=unified-minecraft-panel-20260827", self.html)
+        self.assertRegex(self.html, r'admin\.js\?v=[a-z0-9-]+')
 
 
 if __name__ == "__main__":

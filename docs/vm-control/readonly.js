@@ -7,6 +7,11 @@
   };
   const adminSessionRequest = "vm-control-admin-session-request";
   const adminSessionResponse = "vm-control-admin-session-response";
+  const sessionSyncRequest = "vm-control-session-sync-request";
+  const sessionSyncResponse = "vm-control-session-sync-response";
+  const sessionSyncChannel = typeof BroadcastChannel === "function"
+    ? new BroadcastChannel("vm-control-session-sync")
+    : null;
 
   const elements = {
     appShell: document.querySelector("#app-shell"),
@@ -41,13 +46,32 @@
     isBusy: false,
   };
 
+  function currentSharedSession() {
+    if (!state.token || (state.tokenExpiresAt && state.tokenExpiresAt <= Date.now())) return null;
+    return { token: state.token, expiresAt: state.tokenExpiresAt };
+  }
+
+  if (sessionSyncChannel) {
+    sessionSyncChannel.addEventListener("message", (event) => {
+      if (event.data?.type !== sessionSyncRequest || !event.data.requestId) return;
+      const session = currentSharedSession();
+      if (!session) return;
+      sessionSyncChannel.postMessage({
+        type: sessionSyncResponse,
+        requestId: String(event.data.requestId),
+        ...session,
+      });
+    });
+  }
+
   window.addEventListener("message", (event) => {
     if (event.origin !== window.location.origin || event.data?.type !== adminSessionRequest) return;
+    const session = currentSharedSession();
+    if (!session) return;
     event.source?.postMessage(
       {
         type: adminSessionResponse,
-        token: state.token,
-        expiresAt: state.tokenExpiresAt,
+        ...session,
       },
       event.origin,
     );

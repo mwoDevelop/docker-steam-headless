@@ -31,7 +31,7 @@ class ReservedGpuModalContractTests(unittest.TestCase):
         for label in ("Reserved GPU", "GPU type", "Zone", "Reserved until", "Reservation"):
             self.assertIn(label, renderer)
         self.assertIn('class="reserved-gpu-card"', renderer)
-        self.assertIn("reserved-auto-stop-20260828", self.html)
+        self.assertRegex(self.html, r'app\.js\?v=[a-z0-9-]+')
 
     def test_held_gpu_target_is_applied_after_zone_options_are_rendered(self):
         selector = self.javascript.split("function applyHeldGpuTargetSelection(target) {", 1)[1].split(
