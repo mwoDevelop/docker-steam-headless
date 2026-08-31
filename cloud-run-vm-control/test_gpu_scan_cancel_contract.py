@@ -16,6 +16,11 @@ class GpuScanCancelContractTests(unittest.TestCase):
         self.assertIn("Start selected VM using reserved GPU capacity", self.html)
         self.assertNotIn("Start selected VM after first available GPU", self.html)
 
+    def test_reserved_gpu_start_defaults_to_checked_for_an_eligible_selected_vm(self):
+        self.assertIn('id="start-selected-first-gpu" type="checkbox" checked disabled', self.html)
+        self.assertIn("elements.startSelectedFirstGpu.checked = true", self.javascript)
+        self.assertIn('String(instance.status || "").toUpperCase() === "TERMINATED"', self.javascript)
+
     def test_cancel_aborts_active_request_and_clears_current_target(self):
         body = self.javascript.split("function cancelGpuAvailabilityScan() {", 1)[1].split(
             "\n  async function ", 1

@@ -1347,7 +1347,6 @@
     if (elements.startSelectedFirstGpu) {
       const eligible = Boolean(startSource && String(startSource.status || "").toUpperCase() === "TERMINATED" && Number(startSource.hardware && startSource.hardware.gpuCount || 0) > 0);
       elements.startSelectedFirstGpu.disabled = state.isBusy || !state.user || running || !eligible;
-      if (!eligible) elements.startSelectedFirstGpu.checked = false;
     }
     if (elements.gpuScanProfiles) {
       elements.gpuScanProfiles.querySelectorAll("input, [data-hardware-select]").forEach((input) => {
@@ -3084,7 +3083,10 @@
     }
     if (!automatic) {
       state.startScanSourceInstanceName = String(instance.name || "");
-      if (elements.startSelectedFirstGpu) elements.startSelectedFirstGpu.checked = false;
+      if (elements.startSelectedFirstGpu) {
+        elements.startSelectedFirstGpu.checked = String(instance.status || "").toUpperCase() === "TERMINATED"
+          && Number(instance.hardware && instance.hardware.gpuCount || 0) > 0;
+      }
     }
     if (!state.hardwarePayload || !getHardwareProfiles().length) {
       await refreshHardwareOptions({ silent: false });
@@ -4964,7 +4966,7 @@
   }
 
   if (elements.startSelectedFirstGpu) {
-    elements.startSelectedFirstGpu.checked = false;
+    elements.startSelectedFirstGpu.checked = true;
     elements.startSelectedFirstGpu.addEventListener("change", () => {
       if (elements.startSelectedFirstGpu.checked && !selectedStartScanSource()) {
         elements.startSelectedFirstGpu.checked = false;
