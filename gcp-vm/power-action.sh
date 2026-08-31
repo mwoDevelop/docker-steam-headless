@@ -1250,8 +1250,8 @@ install_prism() {
 }
 
 install_steam() {
-  [[ -x /home/default/.steam/steam/ubuntu12_32/steam ]] || fail "Native Steam client executable is not ready."
-  [[ -s /home/default/.steam/steam/ubuntu12_32/steamui.so ]] || fail "Native Steam client download is incomplete."
+  [[ -x /home/default/.steam/ubuntu12_32/steam ]] || fail "Native Steam client executable is not ready."
+  [[ -s /home/default/.steam/ubuntu12_32/steamui.so ]] || fail "Native Steam client download is incomplete."
   if command -v flatpak >/dev/null 2>&1 && sudo -u default env HOME=/home/default flatpak --user info com.valvesoftware.Steam >/dev/null 2>&1; then
     sudo -u default env HOME=/home/default flatpak --user uninstall --noninteractive -y com.valvesoftware.Steam || true
   fi

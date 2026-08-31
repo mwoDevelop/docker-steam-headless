@@ -234,6 +234,7 @@ set -euo pipefail
 
 home_dir=/home/default
 steam_dir="$home_dir/.steam/steam"
+steam_binary_dir="$home_dir/.steam/ubuntu12_32"
 log_dir="$home_dir/.cache/log"
 log_file="$log_dir/steam-bootstrap.log"
 lock_file="$home_dir/.cache/steam-native-bootstrap.lock"
@@ -246,7 +247,7 @@ exec 9>"$lock_file"
 flock -w 30 9
 
 steam_ready() {
-  [[ -x "$steam_dir/ubuntu12_32/steam" && -s "$steam_dir/ubuntu12_32/steamui.so" ]]
+  [[ -x "$steam_binary_dir/steam" && -s "$steam_binary_dir/steamui.so" ]]
 }
 
 detect_steam_version() {

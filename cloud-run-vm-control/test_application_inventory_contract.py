@@ -38,6 +38,8 @@ class ApplicationInventoryContractTests(unittest.TestCase):
         with open(os.path.join(root, "gcp-vm", "power-action.sh"), encoding="utf-8") as source:
             script = source.read()
         self.assertIn('update_sunshine_apps install Steam "/usr/games/steam -silent"', script)
+        self.assertIn("/home/default/.steam/ubuntu12_32/steam", script)
+        self.assertNotIn("/home/default/.steam/steam/ubuntu12_32/steam", script)
         self.assertNotIn("install_flatpak_application com.valvesoftware.Steam", script)
 
         with open(os.path.join(root, "gcp-vm", "startup.sh"), encoding="utf-8") as source:
