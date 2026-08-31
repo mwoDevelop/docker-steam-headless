@@ -21,6 +21,10 @@ class GpuScanCancelContractTests(unittest.TestCase):
         self.assertIn("elements.startSelectedFirstGpu.checked = true", self.javascript)
         self.assertIn('String(instance.status || "").toUpperCase() === "TERMINATED"', self.javascript)
 
+    def test_automatic_reservation_is_disabled_for_cpu(self):
+        self.assertIn('const cpuSelected = document.querySelector("#hardware-select")?.value === "cpu"', self.javascript)
+        self.assertIn("state.isBusy || !state.user || running || cpuSelected", self.javascript)
+
     def test_cancel_aborts_active_request_and_clears_current_target(self):
         body = self.javascript.split("function cancelGpuAvailabilityScan() {", 1)[1].split(
             "\n  async function ", 1

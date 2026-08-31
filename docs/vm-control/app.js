@@ -1341,7 +1341,8 @@
       elements.gpuScanScope.disabled = state.isBusy || !state.user || running;
     }
     if (elements.autoCreateFirstGpu) {
-      elements.autoCreateFirstGpu.disabled = state.isBusy || !state.user || running;
+      const cpuSelected = document.querySelector("#hardware-select")?.value === "cpu";
+      elements.autoCreateFirstGpu.disabled = state.isBusy || !state.user || running || cpuSelected;
     }
     const startSource = selectedStartScanSource();
     if (elements.startSelectedFirstGpu) {
