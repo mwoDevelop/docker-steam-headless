@@ -171,7 +171,18 @@ Jesli problem powroci, sprawdz, czy /etc/wsl.conf nie zawiera [interop] enabled=
     $WindowsPwsh = (Get-Command $WindowsPwshCommand -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Source)
 
     if (-not $WindowsPwsh) {
-        Write-Error "Wykryto WSL, ale nie znaleziono $WindowsPwshCommand po stronie Windows. Zainstaluj PowerShell 7 na Windows albo uruchom skrypt przez powershell.exe."
+        $WindowsPowerShellCandidates = @(
+            '/mnt/c/Program Files/PowerShell/7/pwsh.exe',
+            '/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe'
+        )
+
+        $WindowsPwsh = $WindowsPowerShellCandidates |
+            Where-Object { Test-Path -LiteralPath $_ } |
+            Select-Object -First 1
+    }
+
+    if (-not $WindowsPwsh) {
+        Write-Error "Wykryto WSL, ale nie znaleziono po stronie Windows ani pwsh.exe, ani powershell.exe."
         exit 1
     }
 
@@ -184,7 +195,8 @@ Jesli problem powroci, sprawdz, czy /etc/wsl.conf nie zawiera [interop] enabled=
 
     $ForwardArguments = Get-ForwardArgumentsForWindows -AllArguments $args
 
-    Write-Host "[INFO] Wykryto uruchomienie w WSL przez $LinuxPwshCommand. Przekierowuje wykonanie do Windows $WindowsPwshCommand..."
+    $WindowsPowerShellName = Split-Path -Leaf $WindowsPwsh
+    Write-Host "[INFO] Wykryto uruchomienie w WSL przez $LinuxPwshCommand. Przekierowuje wykonanie do Windows $WindowsPowerShellName..."
     & $WindowsPwsh -NoProfile -ExecutionPolicy Bypass -File $WindowsScriptPath @ForwardArguments
     exit $LASTEXITCODE
 }
