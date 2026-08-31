@@ -15,6 +15,8 @@ POWER_ACTION_METADATA_KEY="vm-pending-power-action"
 POWER_ACTION_STATUS_METADATA_KEY="vm-power-action-status"
 SUNSHINE_STATUS_METADATA_KEY="vm-sunshine-status"
 SUNSHINE_STATUS_DETAIL_METADATA_KEY="vm-sunshine-status-detail"
+STEAM_STATUS_METADATA_KEY="vm-steam-status"
+STEAM_STATUS_DETAIL_METADATA_KEY="vm-steam-status-detail"
 MINECRAFT_STATUS_METADATA_KEY="vm-minecraft-status"
 MINECRAFT_STATUS_DETAIL_METADATA_KEY="vm-minecraft-status-detail"
 MINECRAFT_VERSION_METADATA_KEY="vm-minecraft-version"
@@ -259,6 +261,23 @@ set_sunshine_status() {
     --arg detail_value "$detail" \
     '{($state_key): $state_value, ($detail_key): $detail_value}')"
   set_instance_metadata_values "$updates"
+}
+
+wait_for_native_steam_ready() {
+  local state
+  for _ in $(seq 1 360); do
+    state="$(metadata_get "$STEAM_STATUS_METADATA_KEY" | tr -d '\r' || true)"
+    case "$state" in
+      ready|login_required|disabled)
+        return 0
+        ;;
+      error)
+        return 1
+        ;;
+    esac
+    sleep 2
+  done
+  return 1
 }
 
 record_sunshine_version() {
@@ -1231,22 +1250,19 @@ install_prism() {
 }
 
 install_steam() {
-  install -d -m 0755 -o default -g default /home/default /home/default/.local /home/default/.var /home/default/.config
-  if ! command -v flatpak >/dev/null 2>&1; then
-    apt-get update -y
-    apt-get install -y flatpak
+  [[ -x /home/default/.steam/steam/ubuntu12_32/steam ]] || fail "Native Steam client executable is not ready."
+  [[ -s /home/default/.steam/steam/ubuntu12_32/steamui.so ]] || fail "Native Steam client download is incomplete."
+  if command -v flatpak >/dev/null 2>&1 && sudo -u default env HOME=/home/default flatpak --user info com.valvesoftware.Steam >/dev/null 2>&1; then
+    sudo -u default env HOME=/home/default flatpak --user uninstall --noninteractive -y com.valvesoftware.Steam || true
   fi
-  sudo -u default env HOME=/home/default flatpak --user remote-add --if-not-exists flathub \
-    https://flathub.org/repo/flathub.flatpakrepo || true
-  install_flatpak_application com.valvesoftware.Steam
-  update_sunshine_apps install Steam "/usr/bin/flatpak run com.valvesoftware.Steam"
+  update_sunshine_apps install Steam "/usr/games/steam -silent"
 }
 
 uninstall_steam() {
-  if command -v flatpak >/dev/null 2>&1; then
-    sudo -u default env HOME=/home/default flatpak --user uninstall -y com.valvesoftware.Steam || true
+  if command -v flatpak >/dev/null 2>&1 && sudo -u default env HOME=/home/default flatpak --user info com.valvesoftware.Steam >/dev/null 2>&1; then
+    sudo -u default env HOME=/home/default flatpak --user uninstall --noninteractive -y com.valvesoftware.Steam || true
   fi
-  update_sunshine_apps uninstall Steam ""
+  update_sunshine_apps install Steam "/usr/games/steam -silent"
 }
 
 uninstall_prism() {
@@ -1351,6 +1367,14 @@ run_post_create_applications() {
   if ! wait_for_steam_headless_container; then
     set_instance_metadata_value "$POST_CREATE_APPLICATIONS_RESULT_METADATA_KEY" "failed:steam-headless-not-ready" || true
     set_sunshine_status "error" "Selected application installation could not start because Steam Headless was not ready."
+    set_power_action_status "$action" "$token" "failed" ""
+    return 1
+  fi
+
+  if ! wait_for_native_steam_ready; then
+    set_instance_metadata_value "$POST_CREATE_APPLICATIONS_RESULT_METADATA_KEY" "failed:steam-core-not-ready" || true
+    set_instance_metadata_value "$STEAM_STATUS_METADATA_KEY" "error" || true
+    set_instance_metadata_value "$STEAM_STATUS_DETAIL_METADATA_KEY" "Selected application installation could not start because the native Steam client was not ready." || true
     set_power_action_status "$action" "$token" "failed" ""
     return 1
   fi

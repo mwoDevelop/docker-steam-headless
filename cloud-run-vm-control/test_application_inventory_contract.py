@@ -16,7 +16,7 @@ class ApplicationInventoryContractTests(unittest.TestCase):
         with patch.object(vm_control, "metadata_value", side_effect=lambda _instance, key: values.get(key, "")):
             self.assertEqual(
                 vm_control.installed_application_ids_from_instance({}),
-                ["steam", "chrome"],
+                ["chrome"],
             )
 
     def test_completed_post_create_list_is_backward_compatible(self):
@@ -28,8 +28,17 @@ class ApplicationInventoryContractTests(unittest.TestCase):
         with patch.object(vm_control, "metadata_value", side_effect=lambda _instance, key: values.get(key, "")):
             self.assertEqual(
                 vm_control.installed_application_ids_from_instance({}),
-                ["steam", "prism", "chrome"],
+                ["prism", "chrome"],
             )
+
+    def test_steam_is_a_native_core_component_not_an_optional_flatpak(self):
+        self.assertNotIn("steam", vm_control.APPLICATION_IDS)
+        self.assertFalse(any(item.get("id") == "steam" for item in vm_control.APPLICATION_CATALOG))
+        root = os.path.dirname(os.path.dirname(__file__))
+        with open(os.path.join(root, "gcp-vm", "power-action.sh"), encoding="utf-8") as source:
+            script = source.read()
+        self.assertIn('update_sunshine_apps install Steam "/usr/games/steam -silent"', script)
+        self.assertNotIn("install_flatpak_application com.valvesoftware.Steam", script)
 
     def test_vm_agent_restores_parent_status_and_tracks_inventory(self):
         root = os.path.dirname(os.path.dirname(__file__))

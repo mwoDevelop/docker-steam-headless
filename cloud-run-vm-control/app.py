@@ -234,6 +234,10 @@ INSTALLED_APPLICATION_IDS_METADATA_KEY = "vm-installed-application-ids"
 POST_CREATE_APPLICATION_IDS_METADATA_KEY = "vm-post-create-application-ids"
 POST_CREATE_APPLICATIONS_RESULT_METADATA_KEY = "vm-post-create-applications-result"
 POST_CREATE_APPLICATIONS_ACTION = "post-create-applications"
+STEAM_STATUS_METADATA_KEY = "vm-steam-status"
+STEAM_STATUS_DETAIL_METADATA_KEY = "vm-steam-status-detail"
+STEAM_VERSION_METADATA_KEY = "vm-steam-version"
+STEAM_ACCOUNT_METADATA_KEY = "vm-steam-account"
 BACKUPS_JSON_METADATA_KEY = "vm-backups-json"
 DATA_DISK_STATUS_METADATA_KEY = "vm-data-disk-status"
 DATA_DISK_DETAIL_METADATA_KEY = "vm-data-disk-detail"
@@ -453,11 +457,6 @@ def minecraft_firewall_allowed(ports: list[int]) -> list[dict[str, Any]]:
 
 FIREWALL_MINECRAFT_ALLOWED: Final = minecraft_firewall_allowed([int(CONFIG["minecraft_port"])])
 APPLICATION_CATALOG: Final = [
-    {
-        "id": "steam",
-        "label": "Steam",
-        "description": "Steam desktop client installed as a user Flatpak and added to Sunshine applications.",
-    },
     {
         "id": "prism",
         "label": "PrismLauncher",
@@ -4100,6 +4099,7 @@ def build_instance_picker_entry(instance: dict[str, Any]) -> dict[str, Any]:
         "createdAt": str(instance.get("creationTimestamp", "") or ""),
         "lastStartTimestamp": str(instance.get("lastStartTimestamp", "") or ""),
         "hardware": hardware,
+        "steamStatus": build_steam_status(instance),
         "sunshineStatus": build_sunshine_status(instance),
         "minecraftStatus": build_minecraft_status(instance),
     }
@@ -6065,6 +6065,12 @@ def start_metadata_updates(
             if selected_gpu_count() > 0
             else "GPU disabled for this VM; Sunshine stack was not started."
         ),
+        STEAM_STATUS_METADATA_KEY: "starting" if selected_gpu_count() > 0 else "disabled",
+        STEAM_STATUS_DETAIL_METADATA_KEY: (
+            "VM booting. Waiting for the native Steam client."
+            if selected_gpu_count() > 0
+            else "GPU disabled for this VM; the Steam desktop stack was not started."
+        ),
     }
     if post_create_application_ids is not None:
         updates.update(
@@ -6679,6 +6685,18 @@ def build_instance_metadata_items(
                 else "GPU disabled for this VM; Sunshine stack was not started."
             ),
         },
+        {
+            "key": STEAM_STATUS_METADATA_KEY,
+            "value": "starting" if selected_gpu_count() > 0 else "disabled",
+        },
+        {
+            "key": STEAM_STATUS_DETAIL_METADATA_KEY,
+            "value": (
+                "VM booting. Waiting for the native Steam client."
+                if selected_gpu_count() > 0
+                else "GPU disabled for this VM; the Steam desktop stack was not started."
+            ),
+        },
         {"key": DATA_DISK_STATUS_METADATA_KEY, "value": "pending"},
         {"key": DATA_DISK_DETAIL_METADATA_KEY, "value": "Waiting for shared data disk mount."},
     ]
@@ -7034,6 +7052,49 @@ def build_sunshine_status(instance: dict[str, Any] | None) -> dict[str, str]:
         "label": labels.get(state, state.title()),
         "detail": detail,
         "version": version,
+    }
+
+
+def build_steam_status(instance: dict[str, Any] | None) -> dict[str, str]:
+    version = metadata_value(instance, STEAM_VERSION_METADATA_KEY).strip() if instance else ""
+    account = metadata_value(instance, STEAM_ACCOUNT_METADATA_KEY).strip() if instance else ""
+    if instance is None:
+        return {
+            "state": "not_created",
+            "label": "VM not created",
+            "detail": "",
+            "version": version,
+            "account": account,
+        }
+
+    vm_status = str(instance.get("status", "UNKNOWN")).upper()
+    if vm_status != "RUNNING":
+        return {
+            "state": "stopped",
+            "label": "VM not running",
+            "detail": "",
+            "version": version,
+            "account": account,
+        }
+
+    state = metadata_value(instance, STEAM_STATUS_METADATA_KEY).strip().lower()
+    if not state:
+        state = "disabled" if is_gpu_disabled_for_instance(instance) else "starting"
+    detail = metadata_value(instance, STEAM_STATUS_DETAIL_METADATA_KEY).strip()
+    labels = {
+        "starting": "Starting",
+        "downloading": "Downloading client",
+        "ready": "Ready",
+        "login_required": "Ready - login required",
+        "disabled": "Disabled",
+        "error": "Error",
+    }
+    return {
+        "state": state,
+        "label": labels.get(state, state.replace("_", " ").title()),
+        "detail": detail,
+        "version": version,
+        "account": account,
     }
 
 
@@ -8074,13 +8135,18 @@ def installed_application_ids_from_instance(instance: dict[str, Any] | None) -> 
     ]
     if installed:
         return list(dict.fromkeys(installed))
-    requested = [
+    raw_requested = [
         application_id
         for application_id in metadata_value(instance, POST_CREATE_APPLICATION_IDS_METADATA_KEY).split(",")
+        if application_id
+    ]
+    requested = [
+        application_id
+        for application_id in raw_requested
         if application_id in APPLICATION_IDS
     ]
     result = metadata_value(instance, POST_CREATE_APPLICATIONS_RESULT_METADATA_KEY).strip()
-    if requested and result == f"completed:{len(requested)}/{len(requested)}":
+    if requested and result == f"completed:{len(raw_requested)}/{len(raw_requested)}":
         return list(dict.fromkeys(requested))
     return []
 
@@ -8163,6 +8229,7 @@ def build_status_payload(
                 "password": "",
             },
             "sunshineStatus": build_sunshine_status(None),
+            "steamStatus": build_steam_status(None),
             "minecraftStatus": build_minecraft_status(None),
             "minecraftServers": [],
               "minecraftManagement": build_minecraft_management_payload(None, user),
@@ -8235,6 +8302,7 @@ def build_status_payload(
         "autoStop": build_auto_stop_status(instance),
         "sunshineCredentials": normalize_sunshine_credentials_for_response(credentials),
         "sunshineStatus": build_sunshine_status(instance),
+        "steamStatus": build_steam_status(instance),
         "minecraftStatus": build_minecraft_status(instance, active_minecraft_server),
         "minecraftServers": minecraft_servers,
           "minecraftManagement": build_minecraft_management_payload(instance, user),

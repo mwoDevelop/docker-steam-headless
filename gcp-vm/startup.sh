@@ -179,6 +179,13 @@ set_sunshine_status() {
   set_instance_metadata_value vm-sunshine-status-detail "$detail"
 }
 
+set_steam_status() {
+  local state="$1"
+  local detail="${2-}"
+  set_instance_metadata_value vm-steam-status "$state"
+  set_instance_metadata_value vm-steam-status-detail "$detail"
+}
+
 complete_pending_restart() {
   local action_status token sunshine_state
   action_status="$(metadata_get vm-power-action-status || true)"
@@ -207,6 +214,107 @@ record_sunshine_version() {
   raw_version="$(docker exec "$container_id" sunshine --version 2>/dev/null | head -n 1 || true)"
   version="$(printf '%s\n' "$raw_version" | sed -nE 's/.*Sunshine version:[[:space:]]*([0-9]+(\.[0-9]+){1,3}([+-][0-9A-Za-z.-]+)?).*/\1/p' | head -n 1 || true)"
   [[ -n "$version" ]] && set_instance_metadata_value vm-sunshine-version "$version"
+}
+
+ensure_native_steam_ready() {
+  local container_id
+  local output
+  local version=""
+  local account=""
+
+  container_id="$(docker compose "${COMPOSE_FILES[@]}" ps -q 2>/dev/null | head -n1)"
+  if [[ -z "$container_id" ]]; then
+    set_steam_status error "Steam container is not running."
+    return 1
+  fi
+
+  set_steam_status downloading "Downloading and preparing the native Steam client."
+  if ! output="$(docker exec --user root "$container_id" bash -s <<'STEAM_BOOTSTRAP'
+set -euo pipefail
+
+home_dir=/home/default
+steam_dir="$home_dir/.steam/steam"
+log_dir="$home_dir/.cache/log"
+log_file="$log_dir/steam-bootstrap.log"
+lock_file="$home_dir/.cache/steam-native-bootstrap.lock"
+display_value="${DISPLAY:-:55}"
+xauthority_value="${XAUTHORITY:-$home_dir/.Xauthority}"
+
+mkdir -p "$log_dir" "$home_dir/.cache"
+chown -R default:default "$log_dir" "$home_dir/.cache"
+exec 9>"$lock_file"
+flock -w 30 9
+
+steam_ready() {
+  [[ -x "$steam_dir/ubuntu12_32/steam" && -s "$steam_dir/ubuntu12_32/steamui.so" ]]
+}
+
+if ! steam_ready; then
+  for _ in $(seq 1 120); do
+    if sudo -u default env HOME="$home_dir" USER=default DISPLAY="$display_value" XAUTHORITY="$xauthority_value" xset q >/dev/null 2>&1; then
+      break
+    fi
+    sleep 1
+  done
+
+  if ! pgrep -u default -f '(^|/)(steam|steamwebhelper)( |$)' >/dev/null 2>&1; then
+    sudo -u default env HOME="$home_dir" USER=default DISPLAY="$display_value" XAUTHORITY="$xauthority_value" \
+      sh -c 'nohup /usr/games/steam ${STEAM_ARGS:--silent} >>"$HOME/.cache/log/steam-bootstrap.log" 2>&1 &'
+  fi
+
+  for _ in $(seq 1 600); do
+    steam_ready && break
+    sleep 2
+  done
+fi
+
+if ! steam_ready; then
+  echo "Steam client download did not finish within 20 minutes." >&2
+  exit 1
+fi
+
+# Keep the old Flatpak profile as rollback data, but remove the duplicate package.
+if sudo -u default env HOME="$home_dir" flatpak --user info com.valvesoftware.Steam >/dev/null 2>&1; then
+  sudo -u default env HOME="$home_dir" flatpak --user uninstall --noninteractive -y com.valvesoftware.Steam >/dev/null 2>&1 || true
+fi
+
+apps_file="$home_dir/.config/sunshine/apps.json"
+if [[ -f "$apps_file" ]] && command -v jq >/dev/null 2>&1; then
+  tmp_file="$(mktemp)"
+  jq '
+    .apps = ((.apps // []) | map(select((.name // "") != "Steam"))) |
+    .apps += [{
+      "name": "Steam",
+      "detached": ["/usr/games/steam -silent"],
+      "exclude-global-prep-cmd": "true",
+      "prep-cmd": [
+        {"do": "", "undo": "pkill -15 steam || true"},
+        {"do": "", "undo": "pkill -15 steamwebhelper || true"}
+      ]
+    }]
+  ' "$apps_file" >"$tmp_file"
+  install -o default -g default -m 0644 "$tmp_file" "$apps_file"
+  rm -f "$tmp_file"
+fi
+
+version="$(sed -n 's/[^0-9]*\([0-9][0-9.]*\).*/\1/p' "$steam_dir/package/steam_client_ubuntu12.installed" 2>/dev/null | head -n1 || true)"
+account="$(sed -n 's/^[[:space:]]*"AccountName"[[:space:]]*"\([^"]*\)".*/\1/p' "$steam_dir/config/loginusers.vdf" 2>/dev/null | head -n1 || true)"
+printf 'VERSION=%s\nACCOUNT=%s\n' "$version" "$account"
+STEAM_BOOTSTRAP
+)"; then
+    set_steam_status error "Steam client download or configuration failed; remote access remains available."
+    return 1
+  fi
+
+  version="$(sed -n 's/^VERSION=//p' <<<"$output" | tail -n1)"
+  account="$(sed -n 's/^ACCOUNT=//p' <<<"$output" | tail -n1)"
+  set_instance_metadata_value vm-steam-version "$version"
+  set_instance_metadata_value vm-steam-account "$account"
+  if [[ -n "$account" ]]; then
+    set_steam_status ready "Native Steam client is ready with a remembered account."
+  else
+    set_steam_status login_required "Native Steam client is ready; complete the first interactive sign-in."
+  fi
 }
 
 sunshine_video_startup_error() {
@@ -994,6 +1102,7 @@ install_minecraft_management_script
 install_minecraft_management_service
 
 if ! gpu_enabled; then
+  set_steam_status "disabled" "Steam desktop client is disabled because the VM has no GPU desktop stack."
   mark_backup_ready
   log "Backup readiness marker created for CPU-only VM"
   schedule_auto_shutdown
@@ -1007,6 +1116,7 @@ if ! gpu_enabled; then
 fi
 
 docker compose "${COMPOSE_FILES[@]}" up -d --force-recreate
+set_steam_status "starting" "Steam container started; waiting for the desktop session."
 stabilize_vws_input_stack
 
 for _ in $(seq 1 60); do
@@ -1079,6 +1189,9 @@ if [ -f "$SUNSHINE_DIRECT_CONFIG" ]; then
     fi
     sleep 2
   done
+fi
+if ! ensure_native_steam_ready; then
+  log "Native Steam bootstrap did not complete; remote access remains available."
 fi
 mark_backup_ready
 log "Backup readiness marker created"

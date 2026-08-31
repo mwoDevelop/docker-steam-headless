@@ -2907,6 +2907,7 @@
         && hardwareId === selectedHardware
         && String(instance.zone) === selectedZoneValue;
       const status = String(instance.status || "UNKNOWN");
+      const steam = serviceStatusWithVersion(instance.steamStatus, payload, "steam");
       const sunshine = serviceStatusWithVersion(instance.sunshineStatus, payload, "sunshine");
       const minecraft = serviceStatusWithVersion(instance.minecraftStatus, payload, "minecraft");
       const ip = instance.externalIp ? ` · ${instance.externalIp}` : "";
@@ -2918,6 +2919,7 @@
         >
           <span class="instance-card-title">${escapeHtml(instance.name)} · ${escapeHtml(instance.zone)}</span>
           <span class="instance-card-meta">${escapeHtml(instanceHardwareLabel(instance))} · ${escapeHtml(hardware.machineType || "machine")} · ${escapeHtml(status)}${escapeHtml(ip)}</span>
+          <span class="instance-card-meta">Steam: ${escapeHtml(steam)}</span>
           <span class="instance-card-meta">Sunshine: ${escapeHtml(sunshine)}</span>
           <span class="instance-card-meta">Minecraft: ${escapeHtml(minecraft)}</span>
         </button>
@@ -2954,6 +2956,7 @@
           ...instance,
           status: currentStatus.status || instance.status,
           externalIp: currentStatus.externalIp || instance.externalIp,
+          steamStatus: currentStatus.steamStatus || instance.steamStatus,
           sunshineStatus: currentStatus.sunshineStatus || instance.sunshineStatus,
           minecraftStatus: currentStatus.minecraftStatus || instance.minecraftStatus,
         };
@@ -3380,13 +3383,17 @@
       return true;
     }
 
+    const steamState = String(payload.steamStatus && payload.steamStatus.state || "")
+      .trim()
+      .toLowerCase();
     const sunshineState = String(payload.sunshineStatus && payload.sunshineStatus.state || "")
       .trim()
       .toLowerCase();
     const minecraftState = String(payload.minecraftStatus && payload.minecraftStatus.state || "")
       .trim()
       .toLowerCase();
-    return ["starting", "stopping", "backup", "restore"].includes(sunshineState)
+    return ["starting", "downloading"].includes(steamState)
+      || ["starting", "stopping", "backup", "restore"].includes(sunshineState)
       || ["installing", "starting", "stopping", "backup", "restore", "removing"].includes(minecraftState);
   }
 
@@ -3416,10 +3423,10 @@
 
   function operationProgressDefinition(command) {
     if (command === "create") {
-      return ["Request accepted", "Provisioning Compute Engine VM", "Preparing data disk", "Starting platform services", "Verifying ready state"];
+      return ["Request accepted", "Provisioning Compute Engine VM", "Preparing data disk", "Starting platform services", "Preparing Steam client", "Verifying ready state"];
     }
     if (command === "start") {
-      return ["Request accepted", "Starting Compute Engine VM", "Preparing data disk", "Starting platform services", "Verifying ready state"];
+      return ["Request accepted", "Starting Compute Engine VM", "Preparing data disk", "Starting platform services", "Preparing Steam client", "Verifying ready state"];
     }
     if (command === "restart") {
       return ["Request accepted", "Restarting guest system", "Starting platform services", "Verifying ready state"];
@@ -3447,19 +3454,21 @@
     const vmState = String(payload.status || "NOT_FOUND").trim().toUpperCase();
     const instanceExists = payload.instanceExists !== false && vmState !== "NOT_FOUND";
     const dataDiskState = progressPayloadState(payload, ["persistence", "dataDisk", "state"]);
+    const steamState = progressPayloadState(payload, ["steamStatus", "state"]);
     const sunshineState = progressPayloadState(payload, ["sunshineStatus", "state"]);
     const minecraftState = progressPayloadState(payload, ["minecraftStatus", "state"]);
     const restoreState = progressPayloadState(payload, ["persistence", "restore", "state"]);
     const archiveState = progressPayloadState(payload, ["persistence", "gamesArchive", "state"]);
     const servicesReady = vmState === "RUNNING"
       && ["ready", "disabled"].includes(sunshineState.toLowerCase())
-      && !isTransitionalStatus(payload);
+      && !["installing", "starting", "stopping", "backup", "restore", "removing"].includes(minecraftState.toLowerCase());
 
     if (["create", "start"].includes(command)) {
       if (!instanceExists) return 1;
       if (vmState !== "RUNNING") return 1;
       if (!["ready", "disabled", "missing"].includes(dataDiskState.toLowerCase())) return 2;
       if (!servicesReady) return 3;
+      if (!["ready", "login_required", "disabled", "error"].includes(steamState.toLowerCase())) return 4;
       return steps.length - 1;
     }
     if (command === "restart") {
@@ -3511,6 +3520,7 @@
       ["VM", String(payload.status || "NOT_FOUND")],
       ["VM action", vmAction],
       ["Data disk", progressPayloadState(payload, ["persistence", "dataDisk", "label"], progressPayloadState(payload, ["persistence", "dataDisk", "state"]))],
+      ["Steam", progressPayloadState(payload, ["steamStatus", "label"], progressPayloadState(payload, ["steamStatus", "state"]))],
       ["Sunshine", progressPayloadState(payload, ["sunshineStatus", "label"], progressPayloadState(payload, ["sunshineStatus", "state"]))],
       ["Minecraft", progressPayloadState(payload, ["minecraftStatus", "label"], progressPayloadState(payload, ["minecraftStatus", "state"]))],
     ] : [["VM", "Waiting for status"], ["Service", "Waiting for status"]];
@@ -4290,6 +4300,9 @@
     }
     if (data.autoStopHours) {
       parts.push(autoStopSummary(data));
+    }
+    if (data.steamStatus && data.steamStatus.label) {
+      parts.push(`Steam: ${data.steamStatus.label}`);
     }
     if (data.sunshineStatus && data.sunshineStatus.label) {
       parts.push(`Sunshine: ${data.sunshineStatus.label}`);
