@@ -43,6 +43,7 @@ class ApplicationInventoryContractTests(unittest.TestCase):
         with open(os.path.join(root, "gcp-vm", "startup.sh"), encoding="utf-8") as source:
             startup_script = source.read()
         self.assertIn("detect_steam_version()", startup_script)
+        self.assertIn('docker exec -i --user root "$container_id" bash -s', startup_script)
         self.assertIn(".local/share/Steam/package/steam_client_ubuntu12.installed", startup_script)
         self.assertIn("logs/bootstrap_log.txt", startup_script)
         self.assertIn("awk '$0 !~ /^0([.]0)*$/'", startup_script)

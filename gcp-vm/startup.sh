@@ -229,7 +229,7 @@ ensure_native_steam_ready() {
   fi
 
   set_steam_status downloading "Downloading and preparing the native Steam client."
-  if ! output="$(docker exec --user root "$container_id" bash -s <<'STEAM_BOOTSTRAP'
+  if ! output="$(docker exec -i --user root "$container_id" bash -s <<'STEAM_BOOTSTRAP'
 set -euo pipefail
 
 home_dir=/home/default
