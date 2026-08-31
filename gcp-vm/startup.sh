@@ -321,7 +321,12 @@ if [[ -f "$apps_file" ]] && command -v jq >/dev/null 2>&1; then
   rm -f "$tmp_file"
 fi
 
-version="$(detect_steam_version)"
+version=""
+for _ in $(seq 1 30); do
+  version="$(detect_steam_version)"
+  [[ -n "$version" ]] && break
+  sleep 2
+done
 account="$(sed -n 's/^[[:space:]]*"AccountName"[[:space:]]*"\([^"]*\)".*/\1/p' "$steam_dir/config/loginusers.vdf" 2>/dev/null | head -n1 || true)"
 printf 'VERSION=%s\nACCOUNT=%s\n' "$version" "$account"
 STEAM_BOOTSTRAP
@@ -332,7 +337,15 @@ STEAM_BOOTSTRAP
 
   version="$(sed -n 's/^VERSION=//p' <<<"$output" | tail -n1)"
   account="$(sed -n 's/^ACCOUNT=//p' <<<"$output" | tail -n1)"
-  set_instance_metadata_value vm-steam-version "$version"
+  if [[ -n "$version" ]]; then
+    for _ in $(seq 1 5); do
+      set_instance_metadata_value vm-steam-version "$version"
+      [[ "$(metadata_get vm-steam-version || true)" == "$version" ]] && break
+      sleep 2
+    done
+  else
+    log "Steam client build could not be detected; preserving the previously published version."
+  fi
   set_instance_metadata_value vm-steam-account "$account"
   if [[ -n "$account" ]]; then
     set_steam_status ready "Native Steam client is ready with a remembered account."
