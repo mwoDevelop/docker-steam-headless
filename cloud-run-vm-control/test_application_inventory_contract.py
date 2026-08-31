@@ -40,6 +40,18 @@ class ApplicationInventoryContractTests(unittest.TestCase):
         self.assertIn('update_sunshine_apps install Steam "/usr/games/steam -silent"', script)
         self.assertNotIn("install_flatpak_application com.valvesoftware.Steam", script)
 
+        with open(os.path.join(root, "gcp-vm", "startup.sh"), encoding="utf-8") as source:
+            startup_script = source.read()
+        self.assertIn("detect_steam_version()", startup_script)
+        self.assertIn(".local/share/Steam/package/steam_client_ubuntu12.installed", startup_script)
+        self.assertIn("logs/bootstrap_log.txt", startup_script)
+
+    def test_gui_waits_for_delayed_sunshine_version_metadata(self):
+        root = os.path.dirname(os.path.dirname(__file__))
+        with open(os.path.join(root, "docs", "vm-control", "app.js"), encoding="utf-8") as source:
+            javascript = source.read()
+        self.assertIn("Date.now() + 120000", javascript)
+
     def test_vm_agent_restores_parent_status_and_tracks_inventory(self):
         root = os.path.dirname(os.path.dirname(__file__))
         with open(os.path.join(root, "gcp-vm", "power-action.sh"), encoding="utf-8") as source:

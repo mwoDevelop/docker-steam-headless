@@ -3567,7 +3567,7 @@
       const sunshineState = String(payload.sunshineStatus && payload.sunshineStatus.state || "").trim().toLowerCase();
       const sunshineVersion = String(payload.sunshineStatus && payload.sunshineStatus.version || "").trim();
       if (["create", "start"].includes(command) && sunshineState === "ready" && !sunshineVersion && !sunshineVersionGraceDeadline) {
-        sunshineVersionGraceDeadline = Math.min(deadline, Date.now() + 30000);
+        sunshineVersionGraceDeadline = Math.min(deadline, Date.now() + 120000);
         setCommandStatus("VM and Sunshine are ready. Waiting for Sunshine version detection...", "warning");
       }
     } while (

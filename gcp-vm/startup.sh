@@ -249,6 +249,29 @@ steam_ready() {
   [[ -x "$steam_dir/ubuntu12_32/steam" && -s "$steam_dir/ubuntu12_32/steamui.so" ]]
 }
 
+detect_steam_version() {
+  local candidate
+  local detected=""
+
+  for candidate in \
+    "$steam_dir/package/steam_client_ubuntu12.installed" \
+    "$steam_dir/package/steam_client_ubuntu12.manifest" \
+    "$home_dir/.local/share/Steam/package/steam_client_ubuntu12.installed" \
+    "$home_dir/.local/share/Steam/package/steam_client_ubuntu12.manifest" \
+    "$steam_dir/logs/bootstrap_log.txt" \
+    "$home_dir/.local/share/Steam/logs/bootstrap_log.txt" \
+    "$log_file"; do
+    [[ -s "$candidate" ]] || continue
+    detected="$(grep -Eio '(client[[:space:]_-]*version|version|build[[:space:]_-]*id|build)[^0-9]*[0-9][0-9.]*' "$candidate" 2>/dev/null \
+      | grep -Eo '[0-9][0-9.]*' \
+      | head -n1 || true)"
+    if [[ -z "$detected" && "$candidate" == *.installed ]]; then
+      detected="$(grep -Eo '[0-9]{6,}([.][0-9]+)*' "$candidate" 2>/dev/null | head -n1 || true)"
+    fi
+    [[ -n "$detected" ]] && printf '%s\n' "$detected" && return 0
+  done
+}
+
 if ! steam_ready; then
   for _ in $(seq 1 120); do
     if sudo -u default env HOME="$home_dir" USER=default DISPLAY="$display_value" XAUTHORITY="$xauthority_value" xset q >/dev/null 2>&1; then
@@ -297,7 +320,7 @@ if [[ -f "$apps_file" ]] && command -v jq >/dev/null 2>&1; then
   rm -f "$tmp_file"
 fi
 
-version="$(sed -n 's/[^0-9]*\([0-9][0-9.]*\).*/\1/p' "$steam_dir/package/steam_client_ubuntu12.installed" 2>/dev/null | head -n1 || true)"
+version="$(detect_steam_version)"
 account="$(sed -n 's/^[[:space:]]*"AccountName"[[:space:]]*"\([^"]*\)".*/\1/p' "$steam_dir/config/loginusers.vdf" 2>/dev/null | head -n1 || true)"
 printf 'VERSION=%s\nACCOUNT=%s\n' "$version" "$account"
 STEAM_BOOTSTRAP
