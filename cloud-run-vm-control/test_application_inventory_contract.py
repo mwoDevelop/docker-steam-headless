@@ -45,6 +45,7 @@ class ApplicationInventoryContractTests(unittest.TestCase):
         self.assertIn("detect_steam_version()", startup_script)
         self.assertIn(".local/share/Steam/package/steam_client_ubuntu12.installed", startup_script)
         self.assertIn("logs/bootstrap_log.txt", startup_script)
+        self.assertIn("awk '$0 !~ /^0([.]0)*$/'", startup_script)
 
     def test_gui_waits_for_delayed_sunshine_version_metadata(self):
         root = os.path.dirname(os.path.dirname(__file__))

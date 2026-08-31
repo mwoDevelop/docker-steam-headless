@@ -264,7 +264,8 @@ detect_steam_version() {
     [[ -s "$candidate" ]] || continue
     detected="$(grep -Eio '(client[[:space:]_-]*version|version|build[[:space:]_-]*id|build)[^0-9]*[0-9][0-9.]*' "$candidate" 2>/dev/null \
       | grep -Eo '[0-9][0-9.]*' \
-      | head -n1 || true)"
+      | awk '$0 !~ /^0([.]0)*$/' \
+      | tail -n1 || true)"
     if [[ -z "$detected" && "$candidate" == *.installed ]]; then
       detected="$(grep -Eo '[0-9]{6,}([.][0-9]+)*' "$candidate" 2>/dev/null | head -n1 || true)"
     fi
