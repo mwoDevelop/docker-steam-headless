@@ -7612,11 +7612,47 @@ def minecraft_management_request_result(instance: dict[str, Any] | None) -> dict
     if not isinstance(result, dict):
         return {}
     output = str(result.get("output", "") or "")
+    kind = str(result.get("kind", "") or "").strip().lower()
+    if kind not in {"install", "remove", "sync"}:
+        kind = ""
+    stage = str(result.get("stage", "") or "").strip().lower()
+    allowed_stages = {
+        "queued",
+        "preparing",
+        "applying",
+        "restarting",
+        "health-check",
+        "verifying",
+        "finalizing",
+        "completed",
+        "failed",
+        "rolling-back",
+    }
+    if stage not in allowed_stages:
+        stage = ""
+    try:
+        stage_index = max(0, min(20, int(result.get("stageIndex", 0))))
+    except (TypeError, ValueError):
+        stage_index = 0
+    try:
+        stage_count = max(1, min(20, int(result.get("stageCount", 7))))
+    except (TypeError, ValueError):
+        stage_count = 7
     return {
         "id": str(result.get("id", "") or ""),
         "action": str(result.get("action", "") or ""),
+        "kind": kind,
+        "serverId": str(result.get("serverId", "") or "")[:64],
+        "target": str(result.get("target", "") or "")[:160],
+        "provider": str(result.get("provider", "") or "")[:64],
         "state": str(result.get("state", "") or ""),
+        "stage": stage,
+        "stageIndex": stage_index,
+        "stageCount": stage_count,
+        "message": str(result.get("message", "") or "")[:500],
         "output": output[:4096],
+        "startedAt": str(result.get("startedAt", "") or "")[:64],
+        "updatedAt": str(result.get("updatedAt", "") or "")[:64],
         "completedAt": str(result.get("completedAt", "") or ""),
     }
 

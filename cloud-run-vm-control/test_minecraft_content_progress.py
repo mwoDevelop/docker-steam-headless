@@ -1,5 +1,6 @@
 from pathlib import Path
 import inspect
+import json
 import sys
 import unittest
 
@@ -54,6 +55,55 @@ class MinecraftContentProgressTests(unittest.TestCase):
         source = inspect.getsource(vm_control.start_metadata_updates)
         self.assertIn('updates["vm-minecraft-management-script"]', source)
         self.assertIn('decode_config_b64("vm_minecraft_management_script_b64")', source)
+
+    def test_management_result_preserves_validated_progress_fields(self):
+        raw = {
+            "id": "operation_1234567890",
+            "action": "content-sync",
+            "kind": "install",
+            "serverId": "survival",
+            "target": "Example plugin",
+            "provider": "future-provider",
+            "state": "running",
+            "stage": "health-check",
+            "stageIndex": 4,
+            "stageCount": 7,
+            "message": "Waiting for readiness.",
+            "startedAt": "2026-09-01T12:00:00Z",
+            "updatedAt": "2026-09-01T12:00:10Z",
+        }
+        instance = {
+            "metadata": {
+                "items": [
+                    {
+                        "key": vm_control.MINECRAFT_MANAGEMENT_RESULT_METADATA_KEY,
+                        "value": json.dumps(raw),
+                    }
+                ]
+            }
+        }
+        result = vm_control.minecraft_management_request_result(instance)
+        self.assertEqual("install", result["kind"])
+        self.assertEqual("Example plugin", result["target"])
+        self.assertEqual("health-check", result["stage"])
+        self.assertEqual(4, result["stageIndex"])
+        self.assertEqual("Waiting for readiness.", result["message"])
+
+    def test_management_result_rejects_unknown_progress_enums(self):
+        instance = {
+            "metadata": {
+                "items": [
+                    {
+                        "key": vm_control.MINECRAFT_MANAGEMENT_RESULT_METADATA_KEY,
+                        "value": json.dumps({"id": "x", "kind": "other", "stage": "invented", "stageIndex": 999}),
+                    }
+                ]
+            }
+        }
+        result = vm_control.minecraft_management_request_result(instance)
+        self.assertEqual("", result["kind"])
+        self.assertEqual("", result["stage"])
+        self.assertEqual(20, result["stageIndex"])
 
     def test_progress_ui_is_not_modrinth_specific(self):
         html = (ROOT / "docs" / "vm-control" / "minecraft-admin.html").read_text(encoding="utf-8")
