@@ -110,6 +110,10 @@ class MinecraftContentProgressTests(unittest.TestCase):
         self.assertEqual("", result["stage"])
         self.assertEqual(20, result["stageIndex"])
 
+    def test_queued_content_operation_records_start_time(self):
+        source = inspect.getsource(vm_control.execute_minecraft_management_action)
+        self.assertIn('"startedAt": format_utc_datetime(datetime.now(timezone.utc))', source)
+
     def test_progress_ui_is_not_modrinth_specific(self):
         html = (ROOT / "docs" / "vm-control" / "minecraft-admin.html").read_text(encoding="utf-8")
         javascript = (ROOT / "docs" / "vm-control" / "minecraft-admin.js").read_text(encoding="utf-8")
