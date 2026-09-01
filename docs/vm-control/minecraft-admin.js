@@ -160,9 +160,12 @@
       const projectLink = projectUrl
         ? `<a class="content-project-link" href="${escapeHtml(projectUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(projectUrl)}</a>`
         : "";
+      const environment = String(item.environment || "unknown").replaceAll("_", " ");
+      const warnings = Array.isArray(item.compatibilityWarnings) ? item.compatibilityWarnings : [];
+      const compatibility = `<p class="content-meta">Environment: ${escapeHtml(environment)}${item.clientRequired ? " · matching client installation required" : ""}</p>${warnings.map((warning) => `<p class="content-meta">Warning: ${escapeHtml(warning)}</p>`).join("")}`;
       return `
       <article class="content-item">
-        <div><h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.description || "No description available.")}</p><p class="content-meta">${escapeHtml(item.author || "Unknown author")} · ${Number(item.downloads || 0).toLocaleString()} downloads</p>${projectLink}</div>
+        <div><h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.description || "No description available.")}</p><p class="content-meta">${escapeHtml(item.author || "Unknown author")} · ${Number(item.downloads || 0).toLocaleString()} downloads</p>${compatibility}${projectLink}</div>
         <button class="action create" type="button" data-content-action="install" data-project-id="${escapeHtml(item.projectId)}" data-title="${escapeHtml(item.title)}">Install</button>
       </article>`;
     }).join("");
@@ -183,9 +186,12 @@
       const projectLink = projectUrl
         ? `<a class="content-project-link" href="${escapeHtml(projectUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(projectUrl)}</a>`
         : "";
+      const environment = String(item.environment || "unknown").replaceAll("_", " ");
+      const warnings = Array.isArray(item.compatibilityWarnings) ? item.compatibilityWarnings : [];
+      const compatibility = `<p class="content-meta">Environment: ${escapeHtml(environment)}${item.clientRequired ? " · matching client installation required" : ""}</p>${warnings.map((warning) => `<p class="content-meta">Warning: ${escapeHtml(warning)}</p>`).join("")}`;
       return `
       <article class="content-item">
-        <div><h3>${escapeHtml(item.title)}</h3><p class="content-meta">${escapeHtml(item.projectId)} · ${escapeHtml(item.version)}</p>${projectLink}</div>
+        <div><h3>${escapeHtml(item.title)}</h3><p class="content-meta">${escapeHtml(item.projectId)} · ${escapeHtml(item.version)}</p>${compatibility}${projectLink}</div>
         <button class="action delete" type="button" data-content-action="remove" data-project-id="${escapeHtml(item.projectId)}">Remove</button>
       </article>`;
     }).join("");

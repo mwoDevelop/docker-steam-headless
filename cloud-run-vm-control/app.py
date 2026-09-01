@@ -79,7 +79,7 @@ MINECRAFT_SERVER_TYPES: Final = {
         "dockerType": "PAPER",
         "contentKind": "plugin",
         "contentLabel": "plugins",
-        "modrinthLoaders": ["paper", "purpur", "spigot", "bukkit"],
+        "modrinthLoaders": ["paper", "spigot", "bukkit"],
     },
     "purpur": {
         "id": "purpur",
@@ -117,6 +117,42 @@ MINECRAFT_SERVER_TYPES: Final = {
 DEFAULT_MINECRAFT_SERVER_TYPE: Final = "paper"
 MODRINTH_API_BASE_URL: Final = "https://api.modrinth.com/v2"
 MODRINTH_USER_AGENT: Final = "docker-steam-headless-vm-control/1.0 (mwodevelop@gmail.com)"
+MODRINTH_ENVIRONMENT_POLICIES: Final = {
+    "client_only": {
+        "status": "blocked",
+        "clientRequired": True,
+        "message": "This Modrinth version is client-only and cannot run on a dedicated server.",
+    },
+    "singleplayer_only": {
+        "status": "blocked",
+        "clientRequired": True,
+        "message": "This Modrinth version supports single-player only and cannot run on a dedicated server.",
+    },
+    "server_only": {"status": "compatible", "clientRequired": False, "message": "Server-only content; players do not need to install it."},
+    "dedicated_server_only": {"status": "compatible", "clientRequired": False, "message": "Designed for dedicated servers."},
+    "server_only_client_optional": {"status": "compatible", "clientRequired": False, "message": "Client installation is optional."},
+    "client_or_server": {"status": "compatible", "clientRequired": False, "message": "Can run independently on the server."},
+    "client_and_server": {
+        "status": "warning",
+        "clientRequired": True,
+        "message": "Players must install a compatible version of this content on their clients.",
+    },
+    "client_or_server_prefers_both": {
+        "status": "warning",
+        "clientRequired": False,
+        "message": "Installation on both the server and clients is recommended.",
+    },
+    "client_only_server_optional": {
+        "status": "warning",
+        "clientRequired": False,
+        "message": "Server installation is optional and may not provide useful server-side behavior.",
+    },
+    "unknown": {
+        "status": "warning",
+        "clientRequired": False,
+        "message": "The project author did not declare whether this version supports a dedicated server.",
+    },
+}
 
 
 CONFIG = {
@@ -7259,6 +7295,14 @@ def normalize_minecraft_modrinth_content(values: Any) -> list[dict[str, Any]]:
                 "version": str(value.get("version") or version_id).strip()[:120] or version_id,
                 "files": files,
                 "checksums": checksums,
+                "environment": str(value.get("environment") or "unknown").strip().lower()[:80] or "unknown",
+                "compatibilityStatus": str(value.get("compatibilityStatus") or "unknown").strip().lower()[:40] or "unknown",
+                "compatibilityWarnings": [
+                    str(warning).strip()[:500]
+                    for warning in (value.get("compatibilityWarnings") or [])
+                    if isinstance(warning, str) and str(warning).strip()
+                ][:8],
+                "clientRequired": bool(value.get("clientRequired", False)),
             }
         )
     return result
@@ -7366,10 +7410,41 @@ def modrinth_project_versions(project_id: str, version: str, loaders: list[str],
     return versions
 
 
-def modrinth_server_artifact(candidate: dict[str, Any]) -> dict[str, str] | None:
+def normalize_modrinth_environment(candidate: dict[str, Any]) -> str:
     environment = candidate.get("environment")
-    if isinstance(environment, dict) and str(environment.get("server") or "").lower() in {"unsupported", "client_only", "client-only"}:
-        return None
+    if isinstance(environment, str):
+        normalized = environment.strip().lower().replace("-", "_")
+        return normalized if normalized in MODRINTH_ENVIRONMENT_POLICIES else "unknown"
+    if not isinstance(environment, dict):
+        return "unknown"
+
+    client = str(environment.get("client") or environment.get("client_side") or "unknown").strip().lower()
+    server = str(environment.get("server") or environment.get("server_side") or "unknown").strip().lower()
+    if server in {"unsupported", "client_only", "client-only"}:
+        return "client_only"
+    if server == "required":
+        return "client_and_server" if client == "required" else "server_only_client_optional"
+    if server == "optional":
+        if client == "required":
+            return "client_only_server_optional"
+        if client == "unsupported":
+            return "server_only"
+        return "client_or_server"
+    return "unknown"
+
+
+def modrinth_environment_details(candidate: dict[str, Any]) -> dict[str, Any]:
+    environment = normalize_modrinth_environment(candidate)
+    policy = MODRINTH_ENVIRONMENT_POLICIES[environment]
+    return {
+        "environment": environment,
+        "status": str(policy["status"]),
+        "clientRequired": bool(policy["clientRequired"]),
+        "message": str(policy["message"]),
+    }
+
+
+def modrinth_server_artifact(candidate: dict[str, Any]) -> dict[str, str] | None:
     files = [file for file in candidate.get("files", []) if isinstance(file, dict)]
     files.sort(key=lambda file: not bool(file.get("primary")))
     for file in files:
@@ -7388,6 +7463,8 @@ def select_compatible_modrinth_version(
         if requested_version_id and str(candidate.get("id") or "") != requested_version_id:
             continue
         if not supported_loaders.intersection(str(loader) for loader in (candidate.get("loaders") or [])):
+            continue
+        if modrinth_environment_details(candidate)["status"] == "blocked":
             continue
         artifact = modrinth_server_artifact(candidate)
         version_id = str(candidate.get("id") or "").strip()
@@ -7450,6 +7527,7 @@ def minecraft_modrinth_catalog_search(instance: dict[str, Any], payload: dict[st
             skipped += 1
             continue
         selected_version, artifact = selected
+        compatibility = modrinth_environment_details(selected_version)
         slug = str(hit.get("slug") or "").strip()
         project_path = slug if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{1,99}", slug) else project_id
         results.append(
@@ -7465,12 +7543,16 @@ def minecraft_modrinth_catalog_search(instance: dict[str, Any], payload: dict[st
                 "version": str(selected_version.get("version_number") or selected_version["id"])[:120],
                 "files": [artifact["filename"]],
                 "checksums": {artifact["filename"]: artifact["sha512"]},
+                "environment": compatibility["environment"],
+                "compatibilityStatus": compatibility["status"],
+                "compatibilityWarnings": [compatibility["message"]] if compatibility["status"] == "warning" else [],
+                "clientRequired": compatibility["clientRequired"],
             }
         )
     return results, skipped
 
 
-def minecraft_modrinth_content_entry(instance: dict[str, Any], payload: dict[str, Any]) -> dict[str, str]:
+def minecraft_modrinth_content_entry(instance: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
     project_id = str(payload.get("projectId") or "").strip()
     if not re.fullmatch(r"[A-Za-z0-9_-]{3,80}", project_id):
         raise ApiError("Invalid Modrinth project ID.", 400)
@@ -7484,10 +7566,19 @@ def minecraft_modrinth_content_entry(instance: dict[str, Any], payload: dict[str
         raise ApiError(f"The selected {runtime['label']} server supports {runtime['contentLabel']} only.", 409)
     versions = modrinth_project_versions(project_id, version, list(runtime["modrinthLoaders"]))
     requested_version_id = str(payload.get("versionId") or "").strip()
+    requested_candidate = next(
+        (candidate for candidate in versions if str(candidate.get("id") or "") == requested_version_id),
+        None,
+    ) if requested_version_id else None
+    if requested_candidate:
+        requested_environment = modrinth_environment_details(requested_candidate)
+        if requested_environment["status"] == "blocked":
+            raise ApiError(str(requested_environment["message"]), 409)
     selected = select_compatible_modrinth_version(versions, list(runtime["modrinthLoaders"]), requested_version_id)
     if not selected:
         raise ApiError(f"No compatible Modrinth {runtime['contentKind']} version was found for Minecraft {version} and {runtime['label']}.", 409)
     selected_version, artifact = selected
+    compatibility = modrinth_environment_details(selected_version)
     version_id = str(selected_version.get("id") or "").strip()
     if not re.fullmatch(r"[A-Za-z0-9_-]{3,80}", version_id):
         raise ApiError("Modrinth returned an invalid version ID.", 502)
@@ -7499,6 +7590,10 @@ def minecraft_modrinth_content_entry(instance: dict[str, Any], payload: dict[str
         "version": str(selected_version.get("version_number") or version_id).strip()[:120] or version_id,
         "files": [artifact["filename"]],
         "checksums": {artifact["filename"]: artifact["sha512"]},
+        "environment": compatibility["environment"],
+        "compatibilityStatus": compatibility["status"],
+        "compatibilityWarnings": [compatibility["message"]] if compatibility["status"] == "warning" else [],
+        "clientRequired": compatibility["clientRequired"],
     }
 
 

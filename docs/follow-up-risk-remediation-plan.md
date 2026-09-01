@@ -1,5 +1,11 @@
 # Dalszy plan naprawy ryzyka
 
+> Szczegółowy i aktualny plan walidacji, instalowania oraz usuwania dodatków
+> Minecraft znajduje się w
+> [planie kompatybilności dodatków Minecraft](./plan-kompatybilnosci-dodatkow-minecraft.md).
+> W przypadku rozbieżności ten dedykowany dokument zastępuje zakres fazy 2
+> niniejszego planu.
+
 ## Zamiar
 
 Zajmij się dodatkowymi elementami wykrytymi podczas dodawania wielu serwerów
