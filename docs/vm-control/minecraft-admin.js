@@ -102,6 +102,15 @@
     return isContentResult(result) && ["queued", "running", "rolling-back"].includes(String(result.state || ""));
   }
 
+  function contentResultApplied(data, result) {
+    const contentId = String(result && result.contentId || "");
+    if (!contentId || !Array.isArray(data && data.content)) return true;
+    const exists = data.content.some((item) => String(item.projectId || "") === contentId);
+    if (result.kind === "install") return exists;
+    if (result.kind === "remove") return !exists;
+    return true;
+  }
+
   function contentStageLabel(stage) {
     return ({
       queued: "Waiting for VM agent",
@@ -224,6 +233,11 @@
       if (isActiveContentResult(result)) {
         renderContentProgress(result);
         scheduleContentPoll(2000);
+        return;
+      }
+      if (!contentResultApplied(data, result)) {
+        renderContentProgress({ ...result, state: "running", stage: "finalizing", stageIndex: 6, message: "Refreshing the installed content list." });
+        scheduleContentPoll(1000);
         return;
       }
       await new Promise((resolve) => window.setTimeout(resolve, 1000));
@@ -497,7 +511,7 @@
     const result = data.lastResult || {};
     if (result.id) setOutput(`[${result.action || "action"}] ${result.state || "unknown"}\n${result.output || "No output returned."}`);
     if (isActiveContentResult(result)) startContentTracking(result);
-    else if (state.contentOperationId && result.id === state.contentOperationId) finishContentTracking(result);
+    else if (state.contentOperationId && result.id === state.contentOperationId) renderContentProgress(result);
     if (data.restartRequired) {
       elements.notice.classList.remove("hidden");
       elements.notice.textContent = data.message || "The management agent is prepared but requires one VM restart from the main GUI.";

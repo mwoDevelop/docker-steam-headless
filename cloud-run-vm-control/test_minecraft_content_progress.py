@@ -18,12 +18,14 @@ class MinecraftContentProgressTests(unittest.TestCase):
             operation_id="operation_1234567890",
             kind="install",
             target="Example content",
+            content_id="project-123",
             provider="future-provider",
         )
         self.assertEqual("operation_1234567890", request["id"])
         self.assertEqual("content-sync", request["action"])
         self.assertEqual("install", request["kind"])
         self.assertEqual("Example content", request["target"])
+        self.assertEqual("project-123", request["contentId"])
         self.assertEqual("future-provider", request["provider"])
         self.assertEqual(7, request["stageCount"])
 
@@ -50,6 +52,7 @@ class MinecraftContentProgressTests(unittest.TestCase):
         self.assertIn("isActiveContentResult", javascript)
         self.assertIn("Content operation is still running", javascript)
         self.assertIn("contentOperationSnapshot", javascript)
+        self.assertIn("contentResultApplied", javascript)
 
     def test_start_refreshes_management_agent_for_existing_vm(self):
         source = inspect.getsource(vm_control.start_metadata_updates)
@@ -63,6 +66,7 @@ class MinecraftContentProgressTests(unittest.TestCase):
             "kind": "install",
             "serverId": "survival",
             "target": "Example plugin",
+            "contentId": "project-123",
             "provider": "future-provider",
             "state": "running",
             "stage": "health-check",
@@ -85,6 +89,7 @@ class MinecraftContentProgressTests(unittest.TestCase):
         result = vm_control.minecraft_management_request_result(instance)
         self.assertEqual("install", result["kind"])
         self.assertEqual("Example plugin", result["target"])
+        self.assertEqual("project-123", result["contentId"])
         self.assertEqual("health-check", result["stage"])
         self.assertEqual(4, result["stageIndex"])
         self.assertEqual("Waiting for readiness.", result["message"])

@@ -305,12 +305,13 @@ reconcile_minecraft_status() {
 
 publish_content_progress() {
   local raw="$1" stage="$2" stage_index="$3" message="$4"
-  local request_id action server_id kind target provider current started_at now payload
+  local request_id action server_id kind target content_id provider current started_at now payload
   request_id="$(printf '%s' "$raw" | jq -r '.id // empty' 2>/dev/null || true)"
   action="$(printf '%s' "$raw" | jq -r '.action // "content-sync"' 2>/dev/null || true)"
   server_id="$(printf '%s' "$raw" | jq -r '.serverId // "default"' 2>/dev/null || true)"
   kind="$(printf '%s' "$raw" | jq -r '.kind // "sync"' 2>/dev/null || true)"
   target="$(printf '%s' "$raw" | jq -r '.target // empty' 2>/dev/null || true)"
+  content_id="$(printf '%s' "$raw" | jq -r '.contentId // empty' 2>/dev/null || true)"
   provider="$(printf '%s' "$raw" | jq -r '.provider // empty' 2>/dev/null || true)"
   current="$(metadata_get "$RESULT_KEY")"
   started_at="$(printf '%s' "$current" | jq -r --arg id "$request_id" 'if .id == $id then (.startedAt // empty) else empty end' 2>/dev/null || true)"
@@ -318,21 +319,22 @@ publish_content_progress() {
   [[ -n "$started_at" ]] || started_at="$now"
   payload="$(jq -cn \
     --arg id "$request_id" --arg action "$action" --arg serverId "$server_id" \
-    --arg kind "$kind" --arg target "$target" --arg provider "$provider" \
+    --arg kind "$kind" --arg target "$target" --arg contentId "$content_id" --arg provider "$provider" \
     --arg stage "$stage" --arg message "$message" --arg startedAt "$started_at" --arg updatedAt "$now" \
     --argjson stageIndex "$stage_index" \
-    '{id:$id,action:$action,kind:$kind,serverId:$serverId,target:$target,provider:$provider,state:"running",stage:$stage,stageIndex:$stageIndex,stageCount:7,message:$message,output:"",startedAt:$startedAt,updatedAt:$updatedAt,completedAt:""}')"
+    '{id:$id,action:$action,kind:$kind,serverId:$serverId,target:$target,contentId:$contentId,provider:$provider,state:"running",stage:$stage,stageIndex:$stageIndex,stageCount:7,message:$message,output:"",startedAt:$startedAt,updatedAt:$updatedAt,completedAt:""}')"
   set_metadata_value "$RESULT_KEY" "$payload" >/dev/null 2>&1 || true
 }
 
 publish_content_result() {
   local raw="$1" state="$2" output="$3"
-  local request_id action server_id kind target provider current stage stage_index started_at now payload message
+  local request_id action server_id kind target content_id provider current stage stage_index started_at now payload message
   request_id="$(printf '%s' "$raw" | jq -r '.id // empty' 2>/dev/null || true)"
   action="$(printf '%s' "$raw" | jq -r '.action // "content-sync"' 2>/dev/null || true)"
   server_id="$(printf '%s' "$raw" | jq -r '.serverId // "default"' 2>/dev/null || true)"
   kind="$(printf '%s' "$raw" | jq -r '.kind // "sync"' 2>/dev/null || true)"
   target="$(printf '%s' "$raw" | jq -r '.target // empty' 2>/dev/null || true)"
+  content_id="$(printf '%s' "$raw" | jq -r '.contentId // empty' 2>/dev/null || true)"
   provider="$(printf '%s' "$raw" | jq -r '.provider // empty' 2>/dev/null || true)"
   current="$(metadata_get "$RESULT_KEY")"
   started_at="$(printf '%s' "$current" | jq -r --arg id "$request_id" 'if .id == $id then (.startedAt // empty) else empty end' 2>/dev/null || true)"
@@ -349,11 +351,11 @@ publish_content_result() {
   fi
   payload="$(jq -cn \
     --arg id "$request_id" --arg action "$action" --arg serverId "$server_id" \
-    --arg kind "$kind" --arg target "$target" --arg provider "$provider" \
+    --arg kind "$kind" --arg target "$target" --arg contentId "$content_id" --arg provider "$provider" \
     --arg state "$state" --arg stage "$stage" --arg message "$message" --arg output "$output" \
     --arg startedAt "$started_at" --arg updatedAt "$now" --arg completedAt "$now" \
     --argjson stageIndex "$stage_index" \
-    '{id:$id,action:$action,kind:$kind,serverId:$serverId,target:$target,provider:$provider,state:$state,stage:$stage,stageIndex:$stageIndex,stageCount:7,message:$message,output:$output,startedAt:$startedAt,updatedAt:$updatedAt,completedAt:$completedAt}')"
+    '{id:$id,action:$action,kind:$kind,serverId:$serverId,target:$target,contentId:$contentId,provider:$provider,state:$state,stage:$stage,stageIndex:$stageIndex,stageCount:7,message:$message,output:$output,startedAt:$startedAt,updatedAt:$updatedAt,completedAt:$completedAt}')"
   if ! set_metadata_value "$RESULT_KEY" "$payload" >/dev/null 2>&1; then
     publish_result "$request_id" "$action" "$state" "$output"
   fi

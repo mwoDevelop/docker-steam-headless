@@ -7644,6 +7644,7 @@ def minecraft_management_request_result(instance: dict[str, Any] | None) -> dict
         "kind": kind,
         "serverId": str(result.get("serverId", "") or "")[:64],
         "target": str(result.get("target", "") or "")[:160],
+        "contentId": str(result.get("contentId", "") or "")[:100],
         "provider": str(result.get("provider", "") or "")[:64],
         "state": str(result.get("state", "") or ""),
         "stage": stage,
@@ -8750,6 +8751,7 @@ def minecraft_content_sync_request(
     operation_id: str = "",
     kind: str = "sync",
     target: str = "",
+    content_id: str = "",
     provider: str = "",
 ) -> dict[str, Any]:
     return {
@@ -8758,6 +8760,7 @@ def minecraft_content_sync_request(
         "serverId": "default",
         "kind": kind,
         "target": target,
+        "contentId": content_id,
         "provider": provider,
         "stageCount": 7,
         "entries": [f"{entry['projectId']}:{entry['versionId']}" for entry in entries],
@@ -8853,6 +8856,7 @@ def execute_minecraft_management_action(
             operation_id=operation_id,
             kind="install",
             target=str(entry.get("title") or entry["projectId"]),
+            content_id=str(entry["projectId"]),
             provider="modrinth",
         )
         request_payload["serverId"] = selected_server_id
@@ -8872,6 +8876,7 @@ def execute_minecraft_management_action(
             operation_id=operation_id,
             kind="remove",
             target=str((removed_entry or {}).get("title") or project_id),
+            content_id=project_id,
             provider="modrinth",
         )
         request_payload["serverId"] = selected_server_id
@@ -8902,6 +8907,7 @@ def execute_minecraft_management_action(
                         "kind": request_payload.get("kind", "sync"),
                         "serverId": selected_server_id,
                         "target": request_payload.get("target", ""),
+                        "contentId": request_payload.get("contentId", ""),
                         "provider": request_payload.get("provider", ""),
                         "state": "queued",
                         "stage": "queued",
