@@ -2,7 +2,7 @@
 
 ## Status dokumentu
 
-- Status: faza 1 i provider-neutralny postęp operacji są wdrożone; stabilizacja gotowości i blokad GUI jest w realizacji.
+- Status: faza 1, provider-neutralny postęp oraz stabilizacja gotowości i blokad GUI są wdrożone i przetestowane E2E.
 - Zakres: pluginy i mody instalowane z Modrinth dla wielu instancji serwera Minecraft na VM.
 - Data aktualizacji: 2026-09-01.
 - Dokument zastępuje szczegółowy zakres fazy 2 z
@@ -587,6 +587,21 @@ może pominąć licznik bajtów, ale nadal używa tego samego modelu i widoku.
 5. Panel postępu jest widoczny nad wynikami bez przewijania na koniec listy.
 6. LitematicaFolia instaluje się i usuwa na działającym Paper albo zwraca
    rzeczywisty błąd etapu, bez zawieszonego loadera i bez częściowego wpisu GUI.
+
+### Wynik realizacji stabilizacji
+
+1. Backend zwraca efektywny status `VM not running`, gotowość mutacji, przyczynę
+   blokady i aktywną operację całej VM.
+2. Zatrzymana VM pozwala przeglądać katalog, ale blokuje instalację i usuwanie.
+3. Projekty obecne w manifeście mają stan `Installed`; aktywny cel ma stan
+   `Installing...` albo `Removing...`, a pozostałe mutacje pokazują powód blokady.
+4. Panel postępu znajduje się nad wynikami, a wyniki są zachowywane podczas
+   pollingu. Reload poprawnie wznawia aktywną operację.
+5. Bezpośrednia równoległa mutacja została odrzucona kodem 409 bez utraty
+   śledzenia pierwszej operacji.
+6. E2E Paper 26.2 potwierdził instalację i usunięcie LitematicaFolia, zgodność
+   listy z wynikiem końcowym oraz pozostawienie WorldEdit bez zmian.
+7. Po testach LitematicaFolia został usunięty, a testowa VM zatrzymana.
 
 ## Fazy realizacji
 
