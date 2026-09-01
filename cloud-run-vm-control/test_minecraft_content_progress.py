@@ -164,6 +164,7 @@ class MinecraftContentProgressTests(unittest.TestCase):
         self.assertIn("activeContentOperation", javascript)
         self.assertIn("state.catalogResults = data.catalogResults", javascript)
         self.assertIn("contentId: projectId", javascript)
+        self.assertLess(javascript.index("if (activeTarget)"), javascript.index("else if (alreadyInstalled)"))
 
 
 if __name__ == "__main__":

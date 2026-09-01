@@ -112,8 +112,8 @@
       const projectId = String(button.dataset.projectId || "");
       const alreadyInstalled = action === "install" && installed.has(projectId);
       const activeTarget = Boolean(activeOperation && String(activeOperation.contentId || "") === projectId);
-      if (alreadyInstalled) button.textContent = "Installed";
-      else if (activeTarget) button.textContent = activeOperation.kind === "remove" ? "Removing..." : "Installing...";
+      if (activeTarget) button.textContent = activeOperation.kind === "remove" ? "Removing..." : "Installing...";
+      else if (alreadyInstalled) button.textContent = "Installed";
       else button.textContent = action === "remove" ? "Remove" : "Install";
       button.disabled = state.busy || alreadyInstalled || Boolean(activeOperation) || !mutationReady;
       if (alreadyInstalled) button.title = "This project is already installed.";
