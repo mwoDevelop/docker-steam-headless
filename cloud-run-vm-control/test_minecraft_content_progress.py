@@ -162,6 +162,8 @@ class MinecraftContentProgressTests(unittest.TestCase):
         self.assertIn('button.textContent = "Installed"', javascript)
         self.assertIn("contentMutationBlockedReason", javascript)
         self.assertIn("activeContentOperation", javascript)
+        self.assertIn("state.catalogResults = data.catalogResults", javascript)
+        self.assertIn("contentId: projectId", javascript)
 
 
 if __name__ == "__main__":

@@ -50,6 +50,7 @@
     contentOperationStartedAt: 0,
     contentOperationSnapshot: null,
     contentOperationScrollPending: false,
+    catalogResults: [],
     contentPollTimer: 0,
     contentElapsedTimer: 0,
   };
@@ -103,6 +104,9 @@
     const installed = new Set((state.data && state.data.content || []).map((item) => String(item.projectId || "")));
     const mutationReady = Boolean(state.data && state.data.contentMutationReady);
     const blockedReason = String(state.data && state.data.contentMutationBlockedReason || "Minecraft content management is not ready.");
+    const activeReason = activeOperation
+      ? `${activeOperation.kind === "remove" ? "Removal" : "Installation"} of "${activeOperation.target || "Minecraft content"}" is in progress. Wait for it to finish.`
+      : "";
     document.querySelectorAll("[data-content-action]").forEach((button) => {
       const action = String(button.dataset.contentAction || "");
       const projectId = String(button.dataset.projectId || "");
@@ -113,7 +117,7 @@
       else button.textContent = action === "remove" ? "Remove" : "Install";
       button.disabled = state.busy || alreadyInstalled || Boolean(activeOperation) || !mutationReady;
       if (alreadyInstalled) button.title = "This project is already installed.";
-      else if (activeOperation) button.title = activeTarget ? "This operation is in progress." : blockedReason;
+      else if (activeOperation) button.title = activeTarget ? "This operation is in progress." : activeReason;
       else button.title = mutationReady ? "" : blockedReason;
     });
   }
@@ -540,7 +544,8 @@
       ? `${runtime.label || "Paper"} accepts ${kindLabel}; the backend filters results by the installed Minecraft version and runtime.`
       : `${runtime.label || "Paper"} accepts ${kindLabel}. You can browse the catalog now; ${data.contentMutationBlockedReason || "start this server before installing or removing content."}`;
     renderServerProperties(data.serverProperties);
-    renderCatalog(data.catalogResults || []);
+    if (Array.isArray(data.catalogResults)) state.catalogResults = data.catalogResults;
+    renderCatalog(state.catalogResults);
     renderInstalledContent(data.content || [], runtime);
     const result = data.lastResult || {};
     if (result.id) setOutput(`[${result.action || "action"}] ${result.state || "unknown"}\n${result.output || "No output returned."}`);
@@ -622,6 +627,9 @@
       action: "content-sync",
       kind: action === "content-remove" ? "remove" : "install",
       target: title || projectId,
+      contentId: projectId,
+      serverId: state.minecraftServerId,
+      provider: "modrinth",
       state: "queued",
       stage: "queued",
       stageIndex: 0,

@@ -553,6 +553,9 @@ może pominąć licznik bajtów, ale nadal używa tego samego modelu i widoku.
    wymuszać skoku strony.
 7. Po błędzie precondition odświeżyć payload, zakończyć lokalne śledzenie i
    pozostawić czytelny komunikat bez aktywnego loadera.
+8. Zachować ostatnie wyniki katalogu podczas pollingu operacji. Zwykły GET stanu
+   nie może usuwać listy; po sukcesie ten sam wpis ma od razu zmienić stan na
+   `Installed`, a po usunięciu ponownie na `Install`.
 
 ### Plan testów stabilizacji
 
@@ -566,10 +569,12 @@ może pominąć licznik bajtów, ale nadal używa tego samego modelu i widoku.
    nieaktywne, aktywny cel ma właściwą etykietę, a zakończenie nie odblokowuje ich
    przed odświeżeniem autorytatywnego stanu.
 5. Test struktury DOM: panel postępu poprzedza listę wyników.
-6. E2E na realnej VM: potwierdzić stan zatrzymany, uruchomić VM, zainstalować
+6. Test stanu katalogu: polling bez nowych wyników nie usuwa poprzedniej listy,
+   a lokalny seed od pierwszej klatki identyfikuje aktywny `contentId`.
+7. E2E na realnej VM: potwierdzić stan zatrzymany, uruchomić VM, zainstalować
    LitematicaFolia, sprawdzić blokady i postęp nad wynikami, odświeżyć stronę w
    trakcie operacji, potwierdzić `Installed`, usunąć dodatek i zatrzymać VM.
-7. E2E wyścigu: spróbować drugiej mutacji z drugiej karty lub bezpośredniego API
+8. E2E wyścigu: spróbować drugiej mutacji z drugiej karty lub bezpośredniego API
    i potwierdzić 409 bez utraty śledzenia pierwszej operacji.
 
 ### Kryteria akceptacji stabilizacji

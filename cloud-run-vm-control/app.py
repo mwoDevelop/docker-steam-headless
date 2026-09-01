@@ -7843,7 +7843,7 @@ def build_minecraft_management_payload(
         "serverProperties": minecraft_server_properties(instance),
         "rconSuggestions": minecraft_rcon_suggestions(instance),
         "content": normalize_minecraft_modrinth_content((selected_server or {}).get("content", [])),
-        "catalogResults": catalog_results or [],
+        "catalogResults": catalog_results if catalog_results is not None else None,
         "activeContentOperation": active_content_operation,
         "contentMutationReady": content_mutation_ready,
         "contentMutationBlockedReason": content_mutation_blocked_reason,
