@@ -48,6 +48,7 @@
     busy: false,
     contentOperationId: "",
     contentOperationStartedAt: 0,
+    contentOperationSnapshot: null,
     contentPollTimer: 0,
     contentElapsedTimer: 0,
   };
@@ -128,15 +129,19 @@
 
   function renderContentProgress(result) {
     if (!elements.contentProgress || !isContentResult(result)) return;
-    const stateName = String(result.state || "queued");
+    const progressResult = state.contentOperationSnapshot && state.contentOperationSnapshot.id === result.id
+      ? { ...state.contentOperationSnapshot, ...result }
+      : result;
+    state.contentOperationSnapshot = progressResult;
+    const stateName = String(progressResult.state || "queued");
     const failed = stateName === "failed";
     const done = stateName === "done";
-    const stage = done ? "completed" : String(result.stage || "queued");
-    const reportedIndex = Number(result.stageIndex);
+    const stage = done ? "completed" : String(progressResult.stage || "queued");
+    const reportedIndex = Number(progressResult.stageIndex);
     const inferredIndex = stage === "completed" ? 7 : Math.max(0, contentStages.indexOf(stage));
     const stageIndex = Number.isFinite(reportedIndex) ? reportedIndex : inferredIndex;
-    const target = String(result.target || "Minecraft content");
-    const kind = String(result.kind || "sync");
+    const target = String(progressResult.target || "Minecraft content");
+    const kind = String(progressResult.kind || "sync");
     const title = kind === "remove" ? `Removing ${target}` : kind === "install" ? `Installing ${target}` : `Updating ${target}`;
     const steps = contentStages.map((item, index) => {
       let itemState = "pending";
@@ -145,13 +150,13 @@
       if (failed && item === stage) itemState = "failed";
       return `<li data-state="${itemState}">${escapeHtml(contentStageLabel(item))}</li>`;
     }).join("");
-    const message = String(result.message || (failed ? "The content operation failed." : contentStageLabel(stage)));
+    const message = String(progressResult.message || (failed ? "The content operation failed." : contentStageLabel(stage)));
     elements.contentProgress.hidden = false;
     elements.contentProgress.dataset.state = failed ? "failed" : done ? "done" : "running";
     elements.contentProgress.innerHTML = `
       <div class="content-progress-head">
         <div><span class="content-progress-kicker">CONTENT OPERATION</span><h3>${escapeHtml(title)}</h3></div>
-        <span class="content-progress-elapsed" data-content-elapsed>${escapeHtml(formatElapsed(contentElapsedSeconds(result)))}</span>
+        <span class="content-progress-elapsed" data-content-elapsed>${escapeHtml(formatElapsed(contentElapsedSeconds(progressResult)))}</span>
       </div>
       <p class="content-progress-message">${escapeHtml(message)}</p>
       <progress class="content-progress-meter" max="7" value="${Math.max(0, Math.min(7, stageIndex))}">${stageIndex}/7</progress>
@@ -180,6 +185,7 @@
     if (!isContentResult(result)) return;
     if (state.contentOperationId && state.contentOperationId !== result.id) return;
     const startingNewOperation = !state.contentOperationId;
+    if (startingNewOperation) state.contentOperationSnapshot = null;
     state.contentOperationId = result.id;
     if (!state.contentOperationStartedAt) {
       const parsed = Date.parse(String(result.startedAt || ""));
@@ -192,6 +198,7 @@
   }
 
   function finishContentTracking(result) {
+    if (!state.contentOperationId && state.contentOperationSnapshot?.id === result?.id) return;
     renderContentProgress(result);
     clearContentTracking();
     state.contentOperationStartedAt = 0;
@@ -575,7 +582,7 @@
       const data = await api("/api/minecraft/management", { method: "POST", body: JSON.stringify(body) });
       render(data);
       setStatus(resultSummary(data.lastResult, data.message || "Minecraft content action completed."), data.lastResult && data.lastResult.state === "failed" ? "error" : "success");
-      if (!isActiveContentResult(data.lastResult || {})) finishContentTracking(data.lastResult || { ...seed, state: "done", stage: "completed", stageIndex: 7 });
+      if (state.contentOperationId && !isActiveContentResult(data.lastResult || {})) finishContentTracking(data.lastResult || { ...seed, state: "done", stage: "completed", stageIndex: 7 });
     } catch (error) {
       if (!state.contentOperationId) return;
       try {

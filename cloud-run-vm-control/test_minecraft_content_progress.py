@@ -1,4 +1,5 @@
 from pathlib import Path
+import inspect
 import sys
 import unittest
 
@@ -45,6 +46,12 @@ class MinecraftContentProgressTests(unittest.TestCase):
         self.assertIn("startContentTracking", javascript)
         self.assertIn("isActiveContentResult", javascript)
         self.assertIn("Content operation is still running", javascript)
+        self.assertIn("contentOperationSnapshot", javascript)
+
+    def test_start_refreshes_management_agent_for_existing_vm(self):
+        source = inspect.getsource(vm_control.start_metadata_updates)
+        self.assertIn('updates["vm-minecraft-management-script"]', source)
+        self.assertIn('decode_config_b64("vm_minecraft_management_script_b64")', source)
 
     def test_progress_ui_is_not_modrinth_specific(self):
         html = (ROOT / "docs" / "vm-control" / "minecraft-admin.html").read_text(encoding="utf-8")

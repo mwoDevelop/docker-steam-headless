@@ -6115,6 +6115,8 @@ def start_metadata_updates(
                 post_create_application_token,
             )
         )
+    if str(CONFIG["vm_minecraft_management_script_b64"] or "").strip():
+        updates["vm-minecraft-management-script"] = decode_config_b64("vm_minecraft_management_script_b64")
     return updates
 
 
