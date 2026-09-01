@@ -299,8 +299,65 @@ reconcile_minecraft_status() {
   return 1
 }
 
+publish_content_progress() {
+  local raw="$1" stage="$2" stage_index="$3" message="$4"
+  local request_id action server_id kind target provider current started_at now payload
+  request_id="$(printf '%s' "$raw" | jq -r '.id // empty' 2>/dev/null || true)"
+  action="$(printf '%s' "$raw" | jq -r '.action // "content-sync"' 2>/dev/null || true)"
+  server_id="$(printf '%s' "$raw" | jq -r '.serverId // "default"' 2>/dev/null || true)"
+  kind="$(printf '%s' "$raw" | jq -r '.kind // "sync"' 2>/dev/null || true)"
+  target="$(printf '%s' "$raw" | jq -r '.target // empty' 2>/dev/null || true)"
+  provider="$(printf '%s' "$raw" | jq -r '.provider // empty' 2>/dev/null || true)"
+  current="$(metadata_get "$RESULT_KEY")"
+  started_at="$(printf '%s' "$current" | jq -r --arg id "$request_id" 'if .id == $id then (.startedAt // empty) else empty end' 2>/dev/null || true)"
+  now="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+  [[ -n "$started_at" ]] || started_at="$now"
+  payload="$(jq -cn \
+    --arg id "$request_id" --arg action "$action" --arg serverId "$server_id" \
+    --arg kind "$kind" --arg target "$target" --arg provider "$provider" \
+    --arg stage "$stage" --arg message "$message" --arg startedAt "$started_at" --arg updatedAt "$now" \
+    --argjson stageIndex "$stage_index" \
+    '{id:$id,action:$action,kind:$kind,serverId:$serverId,target:$target,provider:$provider,state:"running",stage:$stage,stageIndex:$stageIndex,stageCount:7,message:$message,output:"",startedAt:$startedAt,updatedAt:$updatedAt,completedAt:""}')"
+  set_metadata_value "$RESULT_KEY" "$payload" >/dev/null 2>&1 || true
+}
+
+publish_content_result() {
+  local raw="$1" state="$2" output="$3"
+  local request_id action server_id kind target provider current stage stage_index started_at now payload message
+  request_id="$(printf '%s' "$raw" | jq -r '.id // empty' 2>/dev/null || true)"
+  action="$(printf '%s' "$raw" | jq -r '.action // "content-sync"' 2>/dev/null || true)"
+  server_id="$(printf '%s' "$raw" | jq -r '.serverId // "default"' 2>/dev/null || true)"
+  kind="$(printf '%s' "$raw" | jq -r '.kind // "sync"' 2>/dev/null || true)"
+  target="$(printf '%s' "$raw" | jq -r '.target // empty' 2>/dev/null || true)"
+  provider="$(printf '%s' "$raw" | jq -r '.provider // empty' 2>/dev/null || true)"
+  current="$(metadata_get "$RESULT_KEY")"
+  started_at="$(printf '%s' "$current" | jq -r --arg id "$request_id" 'if .id == $id then (.startedAt // empty) else empty end' 2>/dev/null || true)"
+  stage="$(printf '%s' "$current" | jq -r --arg id "$request_id" 'if .id == $id then (.stage // "queued") else "queued" end' 2>/dev/null || true)"
+  stage_index="$(printf '%s' "$current" | jq -r --arg id "$request_id" 'if .id == $id then (.stageIndex // 0) else 0 end' 2>/dev/null || true)"
+  now="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+  [[ -n "$started_at" ]] || started_at="$now"
+  if [[ "$state" == "done" ]]; then
+    stage="completed"
+    stage_index="7"
+    message="Content operation completed."
+  else
+    message="Content operation failed during ${stage}."
+  fi
+  payload="$(jq -cn \
+    --arg id "$request_id" --arg action "$action" --arg serverId "$server_id" \
+    --arg kind "$kind" --arg target "$target" --arg provider "$provider" \
+    --arg state "$state" --arg stage "$stage" --arg message "$message" --arg output "$output" \
+    --arg startedAt "$started_at" --arg updatedAt "$now" --arg completedAt "$now" \
+    --argjson stageIndex "$stage_index" \
+    '{id:$id,action:$action,kind:$kind,serverId:$serverId,target:$target,provider:$provider,state:$state,stage:$stage,stageIndex:$stageIndex,stageCount:7,message:$message,output:$output,startedAt:$startedAt,updatedAt:$updatedAt,completedAt:$completedAt}')"
+  if ! set_metadata_value "$RESULT_KEY" "$payload" >/dev/null 2>&1; then
+    publish_result "$request_id" "$action" "$state" "$output"
+  fi
+}
+
 sync_modrinth_content() {
   local raw="$1" entries entry removed_file expected_file checksum_entry expected_name expected_sha512 actual_sha512 file_path temporary_file container output missing_files checksum_failures
+  publish_content_progress "$raw" "preparing" 1 "Preparing the target content manifest."
   entries="$(printf '%s' "$raw" | jq -r '.entries // [] | .[]' 2>/dev/null || true)"
   mkdir -p "${MINECRAFT_ROOT}/data"
   temporary_file="$(mktemp)"
@@ -325,6 +382,7 @@ sync_modrinth_content() {
     printf '%s\n' "Minecraft compose file is missing."
     return 1
   fi
+  publish_content_progress "$raw" "applying" 2 "Applying the requested content set."
   if ! output="$(/usr/local/bin/vm-power-action reconcile-minecraft 2>&1)"; then
     printf '%s\n' "$output"
     return 1
@@ -334,13 +392,16 @@ sync_modrinth_content() {
     printf '%s\n' "Minecraft container was not created while applying the Modrinth manifest."
     return 1
   fi
+  publish_content_progress "$raw" "restarting" 3 "Restarting the selected Minecraft server."
   if ! output="$(docker restart "$container" 2>&1)"; then
     printf '%s\n' "$output"
     return 1
   fi
+  publish_content_progress "$raw" "health-check" 4 "Waiting for Minecraft and RCON readiness."
   for _ in $(seq 1 90); do
     container="$(minecraft_container || true)"
     if [[ -n "$container" ]] && wait_for_rcon "$container"; then
+      publish_content_progress "$raw" "verifying" 5 "Verifying the applied content files."
       missing_files=""
       checksum_failures=""
       while IFS= read -r expected_file; do
@@ -369,6 +430,7 @@ sync_modrinth_content() {
         printf 'Minecraft restarted, but Modrinth checksum verification failed:%s\n' "$checksum_failures"
         return 1
       fi
+      publish_content_progress "$raw" "finalizing" 6 "Finalizing the content operation."
       printf 'Applied %s Modrinth project(s) and restarted Minecraft.\n' "$(wc -l < "$MINECRAFT_CONTENT_FILE" | tr -d ' ')"
       return 0
     fi
@@ -396,9 +458,9 @@ process_request() {
 
   if [[ "$action" == "content-sync" ]]; then
     if output="$(sync_modrinth_content "$raw")"; then
-      publish_result "$request_id" "$action" "done" "$output"
+      publish_content_result "$raw" "done" "$output"
     else
-      publish_result "$request_id" "$action" "failed" "$output"
+      publish_content_result "$raw" "failed" "$output"
     fi
     return 0
   fi

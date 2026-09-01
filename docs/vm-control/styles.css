@@ -1543,6 +1543,101 @@ code,
   border-color: rgba(242, 198, 109, 0.28);
 }
 
+.content-operation-progress {
+  margin-top: 1rem;
+  padding: 1rem;
+  border: 1px solid color-mix(in srgb, var(--accent) 38%, transparent);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--surface) 92%, var(--accent) 8%);
+}
+
+.content-operation-progress[hidden] {
+  display: none;
+}
+
+.content-operation-progress[data-state="done"] {
+  border-color: color-mix(in srgb, #2f9e62 55%, transparent);
+}
+
+.content-operation-progress[data-state="failed"] {
+  border-color: color-mix(in srgb, #c6473a 60%, transparent);
+}
+
+.content-progress-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.content-progress-head h3,
+.content-progress-message {
+  margin: 0;
+}
+
+.content-progress-kicker,
+.content-progress-elapsed {
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+}
+
+.content-progress-elapsed {
+  min-width: 3.5rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.content-progress-message {
+  margin-top: 0.7rem;
+  color: var(--muted);
+}
+
+.content-progress-meter {
+  width: 100%;
+  height: 0.55rem;
+  margin: 0.9rem 0;
+  accent-color: var(--accent);
+}
+
+.content-progress-steps {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.45rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.content-progress-steps li {
+  padding: 0.45rem 0.55rem;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface) 78%, transparent);
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.content-progress-steps li[data-state="active"] {
+  background: color-mix(in srgb, var(--accent) 20%, var(--surface));
+  color: var(--text);
+  font-weight: 700;
+}
+
+.content-progress-steps li[data-state="done"] {
+  color: #2f9e62;
+}
+
+.content-progress-steps li[data-state="failed"] {
+  color: #c6473a;
+  font-weight: 700;
+}
+
+@media (max-width: 720px) {
+  .content-progress-steps {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 .run-badge.status.completed.success {
   color: #cbfff6;
   border-color: rgba(106, 228, 208, 0.24);

@@ -32,6 +32,7 @@
     contentSearchQuery: document.querySelector("#content-search-query"),
     contentSearch: document.querySelector("#content-search"),
     contentResults: document.querySelector("#content-results"),
+    contentProgress: document.querySelector("#content-operation-progress"),
     installedContentHeading: document.querySelector("#installed-content-heading"),
     installedContent: document.querySelector("#installed-content"),
   };
@@ -45,7 +46,13 @@
     minecraftServerId: String(params.get("minecraftServerId") || ""),
     data: null,
     busy: false,
+    contentOperationId: "",
+    contentOperationStartedAt: 0,
+    contentPollTimer: 0,
+    contentElapsedTimer: 0,
   };
+
+  const contentStages = ["queued", "preparing", "applying", "restarting", "health-check", "verifying", "finalizing"];
 
   window.addEventListener("message", (event) => {
     if (event.origin !== window.location.origin || event.data?.type !== minecraftManagementSessionResponse) return;
@@ -66,7 +73,7 @@
   }
 
   function setBusy(busy) {
-    state.busy = busy;
+    state.busy = Boolean(busy || state.contentOperationId);
     const selectedServerRunning = Boolean(state.data && state.data.minecraftStatus && state.data.minecraftStatus.state === "running");
     elements.refresh.disabled = busy;
     elements.actionButtons.forEach((button) => { button.disabled = busy || !state.data || !state.data.agentReady || !selectedServerRunning; });
@@ -84,6 +91,139 @@
   function setStatus(message, tone) {
     elements.status.textContent = message;
     elements.status.dataset.tone = tone || "neutral";
+  }
+
+  function isContentResult(result) {
+    return Boolean(result && result.id && result.action === "content-sync");
+  }
+
+  function isActiveContentResult(result) {
+    return isContentResult(result) && ["queued", "running", "rolling-back"].includes(String(result.state || ""));
+  }
+
+  function contentStageLabel(stage) {
+    return ({
+      queued: "Waiting for VM agent",
+      preparing: "Preparing content",
+      applying: "Applying content",
+      restarting: "Restarting Minecraft",
+      "health-check": "Waiting for Minecraft readiness",
+      verifying: "Verifying files",
+      finalizing: "Finalizing",
+      completed: "Completed",
+      "rolling-back": "Restoring previous content",
+    })[stage] || "Working";
+  }
+
+  function contentElapsedSeconds(result) {
+    const parsed = Date.parse(String(result && result.startedAt || ""));
+    const startedAt = Number.isFinite(parsed) ? parsed : state.contentOperationStartedAt;
+    return Math.max(0, Math.floor((Date.now() - (startedAt || Date.now())) / 1000));
+  }
+
+  function formatElapsed(seconds) {
+    const minutes = Math.floor(seconds / 60);
+    return `${minutes}:${String(seconds % 60).padStart(2, "0")}`;
+  }
+
+  function renderContentProgress(result) {
+    if (!elements.contentProgress || !isContentResult(result)) return;
+    const stateName = String(result.state || "queued");
+    const failed = stateName === "failed";
+    const done = stateName === "done";
+    const stage = done ? "completed" : String(result.stage || "queued");
+    const reportedIndex = Number(result.stageIndex);
+    const inferredIndex = stage === "completed" ? 7 : Math.max(0, contentStages.indexOf(stage));
+    const stageIndex = Number.isFinite(reportedIndex) ? reportedIndex : inferredIndex;
+    const target = String(result.target || "Minecraft content");
+    const kind = String(result.kind || "sync");
+    const title = kind === "remove" ? `Removing ${target}` : kind === "install" ? `Installing ${target}` : `Updating ${target}`;
+    const steps = contentStages.map((item, index) => {
+      let itemState = "pending";
+      if (index < stageIndex || done) itemState = "done";
+      if (!done && !failed && index === stageIndex) itemState = "active";
+      if (failed && item === stage) itemState = "failed";
+      return `<li data-state="${itemState}">${escapeHtml(contentStageLabel(item))}</li>`;
+    }).join("");
+    const message = String(result.message || (failed ? "The content operation failed." : contentStageLabel(stage)));
+    elements.contentProgress.hidden = false;
+    elements.contentProgress.dataset.state = failed ? "failed" : done ? "done" : "running";
+    elements.contentProgress.innerHTML = `
+      <div class="content-progress-head">
+        <div><span class="content-progress-kicker">CONTENT OPERATION</span><h3>${escapeHtml(title)}</h3></div>
+        <span class="content-progress-elapsed" data-content-elapsed>${escapeHtml(formatElapsed(contentElapsedSeconds(result)))}</span>
+      </div>
+      <p class="content-progress-message">${escapeHtml(message)}</p>
+      <progress class="content-progress-meter" max="7" value="${Math.max(0, Math.min(7, stageIndex))}">${stageIndex}/7</progress>
+      <ol class="content-progress-steps">${steps}</ol>`;
+  }
+
+  function updateContentElapsed() {
+    const elapsed = elements.contentProgress && elements.contentProgress.querySelector("[data-content-elapsed]");
+    if (elapsed) elapsed.textContent = formatElapsed(contentElapsedSeconds({}));
+  }
+
+  function clearContentTracking() {
+    if (state.contentPollTimer) window.clearTimeout(state.contentPollTimer);
+    if (state.contentElapsedTimer) window.clearInterval(state.contentElapsedTimer);
+    state.contentPollTimer = 0;
+    state.contentElapsedTimer = 0;
+    state.contentOperationId = "";
+  }
+
+  function scheduleContentPoll(delay = 2000) {
+    if (!state.contentOperationId || state.contentPollTimer) return;
+    state.contentPollTimer = window.setTimeout(pollContentOperation, delay);
+  }
+
+  function startContentTracking(result) {
+    if (!isContentResult(result)) return;
+    if (state.contentOperationId && state.contentOperationId !== result.id) return;
+    const startingNewOperation = !state.contentOperationId;
+    state.contentOperationId = result.id;
+    if (!state.contentOperationStartedAt) {
+      const parsed = Date.parse(String(result.startedAt || ""));
+      state.contentOperationStartedAt = Number.isFinite(parsed) ? parsed : Date.now();
+    }
+    renderContentProgress(result);
+    setBusy(true);
+    if (!state.contentElapsedTimer) state.contentElapsedTimer = window.setInterval(updateContentElapsed, 1000);
+    if (startingNewOperation) scheduleContentPoll(750);
+  }
+
+  function finishContentTracking(result) {
+    renderContentProgress(result);
+    clearContentTracking();
+    state.contentOperationStartedAt = 0;
+    setBusy(false);
+  }
+
+  async function pollContentOperation() {
+    const operationId = state.contentOperationId;
+    state.contentPollTimer = 0;
+    if (!operationId) return;
+    try {
+      const query = targetQuery();
+      const data = await api(`/api/minecraft/management${query ? `?${query}` : ""}`, { method: "GET" });
+      if (state.contentOperationId !== operationId) return;
+      const result = data.lastResult || {};
+      if (result.id !== operationId) {
+        scheduleContentPoll(3000);
+        return;
+      }
+      render(data);
+      if (isActiveContentResult(result)) {
+        renderContentProgress(result);
+        scheduleContentPoll(2000);
+        return;
+      }
+      setStatus(resultSummary(result, data.message || "Minecraft content action completed."), result.state === "failed" ? "error" : "success");
+      finishContentTracking(result);
+    } catch (error) {
+      if (state.contentOperationId !== operationId) return;
+      setStatus(`Content operation is still running. Status refresh failed: ${error.message || "temporary connection error"}`, "warning");
+      scheduleContentPoll(4000);
+    }
   }
 
   function cleanCommandOutput(value) {
@@ -192,10 +332,10 @@
       return `
       <article class="content-item">
         <div><h3>${escapeHtml(item.title)}</h3><p class="content-meta">${escapeHtml(item.projectId)} · ${escapeHtml(item.version)}</p>${compatibility}${projectLink}</div>
-        <button class="action delete" type="button" data-content-action="remove" data-project-id="${escapeHtml(item.projectId)}">Remove</button>
+        <button class="action delete" type="button" data-content-action="remove" data-project-id="${escapeHtml(item.projectId)}" data-title="${escapeHtml(item.title)}">Remove</button>
       </article>`;
     }).join("");
-    elements.installedContent.querySelectorAll("[data-content-action='remove']").forEach((button) => button.addEventListener("click", () => runContentAction("content-remove", button.dataset.projectId, "")));
+    elements.installedContent.querySelectorAll("[data-content-action='remove']").forEach((button) => button.addEventListener("click", () => runContentAction("content-remove", button.dataset.projectId, button.dataset.title)));
   }
 
   function serverProperties() {
@@ -343,6 +483,8 @@
     renderInstalledContent(data.content || [], runtime);
     const result = data.lastResult || {};
     if (result.id) setOutput(`[${result.action || "action"}] ${result.state || "unknown"}\n${result.output || "No output returned."}`);
+    if (isActiveContentResult(result)) startContentTracking(result);
+    else if (state.contentOperationId && result.id === state.contentOperationId) finishContentTracking(result);
     if (data.restartRequired) {
       elements.notice.classList.remove("hidden");
       elements.notice.textContent = data.message || "The management agent is prepared but requires one VM restart from the main GUI.";
@@ -367,7 +509,7 @@
       setStatus(error.message || "Unable to load Minecraft management.", "error");
       elements.identity.textContent = "Minecraft management access is required.";
     } finally {
-      setBusy(false);
+      setBusy(Boolean(state.contentOperationId));
     }
   }
 
@@ -395,19 +537,63 @@
   }
 
   async function runContentAction(action, projectId, title) {
-    if (action === "content-remove" && !window.confirm(`Remove ${projectId} and restart Minecraft?`)) return;
+    if (action === "content-remove" && !window.confirm(`Remove ${title || projectId} and restart Minecraft?`)) return;
     const body = { action, endpointId: state.endpointId, hardwareId: state.hardwareId, zone: state.zone, minecraftServerId: state.minecraftServerId, projectId, title };
-    if (action === "catalog-search") body.query = String(elements.contentSearchQuery.value || "").trim();
+    if (action === "catalog-search") {
+      body.query = String(elements.contentSearchQuery.value || "").trim();
+      setBusy(true);
+      setStatus("Searching Modrinth...", "warning");
+      try {
+        const data = await api("/api/minecraft/management", { method: "POST", body: JSON.stringify(body) });
+        render(data);
+        setStatus(data.message || "Catalog search completed.", "success");
+      } catch (error) {
+        setStatus(error.message || "Catalog search failed.", "error");
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
+    const operationId = window.crypto.randomUUID().replaceAll("-", "_");
+    body.operationId = operationId;
+    const seed = {
+      id: operationId,
+      action: "content-sync",
+      kind: action === "content-remove" ? "remove" : "install",
+      target: title || projectId,
+      state: "queued",
+      stage: "queued",
+      stageIndex: 0,
+      stageCount: 7,
+      message: "Submitting the operation to the VM agent.",
+    };
+    state.contentOperationStartedAt = Date.now();
+    startContentTracking(seed);
     setBusy(true);
-    setStatus(action === "catalog-search" ? "Searching Modrinth..." : "Applying Modrinth content and restarting Minecraft...", "warning");
+    setStatus(action === "content-remove" ? `Removing ${title || projectId}...` : `Installing ${title || projectId}...`, "warning");
     try {
       const data = await api("/api/minecraft/management", { method: "POST", body: JSON.stringify(body) });
       render(data);
       setStatus(resultSummary(data.lastResult, data.message || "Minecraft content action completed."), data.lastResult && data.lastResult.state === "failed" ? "error" : "success");
+      if (!isActiveContentResult(data.lastResult || {})) finishContentTracking(data.lastResult || { ...seed, state: "done", stage: "completed", stageIndex: 7 });
     } catch (error) {
-      setStatus(error.message || "Minecraft content action failed.", "error");
-    } finally {
-      setBusy(false);
+      if (!state.contentOperationId) return;
+      try {
+        const query = targetQuery();
+        const recovered = await api(`/api/minecraft/management${query ? `?${query}` : ""}`, { method: "GET" });
+        const result = recovered.lastResult || {};
+        if (result.id === operationId && isActiveContentResult(result)) {
+          render(recovered);
+          setStatus("The request is still active on the VM. Monitoring its progress...", "warning");
+          scheduleContentPoll(1000);
+          return;
+        }
+      } catch (_) {
+        // The original error is more useful than a failed recovery read.
+      }
+      const failed = { ...seed, state: "failed", message: error.message || "Minecraft content action failed." };
+      finishContentTracking(failed);
+      setStatus(failed.message, "error");
     }
   }
 

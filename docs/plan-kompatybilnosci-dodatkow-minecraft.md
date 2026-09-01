@@ -2,7 +2,7 @@
 
 ## Status dokumentu
 
-- Status: plan do implementacji.
+- Status: faza 1 wdrożona; kolejne fazy oraz provider-neutralny postęp operacji są zaplanowane.
 - Zakres: pluginy i mody instalowane z Modrinth dla wielu instancji serwera Minecraft na VM.
 - Data aktualizacji: 2026-09-01.
 - Dokument zastępuje szczegółowy zakres fazy 2 z
@@ -47,10 +47,12 @@ Backend już:
 5. Wybiera plik JAR z opublikowaną sumą SHA-512.
 6. Przechowuje zawartość osobno dla każdej instancji serwera Minecraft.
 7. Blokuje instalację tego samego projektu drugi raz.
+8. Klasyfikuje środowisko dodatku jako zgodne, ostrzegawcze albo blokowane.
+9. Pokazuje w GUI środowisko, wymagania klienta i ostrzeżenia kompatybilności.
 
-Brakuje pełnej walidacji środowiska klient/serwer, zależności, konfliktów,
-zgodności rzeczywiście uruchomionego runtime'u, transakcji plikowej, rollbacku i
-ochrony zależności przy usuwaniu.
+Brakuje resolvera zależności i konfliktów, zgodności rzeczywiście uruchomionego
+runtime'u, transakcji plikowej, rollbacku, ochrony zależności przy usuwaniu oraz
+widocznego w czasie rzeczywistym postępu operacji.
 
 ## Zasady projektowe
 
@@ -297,6 +299,199 @@ Docelowy podział odpowiedzialności:
 Nazwy tras mogą zostać dostosowane do obecnego routera. Ważne jest rozdzielenie
 operacji planującej od mutującej oraz brak zaufania do listy artefaktów przesłanej
 przez przeglądarkę.
+
+## Plan provider-neutralnego postępu instalacji i usuwania
+
+### Stan obecny i ograniczenia
+
+1. GUI wysyła jedno synchroniczne żądanie `content-install` albo `content-remove`,
+   blokuje kontrolki i otrzymuje odpowiedź dopiero po zakończeniu całej operacji.
+2. Backend zapisuje w metadanych VM stan `queued`, a następnie czeka do 300 sekund
+   wyłącznie na końcowy stan `done` albo `failed`.
+3. Agent wykonuje przygotowanie manifestu, uzgodnienie plików, restart, oczekiwanie
+   na RCON oraz kontrolę plików i sum kontrolnych, ale nie publikuje etapów
+   pośrednich.
+4. Zwykły animowany procent w GUI byłby pozorny, ponieważ przeglądarka nie zna
+   rzeczywistego etapu ani ilości wykonanej pracy.
+5. Cloud Run nie powinien uruchamiać niekontrolowanej pracy w tle po zwróceniu
+   odpowiedzi. Wykonawcą pozostaje agent VM, a stan operacji pozostaje w
+   metadanych wskazanej VM.
+
+### Rekomendowany model
+
+1. Zachować bieżący mechanizm żądania do agenta i oczekiwania backendu, ale
+   rozszerzyć wynik operacji w metadanych o stany pośrednie.
+2. Agent publikuje postęp wyłącznie przy zmianie etapu. GUI odpytywane co kilka
+   sekund pobiera ten sam provider-neutralny model przez istniejący odczyt panelu
+   zarządzania.
+3. Frontend równolegle utrzymuje żądanie instalacji i odpytuje stan operacji.
+   Upływ czasu aktualizuje lokalnie co sekundę, bez dodatkowych zapisów do GCE.
+4. Widok pokazuje kroki i aktualny etap. Pasek odzwierciedla liczbę zakończonych
+   etapów, a nie udawany procent pobranych danych.
+5. Jeżeli wykonawca zna liczbę artefaktów albo bajtów, może opcjonalnie raportować
+   `itemsCompleted/itemsTotal` lub `bytesCompleted/bytesTotal`. Brak tych danych
+   nie zmienia kontraktu ani nie blokuje operacji.
+6. Nazwa providera jest opcjonalną informacją opisową. Nazwy etapów, API i
+   komponent GUI nie zawierają `Modrinth`, dzięki czemu ten sam mechanizm obsłuży
+   przyszłe źródła dodatków.
+
+### Kontrakt stanu operacji
+
+Wynik zapisany przez backend i agenta powinien zachować obecne pola `id`,
+`action`, `serverId`, `state`, `output` i `completedAt`, a opcjonalnie dodać:
+
+```json
+{
+  "id": "opaque-operation-id",
+  "action": "content-sync",
+  "kind": "install",
+  "serverId": "survival",
+  "state": "running",
+  "stage": "restarting",
+  "stageIndex": 4,
+  "stageCount": 7,
+  "message": "Restarting the selected Minecraft server.",
+  "target": "LuckPerms",
+  "provider": "modrinth",
+  "itemsCompleted": 1,
+  "itemsTotal": 1,
+  "bytesCompleted": null,
+  "bytesTotal": null,
+  "startedAt": "ISO-8601",
+  "updatedAt": "ISO-8601",
+  "completedAt": ""
+}
+```
+
+Pola liczbowe dotyczące elementów i bajtów są opcjonalne. Frontend nie może
+wyliczać ich samodzielnie ani przedstawiać estymacji jako rzeczywistego postępu.
+
+### Etapy provider-neutralne
+
+| Etap | Znaczenie |
+|---|---|
+| `queued` | Żądanie zostało zapisane dla agenta VM. |
+| `preparing` | Walidowany i przygotowywany jest docelowy zestaw zawartości. |
+| `applying` | Pliki oraz manifest są uzgadniane z docelowym serwerem. |
+| `restarting` | Restartowana jest wyłącznie wybrana instancja Minecrafta. |
+| `health-check` | Agent czeka na kontener i gotowość RCON. |
+| `verifying` | Sprawdzane są oczekiwane pliki oraz sumy kontrolne. |
+| `finalizing` | Zapisywany jest wynik i sprzątany stan tymczasowy. |
+| `completed` | Operacja zakończyła się sukcesem. |
+| `failed` | Operacja zakończyła się błędem na wskazanym etapie. |
+| `rolling-back` | Przyszła transakcyjna implementacja przywraca poprzedni stan. |
+
+Nie wszystkie operacje muszą przejść przez każdy etap. Usuwanie bez pobierania
+może pominąć licznik bajtów, ale nadal używa tego samego modelu i widoku.
+
+### Zmiany backendu
+
+1. Utworzyć walidator i normalizator stanu operacji niezależny od providera.
+2. Przy przyjęciu instalacji lub usuwania zapisać `queued`, `startedAt`, cel oraz
+   liczbę etapów.
+3. Pozwolić istniejącemu odczytowi `/api/minecraft/management` zwracać
+   `queued` i `running` w `lastResult`, bez uznawania ich za wynik końcowy.
+4. Zachować oczekiwanie synchronicznego POST dla zgodności wstecznej. Osobny
+   endpoint operacji wprowadzić dopiero razem z planami instalacji z fazy 2.
+5. Po przekroczeniu timeoutu POST nie oznaczać operacji jako nieudaną, jeśli
+   agent nadal raportuje aktywny etap. Odpowiedź ma zawierać identyfikator oraz
+   informację, że GUI powinno kontynuować odpytywanie.
+6. Odrzucić nową mutację zawartości dla tego samego serwera, jeśli poprzednia ma
+   stan `queued`, `running` albo `rolling-back`.
+7. Nie zwracać w modelu postępu adresów pobierania, tokenów ani sekretów RCON.
+
+### Zmiany agenta VM
+
+1. Dodać funkcję `publish_progress`, korzystającą z tego samego klucza wyniku co
+   obecne `publish_result`.
+2. Publikować postęp przed przygotowaniem manifestu, uzgodnieniem plików,
+   restartem, oczekiwaniem na RCON, weryfikacją i finalizacją.
+3. Publikować tylko zmianę etapu lub istotną zmianę licznika. Nie zapisywać
+   metadanych co sekundę, aby nie generować zbędnych operacji Compute API.
+4. Błąd ma zachować ostatni etap oraz krótki bezpieczny komunikat, dzięki czemu
+   GUI wskaże miejsce awarii.
+5. Zachować obsługę starszych żądań bez nowych pól i obecny końcowy stan
+   `done/failed`.
+6. W fazie transakcyjnej rozszerzyć ten sam model o `rolling-back`, bez tworzenia
+   drugiego komponentu postępu.
+
+### Zmiany GUI
+
+1. Dodać jeden komponent postępu dla instalacji i usuwania dodatków.
+2. Pokazywać rodzaj operacji, nazwę dodatku, serwer docelowy, listę etapów,
+   aktualny komunikat oraz czas od rozpoczęcia.
+3. Podczas trwającego POST równolegle odpytywać stan co 2-3 sekundy. Odczyt nie
+   może odblokować przycisków mutujących ani uruchomić drugiej operacji.
+4. Po odświeżeniu strony wykryć aktywny `lastResult` i automatycznie odtworzyć
+   komponent postępu oraz odpytywanie.
+5. Po sukcesie odświeżyć katalog i listę zainstalowanych dodatków, pokazać wynik,
+   a następnie pozostawić zwinięte podsumowanie operacji.
+6. Po błędzie pozostawić widoczny etap awarii i komunikat. Przycisk ponowienia
+   staje się aktywny dopiero po potwierdzeniu końcowego stanu przez backend.
+7. Dla starszego agenta, który raportuje tylko `queued` i wynik końcowy, pokazać
+   indykator `Waiting for VM agent` oraz czas, bez pozornego procentu.
+8. Nie dodawać anulowania w pierwszym wdrożeniu. Przerwanie w trakcie zapisu lub
+   restartu mogłoby pozostawić niespójny manifest; anulowanie można dodać dopiero
+   po wdrożeniu transakcji i rollbacku.
+
+### Odporność i sytuacje brzegowe
+
+1. Każda odpowiedź z innym `id` jest ignorowana przez aktywny widok postępu.
+2. Brak aktualizacji `updatedAt` przez ustalony czas pokazuje `No recent agent
+   update`, ale nie oznacza automatycznie błędu ani nie odblokowuje mutacji.
+3. Utrata sieci w przeglądarce powoduje ponawianie odczytu z backoffem. Po
+   odzyskaniu połączenia stan jest rekonstruowany z metadanych VM.
+4. Błąd pojedynczego odczytu statusu nie może przerwać nadal działającego POST.
+5. Usunięcie lub zatrzymanie VM podczas operacji kończy ją czytelnym błędem.
+6. Postęp jest izolowany przez `serverId`; operacja jednej instancji Minecrafta
+   nie może pojawić się w panelu innej instancji na tej samej VM.
+7. Wiele otwartych kart może obserwować tę samą operację, ale backend akceptuje
+   tylko jedną mutację dla danego serwera.
+
+### Kolejność wdrożenia
+
+1. Dodać zgodny wstecznie model backendu i frontend obsługujący zarówno stary,
+   jak i nowy wynik agenta.
+2. Wdrożyć Cloud Run i GitHub Pages; dla starego agenta GUI pokazuje bezpieczny
+   postęp indeterminate.
+3. Wdrożyć agenta publikującego etapy i zrestartować lub odświeżyć testową VM.
+4. Wykonać instalację oraz usunięcie na testowym Paper i jednym runtime modowym.
+5. Po potwierdzeniu stabilności użyć tego samego kontraktu w fazach planowania,
+   rollbacku i obsłudze kolejnych providerów.
+
+### Testy postępu
+
+1. Test jednostkowy normalizacji każdego etapu, brakujących pól i nieznanego
+   etapu ze starszego agenta.
+2. Test agenta potwierdzający monotoniczną kolejność etapów i końcowy wynik dla
+   instalacji, usuwania oraz błędu w każdym istotnym miejscu.
+3. Test backendu potwierdzający, że `running` nie kończy oczekiwania POST, a GET
+   zwraca bieżący etap właściwego `serverId`.
+4. Test GUI dla równoległego POST i pollingu, blokady powtórnego kliknięcia,
+   timeoutu, chwilowego błędu sieci oraz starego agenta.
+5. Test E2E instalacji pluginu Paper i moda Fabric z obserwacją wszystkich etapów.
+6. Test E2E usuwania dodatku oraz błędu sumy kontrolnej z widocznym etapem
+   `verifying`.
+7. Odświeżyć stronę podczas `applying`, `health-check` i błędu; komponent ma
+   wznowić właściwą operację bez ponownego żądania instalacji.
+8. Otworzyć dwie karty i potwierdzić, że obie widzą tę samą operację, ale tylko
+   jedna mutacja została wykonana.
+9. Potwierdzić, że liczba zapisów metadanych odpowiada zmianom etapów, a nie
+   czasowi trwania operacji.
+
+### Kryteria akceptacji postępu
+
+1. Administrator widzi aktualny rzeczywisty etap i czas działania od kliknięcia
+   `Install` lub `Remove` do wyniku końcowego.
+2. GUI nie pokazuje wymyślonego procentu, gdy agent nie dostarcza mierzalnych
+   liczników.
+3. Odświeżenie strony i przejściowa utrata sieci nie ukrywają aktywnej operacji.
+4. Mechanizm nie zawiera nazw ani założeń konkretnego providera poza opcjonalnym
+   polem informacyjnym.
+5. Starsza VM nadal działa i pokazuje fallback bez konieczności natychmiastowej
+   aktualizacji agenta.
+6. Nie można równolegle uruchomić dwóch mutacji zawartości tego samego serwera.
+7. Sukces, błąd i przyszły rollback używają tego samego modelu i komponentu UI.
 
 ## Fazy realizacji
 

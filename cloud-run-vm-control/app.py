@@ -8705,11 +8705,23 @@ def minecraft_management_request_payload(payload: dict[str, Any]) -> dict[str, s
     return request_payload
 
 
-def minecraft_content_sync_request(entries: list[dict[str, Any]], removed_files: list[str] | None = None) -> dict[str, Any]:
+def minecraft_content_sync_request(
+    entries: list[dict[str, Any]],
+    removed_files: list[str] | None = None,
+    *,
+    operation_id: str = "",
+    kind: str = "sync",
+    target: str = "",
+    provider: str = "",
+) -> dict[str, Any]:
     return {
-        "id": secrets.token_urlsafe(18),
+        "id": operation_id or secrets.token_urlsafe(18),
         "action": "content-sync",
         "serverId": "default",
+        "kind": kind,
+        "target": target,
+        "provider": provider,
+        "stageCount": 7,
         "entries": [f"{entry['projectId']}:{entry['versionId']}" for entry in entries],
         "expectedFiles": sorted(
             {
@@ -8785,6 +8797,9 @@ def execute_minecraft_management_action(
         )
 
     updated_content: list[dict[str, str]] | None = None
+    operation_id = str(payload.get("operationId") or "").strip()
+    if operation_id and not re.fullmatch(r"[A-Za-z0-9_-]{16,100}", operation_id):
+        raise ApiError("Invalid content operation ID.", 400)
     if action == "content-install":
         instance = migrate_unambiguous_legacy_minecraft_content(instance)
         selected_server = minecraft_server_by_id(instance, selected_server_id)
@@ -8795,38 +8810,73 @@ def execute_minecraft_management_action(
         if any(item["projectId"] == entry["projectId"] for item in current_content):
             raise ApiError("This Modrinth project is already installed. Remove it before selecting another version.", 409)
         updated_content = [*current_content, entry]
-        request_payload = minecraft_content_sync_request(updated_content)
+        request_payload = minecraft_content_sync_request(
+            updated_content,
+            operation_id=operation_id,
+            kind="install",
+            target=str(entry.get("title") or entry["projectId"]),
+            provider="modrinth",
+        )
         request_payload["serverId"] = selected_server_id
     elif action == "content-remove":
         project_id = str(payload.get("projectId") or "").strip()
         if not re.fullmatch(r"[A-Za-z0-9_-]{3,80}", project_id):
             raise ApiError("Invalid Modrinth project ID.", 400)
         current_content = normalize_minecraft_modrinth_content(selected_server.get("content", []))
+        removed_entry = next((item for item in current_content if item["projectId"] == project_id), None)
         updated_content = [item for item in current_content if item["projectId"] != project_id]
         if len(updated_content) == len(current_content):
             raise ApiError("The selected Modrinth project is not installed.", 404)
         removed_files = [filename for item in current_content if item["projectId"] == project_id for filename in item.get("files", [])]
-        request_payload = minecraft_content_sync_request(updated_content, removed_files)
+        request_payload = minecraft_content_sync_request(
+            updated_content,
+            removed_files,
+            operation_id=operation_id,
+            kind="remove",
+            target=str((removed_entry or {}).get("title") or project_id),
+            provider="modrinth",
+        )
         request_payload["serverId"] = selected_server_id
     else:
         request_payload = minecraft_management_request_payload(payload)
-    set_instance_metadata_values(
-        instance,
-        {
-            MINECRAFT_MANAGEMENT_REQUEST_METADATA_KEY: json.dumps(request_payload, separators=(",", ":")),
-            MINECRAFT_MANAGEMENT_RESULT_METADATA_KEY: json.dumps(
-                {
-                    "id": request_payload["id"],
-                    "action": request_payload["action"],
-                    "serverId": selected_server_id,
-                    "state": "queued",
-                    "output": "",
-                    "completedAt": "",
-                },
-                separators=(",", ":"),
-            ),
-        },
+    active_result = minecraft_management_request_result(instance)
+    active_content_operation = (
+        active_result.get("action") == "content-sync"
+        and active_result.get("state") in {"queued", "running", "rolling-back"}
     )
+    if active_content_operation and active_result.get("id") != request_payload["id"]:
+        raise ApiError("Another Minecraft content operation is still running on this VM.", 409)
+    if active_content_operation and (
+        active_result.get("serverId") != selected_server_id
+        or active_result.get("kind") != request_payload.get("kind")
+        or active_result.get("target") != request_payload.get("target")
+    ):
+        raise ApiError("The repeated content operation ID does not match the active operation.", 409)
+    if not active_content_operation:
+        set_instance_metadata_values(
+            instance,
+            {
+                MINECRAFT_MANAGEMENT_REQUEST_METADATA_KEY: json.dumps(request_payload, separators=(",", ":")),
+                MINECRAFT_MANAGEMENT_RESULT_METADATA_KEY: json.dumps(
+                    {
+                        "id": request_payload["id"],
+                        "action": request_payload["action"],
+                        "kind": request_payload.get("kind", "sync"),
+                        "serverId": selected_server_id,
+                        "target": request_payload.get("target", ""),
+                        "provider": request_payload.get("provider", ""),
+                        "state": "queued",
+                        "stage": "queued",
+                        "stageIndex": 0,
+                        "stageCount": request_payload.get("stageCount", 7),
+                        "message": "Waiting for the VM agent.",
+                        "output": "",
+                        "completedAt": "",
+                    },
+                    separators=(",", ":"),
+                ),
+            },
+        )
     refreshed, result = wait_for_minecraft_management_result(
         request_payload["id"],
         timeout_seconds=300 if updated_content is not None else 75,
