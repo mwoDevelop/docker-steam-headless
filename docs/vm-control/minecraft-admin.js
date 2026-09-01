@@ -116,8 +116,9 @@
       else if (alreadyInstalled) button.textContent = "Installed";
       else button.textContent = action === "remove" ? "Remove" : "Install";
       button.disabled = state.busy || alreadyInstalled || Boolean(activeOperation) || !mutationReady;
-      if (alreadyInstalled) button.title = "This project is already installed.";
-      else if (activeOperation) button.title = activeTarget ? "This operation is in progress." : activeReason;
+      if (activeTarget) button.title = "This operation is in progress.";
+      else if (alreadyInstalled) button.title = "This project is already installed.";
+      else if (activeOperation) button.title = activeReason;
       else button.title = mutationReady ? "" : blockedReason;
     });
   }
