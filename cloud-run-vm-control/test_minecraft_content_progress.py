@@ -126,6 +126,43 @@ class MinecraftContentProgressTests(unittest.TestCase):
         self.assertIn("Applying content", javascript)
         self.assertNotIn("Applying Modrinth content and restarting Minecraft", javascript)
 
+    def test_terminated_vm_overrides_stale_running_server(self):
+        instance = {"status": "TERMINATED"}
+        server = {"state": "running", "detail": "Minecraft server running.", "version": "26.2"}
+        status = vm_control.effective_minecraft_management_status(instance, server)
+        ready, reason = vm_control.minecraft_content_mutation_availability(instance, server, True, {})
+        self.assertEqual("vm_not_running", status["state"])
+        self.assertEqual("VM not running", status["label"])
+        self.assertFalse(ready)
+        self.assertIn("TERMINATED", reason)
+
+    def test_active_operation_blocks_entire_vm(self):
+        operation = {
+            "id": "operation_1234567890",
+            "action": "content-sync",
+            "serverId": "server-a",
+            "kind": "install",
+            "target": "Example plugin",
+            "state": "running",
+        }
+        ready, reason = vm_control.minecraft_content_mutation_availability(
+            {"status": "RUNNING"},
+            {"state": "running"},
+            True,
+            operation,
+        )
+        self.assertFalse(ready)
+        self.assertIn("server-a", reason)
+        self.assertIn("Example plugin", reason)
+
+    def test_progress_precedes_catalog_and_frontend_marks_installed_content(self):
+        html = (ROOT / "docs" / "vm-control" / "minecraft-admin.html").read_text(encoding="utf-8")
+        javascript = (ROOT / "docs" / "vm-control" / "minecraft-admin.js").read_text(encoding="utf-8")
+        self.assertLess(html.index('id="content-operation-progress"'), html.index('id="content-results"'))
+        self.assertIn('button.textContent = "Installed"', javascript)
+        self.assertIn("contentMutationBlockedReason", javascript)
+        self.assertIn("activeContentOperation", javascript)
+
 
 if __name__ == "__main__":
     unittest.main()

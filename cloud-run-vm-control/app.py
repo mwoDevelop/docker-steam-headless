@@ -7725,6 +7725,72 @@ def minecraft_rcon_suggestions(instance: dict[str, Any] | None) -> dict[str, Any
     }
 
 
+def effective_minecraft_management_status(
+    instance: dict[str, Any] | None,
+    selected_server: dict[str, Any] | None,
+) -> dict[str, str]:
+    status = build_minecraft_status(instance)
+    if selected_server:
+        server_state = str(selected_server.get("state", "unknown") or "unknown")
+        status = {
+            "state": server_state,
+            "label": server_state.replace("_", " ").title(),
+            "detail": str(selected_server.get("detail", "") or ""),
+            "version": str(selected_server.get("version", "") or ""),
+        }
+    instance_state = str((instance or {}).get("status", "NOT_FOUND") or "NOT_FOUND").upper()
+    if instance is not None and instance_state != "RUNNING":
+        return {
+            "state": "vm_not_running",
+            "label": "VM not running",
+            "detail": f"The VM is {instance_state}. Start it before using Minecraft management controls.",
+            "version": str((selected_server or {}).get("version", "") or status.get("version", "")),
+        }
+    return status
+
+
+def active_minecraft_content_operation(instance: dict[str, Any] | None) -> dict[str, Any]:
+    result = minecraft_management_request_result(instance)
+    if result.get("action") != "content-sync" or result.get("state") not in {"queued", "running", "rolling-back"}:
+        return {}
+    return {
+        key: result.get(key, "")
+        for key in (
+            "id", "serverId", "kind", "target", "contentId", "provider", "state",
+            "stage", "stageIndex", "stageCount", "message", "startedAt", "updatedAt",
+        )
+    }
+
+
+def active_minecraft_content_operation_message(operation: dict[str, Any]) -> str:
+    kind = str(operation.get("kind", "update") or "update").replace("-", " ").title()
+    target = str(operation.get("target", "Minecraft content") or "Minecraft content")
+    server_id = str(operation.get("serverId", "selected server") or "selected server")
+    return f'{kind} of "{target}" is still running for Minecraft server "{server_id}". Wait for it to finish.'
+
+
+def minecraft_content_mutation_availability(
+    instance: dict[str, Any] | None,
+    selected_server: dict[str, Any] | None,
+    agent_ready: bool,
+    active_operation: dict[str, Any] | None = None,
+) -> tuple[bool, str]:
+    if instance is None:
+        return False, "Create the selected VM before installing or removing Minecraft content."
+    instance_state = str(instance.get("status", "NOT_FOUND") or "NOT_FOUND").upper()
+    if instance_state != "RUNNING":
+        return False, f"The VM is {instance_state}. Start it before installing or removing Minecraft content."
+    if selected_server is None or selected_server.get("state") == "removed":
+        return False, "Install and select a Minecraft server before managing its content."
+    if str(selected_server.get("state", "") or "") != "running":
+        return False, "Start the selected Minecraft server before installing or removing content."
+    if not agent_ready:
+        return False, "The Minecraft management agent is not active yet."
+    if active_operation:
+        return False, active_minecraft_content_operation_message(active_operation)
+    return True, ""
+
+
 def build_minecraft_management_payload(
     instance: dict[str, Any] | None,
     user: dict[str, Any],
@@ -7738,20 +7804,20 @@ def build_minecraft_management_payload(
         selected_server_id = selected_minecraft_server_id(instance, request.args if request else {})
     servers = minecraft_servers_from_instance(instance)
     selected_server = next((server for server in servers if server["id"] == selected_server_id), None)
-    minecraft_status = build_minecraft_status(instance)
-    if selected_server:
-        minecraft_status = {
-            "state": selected_server["state"],
-            "label": selected_server["state"].replace("_", " ").title(),
-            "detail": selected_server.get("detail", ""),
-            "version": selected_server.get("version", ""),
-        }
+    minecraft_status = effective_minecraft_management_status(instance, selected_server)
     agent_ready = minecraft_management_agent_ready(instance)
     runtime = minecraft_server_type_spec((selected_server or {}).get("serverType") or minecraft_server_type_from_instance(instance))
     agent_prepared = bool(
         instance and metadata_value(instance, "vm-minecraft-management-script").strip()
     )
     last_result = result or minecraft_management_request_result(instance)
+    active_content_operation = active_minecraft_content_operation(instance)
+    content_mutation_ready, content_mutation_blocked_reason = minecraft_content_mutation_availability(
+        instance,
+        selected_server,
+        agent_ready,
+        active_content_operation,
+    )
     if result is None and last_result and minecraft_management_request_server_id(instance) != selected_server_id:
         last_result = {}
     return {
@@ -7778,6 +7844,9 @@ def build_minecraft_management_payload(
         "rconSuggestions": minecraft_rcon_suggestions(instance),
         "content": normalize_minecraft_modrinth_content((selected_server or {}).get("content", [])),
         "catalogResults": catalog_results or [],
+        "activeContentOperation": active_content_operation,
+        "contentMutationReady": content_mutation_ready,
+        "contentMutationBlockedReason": content_mutation_blocked_reason,
         "agentReady": agent_ready,
         "agentPrepared": agent_prepared,
         "restartRequired": agent_prepared and not agent_ready,
@@ -8888,7 +8957,7 @@ def execute_minecraft_management_action(
         and active_result.get("state") in {"queued", "running", "rolling-back"}
     )
     if active_content_operation and active_result.get("id") != request_payload["id"]:
-        raise ApiError("Another Minecraft content operation is still running on this VM.", 409)
+        raise ApiError(active_minecraft_content_operation_message(active_result), 409)
     if active_content_operation and (
         active_result.get("serverId") != selected_server_id
         or active_result.get("kind") != request_payload.get("kind")

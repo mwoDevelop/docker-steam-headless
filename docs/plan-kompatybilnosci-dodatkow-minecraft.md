@@ -2,7 +2,7 @@
 
 ## Status dokumentu
 
-- Status: faza 1 wdrożona; kolejne fazy oraz provider-neutralny postęp operacji są zaplanowane.
+- Status: faza 1 i provider-neutralny postęp operacji są wdrożone; stabilizacja gotowości i blokad GUI jest w realizacji.
 - Zakres: pluginy i mody instalowane z Modrinth dla wielu instancji serwera Minecraft na VM.
 - Data aktualizacji: 2026-09-01.
 - Dokument zastępuje szczegółowy zakres fazy 2 z
@@ -51,8 +51,9 @@ Backend już:
 9. Pokazuje w GUI środowisko, wymagania klienta i ostrzeżenia kompatybilności.
 
 Brakuje resolvera zależności i konfliktów, zgodności rzeczywiście uruchomionego
-runtime'u, transakcji plikowej, rollbacku, ochrony zależności przy usuwaniu oraz
-widocznego w czasie rzeczywistym postępu operacji.
+runtime'u, transakcji plikowej, rollbacku oraz ochrony zależności przy usuwaniu.
+Provider-neutralny postęp operacji jest wdrożony i przeszedł testy instalacji
+oraz usuwania, ale wymaga opisanej niżej stabilizacji gotowości i blokad GUI.
 
 ## Zasady projektowe
 
@@ -492,6 +493,95 @@ może pominąć licznik bajtów, ale nadal używa tego samego modelu i widoku.
    aktualizacji agenta.
 6. Nie można równolegle uruchomić dwóch mutacji zawartości tego samego serwera.
 7. Sukces, błąd i przyszły rollback używają tego samego modelu i komponentu UI.
+
+## Stabilizacja gotowości, blokad i położenia postępu
+
+### Diagnoza produkcyjna
+
+1. VM może mieć stan `TERMINATED`, podczas gdy zapisany wpis wybranego serwera
+   nadal ma stan `running`. Backend poprawnie odrzuca mutację kodem 409, ale
+   payload GUI może błędnie prezentować Minecraft jako działający.
+2. `agentReady` jest informacją o przygotowaniu agenta, a nie wystarczającym
+   dowodem, że agent jest obecnie osiągalny na uruchomionej VM.
+3. Wyszukiwanie katalogu jest bezpieczne dla zatrzymanej VM, ale instalacja i
+   usuwanie muszą pozostać niedostępne do czasu uruchomienia VM i serwera.
+4. Katalog nie odróżnia projektu już zainstalowanego od projektu możliwego do
+   instalacji i pokazuje aktywny `Install`, mimo że backend odrzuci duplikat.
+5. Panel postępu znajduje się pod listą wyników. Przy długiej liście może być
+   kilka ekranów poniżej przycisku, który uruchomił operację.
+6. Agent VM używa jednego klucza żądania i jednego klucza wyniku dla wszystkich
+   instancji Minecrafta na danej VM. Obecna serializacja jest więc globalna dla
+   VM, nie per serwer. Kolejka nie jest zaimplementowana.
+
+### Decyzje po niezależnym przeglądzie planu
+
+1. Nie dodawać pozornej kolejki w GUI. Trwała kolejka wymagałaby osobnego modelu
+   zleceń, retencji, anulowania i odzyskiwania po restarcie; pojedyncze metadane
+   VM nie są bezpieczną kolejką.
+2. Backend pozostaje źródłem prawdy i zwraca jawne `contentMutationReady`,
+   `contentMutationBlockedReason` oraz bezpieczne podsumowanie aktywnej operacji
+   całej VM. GUI nie wylicza gotowości wyłącznie z historycznego statusu serwera.
+3. Gotowość mutacji wymaga jednocześnie: VM `RUNNING`, wybranego serwera w stanie
+   `running`, aktywnego agenta oraz braku innej aktywnej operacji zawartości na VM.
+4. `actions` nadal opisuje uprawnienia i możliwości API. Bieżąca dostępność jest
+   osobnym kontraktem, aby nie mieszać autoryzacji ze stanem runtime'u.
+5. Wyszukiwanie katalogu pozostaje dostępne jako operacja read-only także przy
+   zatrzymanej VM i podczas mutacji. Wszystkie przyciski instalacji i usuwania są
+   w tym czasie blokowane z widoczną przyczyną.
+6. Wielokrotne karty i wyścig ze stopem VM nadal są zabezpieczane przez backend.
+   Odpowiedź 409 ma odświeżyć stan i pokazać autorytatywną przyczynę, bez
+   pozostawiania GUI w stanie zajętym.
+
+### Plan implementacji
+
+1. W `build_minecraft_management_payload` oddzielić zapisany stan serwera od
+   efektywnego stanu zarządzania. Dla VM innej niż `RUNNING` zwracać status
+   niedostępny zamiast historycznego `Running`.
+2. Dodać do payloadu gotowość mutacji, przyczynę blokady i podsumowanie aktywnej
+   operacji `content-sync` niezależnie od aktualnie wybranego `serverId`.
+3. Zachować backendowe odrzucenie równoległej operacji i rozszerzyć komunikat o
+   nazwę serwera oraz cel aktywnej operacji, bez ujawniania danych wrażliwych.
+4. W GUI rozdzielić chwilowe oczekiwanie na request od aktywnej operacji
+   zawartości. Stan `finally` nie może ponownie aktywować przycisków wbrew
+   autorytatywnej gotowości z backendu.
+5. Dla projektu obecnego w manifeście wyświetlać nieaktywny przycisk `Installed`.
+   Dla aktywnego celu wyświetlać `Installing...` albo `Removing...`, a dla
+   pozostałych mutacji `Wait for current operation` w opisie dostępności.
+6. Przenieść komponent postępu bezpośrednio pod wyszukiwarkę i nad listę wyników.
+   Po rozpoczęciu operacji przez użytkownika przewinąć go do komponentu z
+   poszanowaniem `prefers-reduced-motion`; wznowienie po reloadzie nie powinno
+   wymuszać skoku strony.
+7. Po błędzie precondition odświeżyć payload, zakończyć lokalne śledzenie i
+   pozostawić czytelny komunikat bez aktywnego loadera.
+
+### Plan testów stabilizacji
+
+1. Test backendu: VM `TERMINATED` z historycznym serwerem `running` zwraca
+   niedostępny status oraz konkretny powód blokady.
+2. Test backendu: aktywna operacja serwera A blokuje mutację serwera B na tej
+   samej VM i jest widoczna w payloadzie obu paneli.
+3. Test frontendowego kontraktu: zatrzymana VM pozwala wyszukiwać, ale wyłącza
+   `Install` i `Remove`; projekt zainstalowany ma stan `Installed`.
+4. Test frontendowego kontraktu: podczas operacji wszystkie mutacje są
+   nieaktywne, aktywny cel ma właściwą etykietę, a zakończenie nie odblokowuje ich
+   przed odświeżeniem autorytatywnego stanu.
+5. Test struktury DOM: panel postępu poprzedza listę wyników.
+6. E2E na realnej VM: potwierdzić stan zatrzymany, uruchomić VM, zainstalować
+   LitematicaFolia, sprawdzić blokady i postęp nad wynikami, odświeżyć stronę w
+   trakcie operacji, potwierdzić `Installed`, usunąć dodatek i zatrzymać VM.
+7. E2E wyścigu: spróbować drugiej mutacji z drugiej karty lub bezpośredniego API
+   i potwierdzić 409 bez utraty śledzenia pierwszej operacji.
+
+### Kryteria akceptacji stabilizacji
+
+1. Zatrzymana VM nigdy nie prezentuje aktywnego `Install` ani `Remove`.
+2. Katalog pozostaje dostępny do przeglądania bez uruchamiania VM.
+3. Projekt już zainstalowany nie może zostać ponownie wybrany do instalacji.
+4. W danej chwili na VM działa najwyżej jedna mutująca operacja zawartości, a
+   wszystkie panele pokazują jej czytelną przyczynę blokady.
+5. Panel postępu jest widoczny nad wynikami bez przewijania na koniec listy.
+6. LitematicaFolia instaluje się i usuwa na działającym Paper albo zwraca
+   rzeczywisty błąd etapu, bez zawieszonego loadera i bez częściowego wpisu GUI.
 
 ## Fazy realizacji
 

@@ -49,6 +49,7 @@
     contentOperationId: "",
     contentOperationStartedAt: 0,
     contentOperationSnapshot: null,
+    contentOperationScrollPending: false,
     contentPollTimer: 0,
     contentElapsedTimer: 0,
   };
@@ -74,19 +75,47 @@
   }
 
   function setBusy(busy) {
-    state.busy = Boolean(busy || state.contentOperationId);
+    state.busy = Boolean(busy);
+    const activeOperation = currentContentOperation();
+    const controlsBusy = state.busy || Boolean(activeOperation);
     const selectedServerRunning = Boolean(state.data && state.data.minecraftStatus && state.data.minecraftStatus.state === "running");
-    elements.refresh.disabled = busy;
-    elements.actionButtons.forEach((button) => { button.disabled = busy || !state.data || !state.data.agentReady || !selectedServerRunning; });
-    if (elements.console) elements.console.disabled = busy || !state.data || !state.data.agentReady || !selectedServerRunning;
-    document.querySelectorAll(".console-suggestion, .console-player-hint").forEach((button) => { button.disabled = busy || !state.data || !state.data.agentReady || !selectedServerRunning; });
+    elements.refresh.disabled = state.busy;
+    elements.actionButtons.forEach((button) => { button.disabled = controlsBusy || !state.data || !state.data.agentReady || !selectedServerRunning; });
+    if (elements.console) elements.console.disabled = controlsBusy || !state.data || !state.data.agentReady || !selectedServerRunning;
+    document.querySelectorAll(".console-suggestion, .console-player-hint").forEach((button) => { button.disabled = controlsBusy || !state.data || !state.data.agentReady || !selectedServerRunning; });
     const propertiesLoaded = Boolean(state.data && state.data.serverProperties && state.data.serverProperties.loaded);
-    if (elements.propertiesLoad) elements.propertiesLoad.disabled = busy || !state.data || !state.data.agentReady || !selectedServerRunning;
-    if (elements.propertyName) elements.propertyName.disabled = busy || !propertiesLoaded;
-    if (elements.propertyValue) elements.propertyValue.disabled = busy || !propertiesLoaded || !selectedServerProperty()?.editable;
-    if (elements.propertiesSave) elements.propertiesSave.disabled = busy || !propertiesLoaded || !selectedServerProperty()?.editable || !validatePropertyValue(false);
-    if (elements.contentSearch) elements.contentSearch.disabled = busy || !state.data || !state.data.agentReady;
-    document.querySelectorAll("[data-content-action]").forEach((button) => { button.disabled = busy || !state.data || !state.data.agentReady || !selectedServerRunning; });
+    if (elements.propertiesLoad) elements.propertiesLoad.disabled = controlsBusy || !state.data || !state.data.agentReady || !selectedServerRunning;
+    if (elements.propertyName) elements.propertyName.disabled = controlsBusy || !propertiesLoaded;
+    if (elements.propertyValue) elements.propertyValue.disabled = controlsBusy || !propertiesLoaded || !selectedServerProperty()?.editable;
+    if (elements.propertiesSave) elements.propertiesSave.disabled = controlsBusy || !propertiesLoaded || !selectedServerProperty()?.editable || !validatePropertyValue(false);
+    if (elements.contentSearch) elements.contentSearch.disabled = state.busy || !state.data || !state.data.selectedServer;
+    updateContentActionStates(activeOperation);
+  }
+
+  function currentContentOperation() {
+    const backendOperation = state.data && state.data.activeContentOperation || {};
+    if (isActiveContentResult(backendOperation)) return backendOperation;
+    if (isActiveContentResult(state.contentOperationSnapshot || {})) return state.contentOperationSnapshot;
+    return null;
+  }
+
+  function updateContentActionStates(activeOperation) {
+    const installed = new Set((state.data && state.data.content || []).map((item) => String(item.projectId || "")));
+    const mutationReady = Boolean(state.data && state.data.contentMutationReady);
+    const blockedReason = String(state.data && state.data.contentMutationBlockedReason || "Minecraft content management is not ready.");
+    document.querySelectorAll("[data-content-action]").forEach((button) => {
+      const action = String(button.dataset.contentAction || "");
+      const projectId = String(button.dataset.projectId || "");
+      const alreadyInstalled = action === "install" && installed.has(projectId);
+      const activeTarget = Boolean(activeOperation && String(activeOperation.contentId || "") === projectId);
+      if (alreadyInstalled) button.textContent = "Installed";
+      else if (activeTarget) button.textContent = activeOperation.kind === "remove" ? "Removing..." : "Installing...";
+      else button.textContent = action === "remove" ? "Remove" : "Install";
+      button.disabled = state.busy || alreadyInstalled || Boolean(activeOperation) || !mutationReady;
+      if (alreadyInstalled) button.title = "This project is already installed.";
+      else if (activeOperation) button.title = activeTarget ? "This operation is in progress." : blockedReason;
+      else button.title = mutationReady ? "" : blockedReason;
+    });
   }
 
   function setStatus(message, tone) {
@@ -203,7 +232,12 @@
       state.contentOperationStartedAt = Number.isFinite(parsed) ? parsed : Date.now();
     }
     renderContentProgress(result);
-    setBusy(true);
+    if (startingNewOperation && state.contentOperationScrollPending) {
+      state.contentOperationScrollPending = false;
+      const reduceMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      elements.contentProgress.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "nearest" });
+    }
+    setBusy(false);
     if (!state.contentElapsedTimer) state.contentElapsedTimer = window.setInterval(updateContentElapsed, 1000);
     if (startingNewOperation) scheduleContentPoll(750);
   }
@@ -504,7 +538,7 @@
     elements.contentHeading.textContent = `Compatible Modrinth ${kindLabel}`;
     elements.contentRuntime.textContent = minecraft.state === "running"
       ? `${runtime.label || "Paper"} accepts ${kindLabel}; the backend filters results by the installed Minecraft version and runtime.`
-      : `${runtime.label || "Paper"} accepts ${kindLabel}. You can browse the catalog now; start this server before installing or removing content.`;
+      : `${runtime.label || "Paper"} accepts ${kindLabel}. You can browse the catalog now; ${data.contentMutationBlockedReason || "start this server before installing or removing content."}`;
     renderServerProperties(data.serverProperties);
     renderCatalog(data.catalogResults || []);
     renderInstalledContent(data.content || [], runtime);
@@ -536,7 +570,7 @@
       setStatus(error.message || "Unable to load Minecraft management.", "error");
       elements.identity.textContent = "Minecraft management access is required.";
     } finally {
-      setBusy(Boolean(state.contentOperationId));
+      setBusy(false);
     }
   }
 
@@ -595,8 +629,9 @@
       message: "Submitting the operation to the VM agent.",
     };
     state.contentOperationStartedAt = Date.now();
+    state.contentOperationScrollPending = true;
     startContentTracking(seed);
-    setBusy(true);
+    setBusy(false);
     setStatus(action === "content-remove" ? `Removing ${title || projectId}...` : `Installing ${title || projectId}...`, "warning");
     try {
       const data = await api("/api/minecraft/management", { method: "POST", body: JSON.stringify(body) });
