@@ -8915,7 +8915,7 @@ def execute_minecraft_management_action(
                         "stageCount": request_payload.get("stageCount", 7),
                         "message": "Waiting for the VM agent.",
                         "output": "",
-                        "startedAt": format_utc_datetime(datetime.now(timezone.utc)),
+                        "startedAt": format_datetime_utc(datetime.now(timezone.utc)),
                         "completedAt": "",
                     },
                     separators=(",", ":"),

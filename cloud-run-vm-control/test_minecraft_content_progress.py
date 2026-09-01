@@ -112,7 +112,11 @@ class MinecraftContentProgressTests(unittest.TestCase):
 
     def test_queued_content_operation_records_start_time(self):
         source = inspect.getsource(vm_control.execute_minecraft_management_action)
-        self.assertIn('"startedAt": format_utc_datetime(datetime.now(timezone.utc))', source)
+        self.assertIn('"startedAt": format_datetime_utc(datetime.now(timezone.utc))', source)
+        self.assertRegex(
+            vm_control.format_datetime_utc(vm_control.datetime.now(vm_control.timezone.utc)),
+            r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$",
+        )
 
     def test_progress_ui_is_not_modrinth_specific(self):
         html = (ROOT / "docs" / "vm-control" / "minecraft-admin.html").read_text(encoding="utf-8")
