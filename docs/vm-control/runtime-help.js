@@ -95,7 +95,9 @@
       dialog.returnValue = "";
       if (!dialog.open) dialog.showModal();
     });
-    dialog.addEventListener("close", () => openButton.focus());
+    dialog.addEventListener("close", () => {
+      window.requestAnimationFrame(() => openButton.focus());
+    });
     updateButtonLabel();
   }
 

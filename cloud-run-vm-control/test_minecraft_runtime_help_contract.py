@@ -27,7 +27,7 @@ class MinecraftRuntimeHelpContractTests(unittest.TestCase):
     def test_dialog_uses_current_runtime_and_restores_focus(self):
         self.assertIn("RUNTIME_HELP[select.value]", self.javascript)
         self.assertIn("dialog.showModal()", self.javascript)
-        self.assertIn('dialog.addEventListener("close", () => openButton.focus())', self.javascript)
+        self.assertIn("window.requestAnimationFrame(() => openButton.focus())", self.javascript)
 
     def test_help_assets_are_cache_busted_and_responsive(self):
         self.assertIn('./runtime-help.css?v=20260901', self.html)
