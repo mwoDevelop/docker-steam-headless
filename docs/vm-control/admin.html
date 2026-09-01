@@ -11,6 +11,7 @@
       rel="stylesheet"
     >
     <link rel="stylesheet" href="./styles.css?v=unified-minecraft-panel-20260827">
+    <link rel="stylesheet" href="./runtime-help.css?v=20260901">
     <script src="https://accounts.google.com/gsi/client" async defer></script>
   </head>
   <body>
@@ -426,8 +427,11 @@
                   <span>New server ID</span>
                   <input id="software-minecraft-new-server" type="text" pattern="[a-z0-9][a-z0-9\-]{0,30}" placeholder="survival" maxlength="31" autocomplete="off">
                 </label>
-                <label>
-                  <span>Runtime</span>
+                <div class="runtime-field">
+                  <div class="runtime-field-heading">
+                    <label for="software-minecraft-server-type">Runtime</label>
+                    <button id="minecraft-runtime-info" class="runtime-info-button" type="button" aria-label="Show information about the selected Minecraft runtime" aria-haspopup="dialog" title="About the selected runtime">i</button>
+                  </div>
                   <select id="software-minecraft-server-type">
                     <option value="paper">Paper (plugins)</option>
                     <option value="purpur">Purpur (plugins)</option>
@@ -435,7 +439,7 @@
                     <option value="forge">Forge (mods)</option>
                     <option value="neoforge">NeoForge (mods)</option>
                   </select>
-                </label>
+                </div>
                 <label>
                   <span>Server version</span>
                   <select id="software-minecraft-version"></select>
@@ -574,6 +578,19 @@
     </main>
 
     <script src="./admin.js?v=cross-tab-admin-session-20260830"></script>
+    <dialog id="minecraft-runtime-info-dialog" class="create-applications-dialog runtime-info-dialog" aria-labelledby="minecraft-runtime-info-title" aria-describedby="minecraft-runtime-info-summary">
+      <form method="dialog" class="create-applications-form">
+        <p class="eyebrow">Minecraft server runtime</p>
+        <h2 id="minecraft-runtime-info-title"></h2>
+        <p id="minecraft-runtime-info-summary" class="runtime-info-summary"></p>
+        <div id="minecraft-runtime-info-details" class="runtime-info-details"></div>
+        <div class="create-applications-actions runtime-info-actions">
+          <a id="minecraft-runtime-info-docs" class="ghost runtime-docs-link" href="https://docs.papermc.io/paper/" target="_blank" rel="noopener noreferrer">Official documentation</a>
+          <button class="action" type="submit" value="close">Close</button>
+        </div>
+      </form>
+    </dialog>
     <script src="./app.js?v=reserved-start-countdown-20260830"></script>
+    <script src="./runtime-help.js?v=20260901"></script>
   </body>
 </html>

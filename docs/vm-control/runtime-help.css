@@ -1,0 +1,96 @@
+.runtime-field {
+  display: grid;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.runtime-field-heading {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.runtime-field-heading label {
+  font-weight: 700;
+}
+
+.runtime-field select {
+  width: 100%;
+}
+
+.runtime-info-button {
+  display: inline-grid;
+  place-items: center;
+  width: 1.45rem;
+  height: 1.45rem;
+  min-width: 1.45rem;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, currentColor 45%, transparent);
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.78rem;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.runtime-info-button:hover,
+.runtime-info-button:focus-visible {
+  border-color: var(--accent, #f0a44b);
+  color: var(--accent, #f0a44b);
+  outline: none;
+}
+
+.runtime-info-dialog {
+  width: min(46rem, calc(100vw - 2rem));
+}
+
+.runtime-info-summary {
+  margin: 0;
+  color: var(--muted, #b8b5aa);
+  line-height: 1.55;
+}
+
+.runtime-info-details {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.8rem;
+}
+
+.runtime-info-details section {
+  padding: 0.9rem;
+  border: 1px solid color-mix(in srgb, currentColor 14%, transparent);
+  border-radius: 0.75rem;
+  background: color-mix(in srgb, currentColor 4%, transparent);
+}
+
+.runtime-info-details h3 {
+  margin: 0 0 0.35rem;
+  font-size: 0.92rem;
+}
+
+.runtime-info-details p {
+  margin: 0;
+  color: var(--muted, #b8b5aa);
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+
+.runtime-info-actions {
+  align-items: center;
+}
+
+.runtime-docs-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+}
+
+@media (max-width: 680px) {
+  .runtime-info-details {
+    grid-template-columns: 1fr;
+  }
+}
