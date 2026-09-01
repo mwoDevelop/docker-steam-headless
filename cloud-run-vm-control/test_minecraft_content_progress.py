@@ -39,6 +39,8 @@ class MinecraftContentProgressTests(unittest.TestCase):
         self.assertEqual(sorted(positions), positions)
         self.assertIn("publish_content_progress", script)
         self.assertIn("publish_content_result", script)
+        self.assertIn('kill -0 "$reconcile_pid"', script)
+        self.assertIn('stageCount:(if $action == "content-sync" then 7', script)
 
     def test_frontend_polls_and_resumes_content_operation(self):
         javascript = (ROOT / "docs" / "vm-control" / "minecraft-admin.js").read_text(encoding="utf-8")

@@ -150,7 +150,9 @@
       if (failed && item === stage) itemState = "failed";
       return `<li data-state="${itemState}">${escapeHtml(contentStageLabel(item))}</li>`;
     }).join("");
-    const message = String(progressResult.message || (failed ? "The content operation failed." : contentStageLabel(stage)));
+    const message = done
+      ? String(result.message || "Content operation completed.")
+      : String(progressResult.message || (failed ? "The content operation failed." : contentStageLabel(stage)));
     elements.contentProgress.hidden = false;
     elements.contentProgress.dataset.state = failed ? "failed" : done ? "done" : "running";
     elements.contentProgress.innerHTML = `
@@ -224,8 +226,12 @@
         scheduleContentPoll(2000);
         return;
       }
-      setStatus(resultSummary(result, data.message || "Minecraft content action completed."), result.state === "failed" ? "error" : "success");
-      finishContentTracking(result);
+      await new Promise((resolve) => window.setTimeout(resolve, 1000));
+      const finalData = await api(`/api/minecraft/management${query ? `?${query}` : ""}`, { method: "GET" });
+      const finalResult = finalData.lastResult && finalData.lastResult.id === operationId ? finalData.lastResult : result;
+      render(finalData);
+      setStatus(resultSummary(finalResult, finalData.message || "Minecraft content action completed."), finalResult.state === "failed" ? "error" : "success");
+      finishContentTracking(finalResult);
     } catch (error) {
       if (state.contentOperationId !== operationId) return;
       setStatus(`Content operation is still running. Status refresh failed: ${error.message || "temporary connection error"}`, "warning");

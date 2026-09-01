@@ -118,10 +118,14 @@ minecraft_container() {
 publish_result() {
   local request_id="$1" action="$2" state="$3" output="$4"
   output="$(printf '%s' "$output" | tr -d '\000' | tail -c 4096)"
-  local result
-  result="$(jq -cn --arg id "$request_id" --arg action "$action" --arg state "$state" \
+  local current result
+  current="{}"
+  if [[ "$action" == "content-sync" ]]; then
+    current="$(metadata_get "$RESULT_KEY" | jq -c --arg id "$request_id" 'if type == "object" and .id == $id then . else {} end' 2>/dev/null || printf '{}')"
+  fi
+  result="$(jq -cn --argjson current "$current" --arg id "$request_id" --arg action "$action" --arg state "$state" \
     --arg output "$output" --arg completedAt "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
-    '{id:$id, action:$action, state:$state, output:$output, completedAt:$completedAt}')"
+    '$current + {id:$id, action:$action, state:$state, stage:(if $action == "content-sync" and $state == "done" then "completed" else ($current.stage // "failed") end), stageIndex:(if $action == "content-sync" and $state == "done" then 7 else ($current.stageIndex // 0) end), stageCount:(if $action == "content-sync" then 7 else $current.stageCount end), message:(if $action == "content-sync" and $state == "done" then "Content operation completed." elif $action == "content-sync" then "Content operation failed." else ($current.message // "") end), output:$output, completedAt:$completedAt, updatedAt:$completedAt}')"
   set_metadata_value "$RESULT_KEY" "$result" || true
 }
 
@@ -356,7 +360,7 @@ publish_content_result() {
 }
 
 sync_modrinth_content() {
-  local raw="$1" entries entry removed_file expected_file checksum_entry expected_name expected_sha512 actual_sha512 file_path temporary_file container output missing_files checksum_failures
+  local raw="$1" entries entry removed_file expected_file checksum_entry expected_name expected_sha512 actual_sha512 file_path temporary_file container output missing_files checksum_failures reconcile_output reconcile_pid reconcile_status
   publish_content_progress "$raw" "preparing" 1 "Preparing the target content manifest."
   entries="$(printf '%s' "$raw" | jq -r '.entries // [] | .[]' 2>/dev/null || true)"
   mkdir -p "${MINECRAFT_ROOT}/data"
@@ -383,7 +387,21 @@ sync_modrinth_content() {
     return 1
   fi
   publish_content_progress "$raw" "applying" 2 "Applying the requested content set."
-  if ! output="$(/usr/local/bin/vm-power-action reconcile-minecraft 2>&1)"; then
+  reconcile_output="$(mktemp)"
+  /usr/local/bin/vm-power-action reconcile-minecraft >"$reconcile_output" 2>&1 &
+  reconcile_pid=$!
+  while kill -0 "$reconcile_pid" 2>/dev/null; do
+    publish_content_progress "$raw" "applying" 2 "Applying the requested content set."
+    for _ in $(seq 1 6); do
+      kill -0 "$reconcile_pid" 2>/dev/null || break
+      sleep 2
+    done
+  done
+  reconcile_status=0
+  wait "$reconcile_pid" || reconcile_status=$?
+  output="$(cat "$reconcile_output")"
+  rm -f "$reconcile_output"
+  if [[ "$reconcile_status" -ne 0 ]]; then
     printf '%s\n' "$output"
     return 1
   fi
