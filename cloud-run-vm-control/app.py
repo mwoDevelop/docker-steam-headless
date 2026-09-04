@@ -6409,6 +6409,7 @@ def start_metadata_updates(
         AUTO_STOP_AT_METADATA_KEY: None,
         POWER_ACTION_METADATA_KEY: None,
         POWER_ACTION_STATUS_METADATA_KEY: None,
+        BACKUP_READY_AT_METADATA_KEY: None,
         SUNSHINE_STATUS_METADATA_KEY: "starting" if selected_gpu_count() > 0 else "disabled",
         SUNSHINE_STATUS_DETAIL_METADATA_KEY: (
             "VM booting. Waiting for Sunshine Web UI."

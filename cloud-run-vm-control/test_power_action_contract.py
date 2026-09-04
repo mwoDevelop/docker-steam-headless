@@ -31,6 +31,12 @@ class PowerActionContractTests(unittest.TestCase):
 
         self.assertIn('["status", "set-auto-stop", "stop", "delete"]', body)
 
+    def test_start_clears_backup_readiness_from_previous_boot(self):
+        source = (ROOT / "cloud-run-vm-control" / "app.py").read_text(encoding="utf-8")
+        body = source.split("def start_metadata_updates(", 1)[1].split("\ndef ", 1)[0]
+
+        self.assertIn("BACKUP_READY_AT_METADATA_KEY: None", body)
+
     def test_tokenless_refresh_cannot_hide_active_command_loader(self):
         source = (ROOT / "docs" / "vm-control" / "app.js").read_text(encoding="utf-8")
         body = source.split("function markPageReady(message, token) {", 1)[1].split(
