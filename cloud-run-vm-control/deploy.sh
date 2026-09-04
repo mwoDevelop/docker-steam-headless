@@ -526,7 +526,7 @@ if [[ -z "$CANDIDATE_REVISION" || -z "$CANDIDATE_URL" ]]; then
 fi
 
 log "Checking candidate revision ${CANDIDATE_REVISION}"
-HEALTH_JSON=$(curl --fail --silent --show-error "${CANDIDATE_URL}/healthz")
+HEALTH_JSON=$(curl --fail --silent --show-error "${CANDIDATE_URL}/api/healthz")
 python3 - "$HEALTH_JSON" "$BUILD_COMMIT_SHA" <<'PY'
 import json
 import sys

@@ -17,7 +17,7 @@ def test_healthcheck_identifies_the_exact_build_on_both_routes():
 def test_deploy_promotes_only_the_health_checked_revision():
     assert "--no-traffic" in DEPLOY
     assert '--tag "$CANDIDATE_TAG"' in DEPLOY
-    assert '"${CANDIDATE_URL}/healthz"' in DEPLOY
+    assert '"${CANDIDATE_URL}/api/healthz"' in DEPLOY
     assert '--to-revisions "${CANDIDATE_REVISION}=100"' in DEPLOY
     assert "--to-latest" not in DEPLOY
 
