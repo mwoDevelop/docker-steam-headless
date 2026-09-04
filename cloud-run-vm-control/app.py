@@ -205,6 +205,8 @@ CONFIG = {
     "capacity_cleanup_token": os.environ.get("CAPACITY_RESERVATION_CLEANUP_TOKEN", ""),
     "firestore_database": os.environ.get("FIRESTORE_DATABASE", "(default)"),
     "firestore_collection_prefix": os.environ.get("FIRESTORE_COLLECTION_PREFIX", "vm-control"),
+    "build_commit_sha": os.environ.get("BUILD_COMMIT_SHA", "unknown"),
+    "cloud_run_revision": os.environ.get("K_REVISION", "local"),
     "duckdns_domains": normalize_duckdns_domains(csv_env("DUCKDNS_DOMAINS")),
     "duckdns_token": os.environ.get("DUCKDNS_TOKEN", ""),
     "novnc_port": os.environ.get("VM_NOVNC_PORT", "8083"),
@@ -1725,6 +1727,16 @@ def normalize_endpoint_record(raw_value: Any) -> dict[str, Any] | None:
     static_ip = str(raw_value.get("staticIp", "") or "")
     external_ip = str(raw_value.get("externalIp", "") or "")
     ip_reservation_mode = "manual" if str(raw_value.get("ipReservationMode", "") or "").strip().lower() == "manual" else "ephemeral"
+    try:
+        generation = max(0, int(raw_value.get("generation", 0) or 0))
+    except (TypeError, ValueError):
+        generation = 0
+    desired_state = str(raw_value.get("desiredState", "unknown") or "unknown").strip().lower()
+    if desired_state not in {"online", "offline", "unknown"}:
+        desired_state = "unknown"
+    dns_sync_state = str(raw_value.get("dnsSyncState", "unknown") or "unknown").strip().lower()
+    if dns_sync_state not in {"pending", "synced", "failed", "unknown"}:
+        dns_sync_state = "unknown"
     normalized_hardware = {
         "id": str(hardware.get("id", "") or ""),
         "machineType": str(hardware.get("machineType", "") or ""),
@@ -1748,6 +1760,12 @@ def normalize_endpoint_record(raw_value: Any) -> dict[str, Any] | None:
         "staticIp": static_ip,
         "externalIp": external_ip,
         "ipReservationMode": ip_reservation_mode,
+        "generation": generation,
+        "desiredState": desired_state,
+        "desiredIp": str(raw_value.get("desiredIp", "") or ""),
+        "dnsSyncState": dns_sync_state,
+        "lastDnsAttempt": str(raw_value.get("lastDnsAttempt", "") or ""),
+        "lastDnsError": str(raw_value.get("lastDnsError", "") or "")[:300],
         "hardware": normalized_hardware if normalized_hardware.get("id") else {},
     }
 
@@ -2221,11 +2239,11 @@ def execute_admin_migration_action(admin_user: dict[str, Any], payload: dict[str
                 raise ApiError("Prepared migration state disk no longer exists.", 409)
             credentials = {"username": SUNSHINE_USERNAME, "password": generate_sunshine_password()}
             insert_url = instances_collection_url()
-            if scan_workflow is not None:
-                insert_url = f"{insert_url}?requestId={scan_workflow['requestId']}"
+            request_id = str(scan_workflow["requestId"]) if scan_workflow is not None else lifecycle_request_id("migration-start")
             operation = compute_request(
                 "POST",
                 insert_url,
+                params={"requestId": request_id},
                 json=build_instance_create_request(
                     auto_stop_hours=target.get("autoStopHours"),
                     sunshine_credentials=credentials,
@@ -2385,6 +2403,170 @@ def endpoint_lease_ref(endpoint_id: str):
 
 def gpu_admission_lock_ref():
     return firestore_client().collection(workflow_collection_name("locks")).document("gpu-admission")
+
+
+LIFECYCLE_ACTIVE_STATES: Final = frozenset({"ACQUIRED", "MUTATING", "UNKNOWN", "RECONCILING"})
+LIFECYCLE_COORDINATED_COMMANDS: Final = frozenset({"create", "start", "stop", "restart", "delete"})
+LIFECYCLE_STALE_SECONDS: Final = 3900
+
+
+def lifecycle_lock_ref():
+    return firestore_client().collection(workflow_collection_name("locks")).document("managed-vm-admission")
+
+
+def lifecycle_request_id(purpose: str = "gce") -> str:
+    operation = getattr(g, "lifecycle_operation", {}) if has_request_context() else {}
+    operation_id = str(operation.get("operationId", "") or uuid.uuid4())
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"{require_env('project')}:{operation_id}:{purpose}"))
+
+
+def acquire_lifecycle_operation(command: str, user: dict[str, Any], target: dict[str, Any] | None = None) -> dict[str, Any]:
+    ref = lifecycle_lock_ref()
+    transaction = firestore_client().transaction()
+    now = datetime.now(timezone.utc)
+    operation_id = str(uuid.uuid4())
+    token = secrets.token_hex(16)
+
+    @firestore.transactional
+    def acquire(transaction):
+        current = firestore_snapshot_dict(ref.get(transaction=transaction))
+        if str(current.get("state", "")) in LIFECYCLE_ACTIVE_STATES:
+            raise ApiError(
+                f"Another VM lifecycle operation is active: {current.get('command', 'unknown')} "
+                f"({current.get('operationId', 'unknown')}). Wait for reconciliation before retrying.",
+                409,
+            )
+        record = {
+            "operationId": operation_id,
+            "ownerToken": token,
+            "generation": int(current.get("generation", 0) or 0) + 1,
+            "command": command,
+            "owner": normalize_email(str(user.get("email", "system"))),
+            "target": target or {},
+            "state": "ACQUIRED",
+            "gceRequestId": str(uuid.uuid5(uuid.NAMESPACE_URL, f"{require_env('project')}:{operation_id}")),
+            "gceOperation": "",
+            "createdAt": now,
+            "updatedAt": now,
+        }
+        transaction.set(ref, record)
+        return record
+
+    return acquire(transaction)
+
+
+def update_lifecycle_operation(state: str | None = None, *, gce_operation: str = "") -> None:
+    if not has_request_context():
+        return
+    operation = getattr(g, "lifecycle_operation", None)
+    if not isinstance(operation, dict):
+        return
+    now_monotonic = time.monotonic()
+    if not state and not gce_operation and now_monotonic - float(getattr(g, "lifecycle_heartbeat_monotonic", 0.0) or 0.0) < 15:
+        return
+    ref = lifecycle_lock_ref()
+    transaction = firestore_client().transaction()
+
+    @firestore.transactional
+    def update(transaction):
+        current = firestore_snapshot_dict(ref.get(transaction=transaction))
+        if (
+            str(current.get("operationId", "")) != str(operation.get("operationId", ""))
+            or str(current.get("ownerToken", "")) != str(operation.get("ownerToken", ""))
+            or int(current.get("generation", 0) or 0) != int(operation.get("generation", 0) or 0)
+        ):
+            raise ApiError("VM lifecycle operation ownership changed; refusing stale mutation.", 409)
+        values: dict[str, Any] = {"updatedAt": datetime.now(timezone.utc)}
+        if state:
+            values["state"] = state
+        if gce_operation:
+            values["gceOperation"] = gce_operation
+        transaction.update(ref, values)
+
+    update(transaction)
+    g.lifecycle_heartbeat_monotonic = now_monotonic
+    if state:
+        operation["state"] = state
+
+
+def finish_lifecycle_operation(state: str) -> None:
+    if not has_request_context():
+        return
+    operation = getattr(g, "lifecycle_operation", None)
+    if not isinstance(operation, dict):
+        return
+    ref = lifecycle_lock_ref()
+    transaction = firestore_client().transaction()
+
+    @firestore.transactional
+    def finish(transaction):
+        current = firestore_snapshot_dict(ref.get(transaction=transaction))
+        if (
+            str(current.get("operationId", "")) == str(operation.get("operationId", ""))
+            and str(current.get("ownerToken", "")) == str(operation.get("ownerToken", ""))
+            and int(current.get("generation", 0) or 0) == int(operation.get("generation", 0) or 0)
+        ):
+            transaction.delete(ref)
+
+    finish(transaction)
+    operation["state"] = state
+
+
+def run_lifecycle_coordinated(command: str, user: dict[str, Any], callback, target: dict[str, Any] | None = None):
+    operation = acquire_lifecycle_operation(command, user, target)
+    g.lifecycle_operation = operation
+    g.lifecycle_gce_accepted = False
+    g.lifecycle_gce_terminal = False
+    try:
+        result = callback()
+        finish_lifecycle_operation("COMPLETED")
+        return result
+    except Exception:
+        if bool(getattr(g, "lifecycle_gce_accepted", False)) and not bool(getattr(g, "lifecycle_gce_terminal", False)):
+            update_lifecycle_operation("UNKNOWN")
+        else:
+            finish_lifecycle_operation("FAILED")
+        raise
+    finally:
+        for attribute in (
+            "lifecycle_operation",
+            "lifecycle_gce_accepted",
+            "lifecycle_gce_terminal",
+            "lifecycle_heartbeat_monotonic",
+        ):
+            if hasattr(g, attribute):
+                delattr(g, attribute)
+
+
+def reconcile_stale_lifecycle_operation() -> dict[str, Any]:
+    ref = lifecycle_lock_ref()
+    snapshot = ref.get()
+    current = firestore_snapshot_dict(snapshot)
+    if str(current.get("state", "")) not in LIFECYCLE_ACTIVE_STATES:
+        return {"state": "idle"}
+    updated_at = current.get("updatedAt")
+    if isinstance(updated_at, datetime):
+        age = (datetime.now(timezone.utc) - updated_at).total_seconds()
+        if age < LIFECYCLE_STALE_SECONDS:
+            return {"state": "active", "operationId": current.get("operationId", ""), "command": current.get("command", "")}
+    active_instances = [
+        str(item.get("name", ""))
+        for item in list_managed_compute_instances()
+        if str(item.get("status", "")).upper() != "TERMINATED"
+    ]
+    transaction = firestore_client().transaction()
+
+    @firestore.transactional
+    def reconcile(transaction):
+        latest = firestore_snapshot_dict(ref.get(transaction=transaction))
+        if (
+            str(latest.get("operationId", "")) == str(current.get("operationId", ""))
+            and int(latest.get("generation", 0) or 0) == int(current.get("generation", 0) or 0)
+        ):
+            transaction.delete(ref)
+
+    reconcile(transaction)
+    return {"state": "reconciled", "operationId": current.get("operationId", ""), "activeInstances": active_instances}
 
 
 def firestore_snapshot_dict(snapshot: Any) -> dict[str, Any]:
@@ -2909,8 +3091,102 @@ def build_live_access_reachability_payload(endpoint: dict[str, Any]) -> dict[str
     }
 
 
+def admin_endpoint_public_payload(endpoint: dict[str, Any]) -> dict[str, Any]:
+    payload = endpoint_public_payload(endpoint)
+    instance = endpoint_instance_or_none(endpoint)
+    instance_state = str((instance or {}).get("status", STATUS_NOT_FOUND)).upper()
+    payload["instanceState"] = instance_state
+    if not endpoint_has_manual_static_ip(endpoint):
+        payload["externalIp"] = extract_external_ip(instance) if instance_state == "RUNNING" and instance else ""
+    return payload
+
+
 def build_admin_endpoints_payload(admin_user: dict[str, Any]) -> dict[str, Any]:
-    return {"user": admin_user, "endpoints": [endpoint_public_payload(endpoint) for endpoint in reconcile_endpoint_instance_bindings()]}
+    return {"user": admin_user, "endpoints": [admin_endpoint_public_payload(endpoint) for endpoint in read_endpoint_records()]}
+
+
+def reconcile_endpoint_dns_states() -> dict[str, Any]:
+    synchronized: list[str] = []
+    failed: list[str] = []
+    for original in read_endpoint_records():
+        endpoint = dict(original)
+        instance = endpoint_instance_or_none(endpoint)
+        instance_state = str((instance or {}).get("status", STATUS_NOT_FOUND)).upper()
+        if endpoint_has_manual_static_ip(endpoint):
+            desired_ip = str(endpoint.get("staticIp", "") or "")
+            desired_state = "online" if desired_ip else "offline"
+        else:
+            desired_ip = extract_external_ip(instance) if instance_state == "RUNNING" and instance else ""
+            desired_state = "online" if desired_ip else "offline"
+        if (
+            str(endpoint.get("desiredIp", "") or "") != desired_ip
+            or str(endpoint.get("desiredState", "unknown")) != desired_state
+            or (not endpoint_has_manual_static_ip(endpoint) and str(endpoint.get("externalIp", "") or "") != desired_ip)
+        ):
+            endpoint["generation"] = int(endpoint.get("generation", 0) or 0) + 1
+            endpoint["desiredIp"] = desired_ip
+            endpoint["desiredState"] = desired_state
+            endpoint["externalIp"] = desired_ip
+            endpoint["dnsSyncState"] = "pending"
+            endpoint["lastDnsError"] = ""
+            endpoint = persist_endpoint(endpoint)
+        if str(endpoint.get("dnsSyncState", "unknown")) != "synced":
+            if sync_endpoint_duckdns(endpoint, desired_ip):
+                synchronized.append(str(endpoint["id"]))
+            else:
+                failed.append(str(endpoint["id"]))
+    return {"synchronizedEndpoints": synchronized, "failedEndpoints": failed}
+
+
+def execute_admin_endpoint_action(admin_user: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    action = str(payload.get("action", "")).strip().lower()
+    endpoint_id = normalize_endpoint_id(payload.get("endpointId"))
+    records = read_endpoint_records()
+    endpoint = next((record for record in records if record["id"] == endpoint_id), None)
+    if action == "add":
+        if endpoint is not None:
+            raise ApiError("Endpoint already exists.", 400)
+        domain = normalize_endpoint_domain(payload.get("domain"))
+        if any(record["domain"] == domain for record in records):
+            raise ApiError("Endpoint DNS already exists.", 400)
+        endpoint = normalize_endpoint_record({
+            "id": endpoint_id,
+            "domain": domain,
+            "addressName": f"steam-{endpoint_id}-ip",
+        })
+        if endpoint is None:
+            raise ApiError("Endpoint is invalid.", 400)
+        records.append(endpoint)
+        write_endpoint_records(records)
+    elif endpoint is None:
+        raise ApiError("Endpoint does not exist.", 404)
+    elif action == "remove":
+        if endpoint_instance_or_none(endpoint) is not None:
+            raise ApiError("Delete the endpoint VM before removing the endpoint.", 400)
+        if endpoint.get("staticIp"):
+            raise ApiError("Release the endpoint static IP before removing the endpoint.", 400)
+        sync_endpoint_duckdns(endpoint, "")
+        write_endpoint_records([record for record in records if record["id"] != endpoint_id])
+    elif action == "reserve-ip":
+        zone = clean_target_text(payload.get("zone"), str(endpoint.get("zone", "") or ""))
+        if not zone:
+            raise ApiError("Zone is required to reserve an endpoint IP address.", 400)
+        apply_target_overrides({"endpointId": endpoint_id, "zone": zone})
+        endpoint = ensure_selected_endpoint_static_address()
+        update_duckdns(str(endpoint.get("staticIp", "") or ""))
+    elif action == "release-ip":
+        release_endpoint_static_address(endpoint)
+        endpoint = endpoint_by_id(endpoint_id)
+        endpoint["generation"] = int(endpoint.get("generation", 0) or 0) + 1
+        endpoint["desiredIp"] = ""
+        endpoint["desiredState"] = "offline"
+        endpoint["externalIp"] = ""
+        endpoint["dnsSyncState"] = "pending"
+        endpoint = persist_endpoint(endpoint)
+        sync_endpoint_duckdns(endpoint, "")
+    else:
+        raise ApiError("Unsupported endpoint action.", 400)
+    return build_admin_endpoints_payload(admin_user)
 
 
 def request_override(name: str, fallback: Any) -> Any:
@@ -3122,19 +3398,9 @@ def endpoint_instance_or_none(endpoint: dict[str, Any]) -> dict[str, Any] | None
 
 
 def reconcile_endpoint_instance_bindings(records: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
-    records = records if records is not None else read_endpoint_records()
-    changed = False
-    for endpoint in records:
-        name = str(endpoint.get("instanceName", "") or "")
-        zone = str(endpoint.get("zone", "") or "")
-        if not name and not zone:
-            continue
-        if not name or not zone or endpoint_instance_or_none(endpoint) is None:
-            clear_endpoint_instance_binding(endpoint)
-            changed = True
-    if changed:
-        write_endpoint_records(records)
-    return records
+    # GET handlers must remain read-only. Durable reconciliation is performed
+    # by the authenticated scheduler path under the lifecycle coordinator.
+    return records if records is not None else read_endpoint_records()
 
 
 def persist_endpoint(endpoint: dict[str, Any]) -> dict[str, Any]:
@@ -3200,6 +3466,11 @@ def bind_selected_endpoint_to_instance(instance: dict[str, Any]) -> dict[str, An
         endpoint["externalIp"] = ""
     else:
         endpoint["externalIp"] = external_ip
+    endpoint["generation"] = int(endpoint.get("generation", 0) or 0) + 1
+    endpoint["desiredState"] = "online"
+    endpoint["desiredIp"] = str(endpoint.get("staticIp", "") or external_ip)
+    endpoint["dnsSyncState"] = "pending"
+    endpoint["lastDnsError"] = ""
     return persist_endpoint(endpoint)
 
 
@@ -3214,6 +3485,11 @@ def clear_endpoint_instance_binding(endpoint: dict[str, Any]) -> dict[str, Any]:
     endpoint["zone"] = ""
     endpoint["hardware"] = {}
     endpoint["externalIp"] = ""
+    endpoint["generation"] = int(endpoint.get("generation", 0) or 0) + 1
+    endpoint["desiredState"] = "offline"
+    endpoint["desiredIp"] = ""
+    endpoint["dnsSyncState"] = "pending"
+    endpoint["lastDnsError"] = ""
     if not endpoint_has_manual_static_ip(endpoint):
         endpoint["region"] = ""
     return endpoint
@@ -4283,7 +4559,15 @@ def options_passthrough():
         return make_response(("", 204))
 
     if request.path in {"/healthz", "/api/healthz"}:
-        return jsonify({"ok": True})
+        return jsonify(
+            {
+                "ok": True,
+                "build": {
+                    "commit": CONFIG["build_commit_sha"],
+                    "revision": CONFIG["cloud_run_revision"],
+                },
+            }
+        )
 
     if request.path == "/api/config":
         endpoints = reconcile_endpoint_instance_bindings()
@@ -4448,52 +4732,28 @@ def options_passthrough():
         if request.method == "GET":
             return jsonify(build_admin_migrations_payload(admin_user))
         payload = request.get_json(silent=True) or {}
-        return jsonify(execute_admin_migration_action(admin_user, payload))
+        return jsonify(
+            run_lifecycle_coordinated(
+                "migration",
+                admin_user,
+                lambda: execute_admin_migration_action(admin_user, payload),
+                target=payload,
+            )
+        )
 
     if request.path == "/api/admin/endpoints":
         admin_user = require_admin_user()
         if request.method == "GET":
             return jsonify(build_admin_endpoints_payload(admin_user))
         payload = request.get_json(silent=True) or {}
-        action = str(payload.get("action", "")).strip().lower()
-        endpoint_id = normalize_endpoint_id(payload.get("endpointId"))
-        records = read_endpoint_records()
-        endpoint = next((record for record in records if record["id"] == endpoint_id), None)
-        if action == "add":
-            if endpoint is not None:
-                raise ApiError("Endpoint already exists.", 400)
-            domain = normalize_endpoint_domain(payload.get("domain"))
-            if any(record["domain"] == domain for record in records):
-                raise ApiError("Endpoint DNS already exists.", 400)
-            endpoint = normalize_endpoint_record({
-                "id": endpoint_id,
-                "domain": domain,
-                "addressName": f"steam-{endpoint_id}-ip",
-            })
-            if endpoint is None:
-                raise ApiError("Endpoint is invalid.", 400)
-            records.append(endpoint)
-            write_endpoint_records(records)
-        elif endpoint is None:
-            raise ApiError("Endpoint does not exist.", 404)
-        elif action == "remove":
-            if endpoint_instance_or_none(endpoint) is not None:
-                raise ApiError("Delete the endpoint VM before removing the endpoint.", 400)
-            if endpoint.get("staticIp"):
-                raise ApiError("Release the endpoint static IP before removing the endpoint.", 400)
-            write_endpoint_records([record for record in records if record["id"] != endpoint_id])
-        elif action == "reserve-ip":
-            zone = clean_target_text(payload.get("zone"), str(endpoint.get("zone", "") or ""))
-            if not zone:
-                raise ApiError("Zone is required to reserve an endpoint IP address.", 400)
-            apply_target_overrides({"endpointId": endpoint_id, "zone": zone})
-            endpoint = ensure_selected_endpoint_static_address()
-            update_duckdns(str(endpoint.get("staticIp", "") or ""))
-        elif action == "release-ip":
-            release_endpoint_static_address(endpoint)
-        else:
-            raise ApiError("Unsupported endpoint action.", 400)
-        return jsonify(build_admin_endpoints_payload(admin_user))
+        return jsonify(
+            run_lifecycle_coordinated(
+                "endpoint-admin",
+                admin_user,
+                lambda: execute_admin_endpoint_action(admin_user, payload),
+                target=payload,
+            )
+        )
 
     if request.path == "/api/hardware":
         require_user()
@@ -4611,9 +4871,21 @@ def options_passthrough():
 
     if request.path == "/api/internal/capacity-reservations/cleanup":
         require_capacity_cleanup_token()
+        lifecycle_cleanup = reconcile_stale_lifecycle_operation()
         workflow_cleanup = cleanup_expired_gpu_workflows()
         result = release_managed_capacity_reservations(expired_only=True)
         result.update(workflow_cleanup)
+        result["lifecycle"] = lifecycle_cleanup
+        try:
+            result["endpointDns"] = run_lifecycle_coordinated(
+                "reconcile-endpoints",
+                {"email": "cloud-scheduler@internal"},
+                reconcile_endpoint_dns_states,
+            )
+        except ApiError as error:
+            if error.status_code != 409:
+                raise
+            result["endpointDns"] = {"skipped": True, "reason": error.message}
         if result["failed"] or workflow_cleanup["failedWorkflows"]:
             raise ApiError("Failed to release one or more expired GPU capacity reservations.", 502)
         return jsonify(result)
@@ -4674,7 +4946,15 @@ def options_passthrough():
             "remove-minecraft",
         }:
             user = require_admin_user()
-        result = execute_command(command, user, payload)
+        if command in LIFECYCLE_COORDINATED_COMMANDS:
+            result = run_lifecycle_coordinated(
+                command,
+                user,
+                lambda: execute_command(command, user, payload),
+                target=payload,
+            )
+        else:
+            result = execute_command(command, user, payload)
         return jsonify(result)
 
     raise ApiError("Not found.", 404)
@@ -5131,6 +5411,7 @@ def is_compute_read_rate_limit_response(response: requests.Response) -> bool:
 
 
 def compute_request(method: str, url: str, *, allow_404: bool = False, **kwargs) -> dict[str, Any] | None:
+    update_lifecycle_operation()
     cache_key = compute_static_read_cache_key(method, url, kwargs)
     if cache_key:
         with COMPUTE_READ_LOCK:
@@ -5170,6 +5451,13 @@ def compute_request(method: str, url: str, *, allow_404: bool = False, **kwargs)
     if response.status_code >= 400:
         raise ApiError(response.text or f"Compute API returned {response.status_code}.", 502)
     payload = response.json()
+    if method.upper() not in {"GET", "HEAD", "OPTIONS"} and isinstance(payload, dict) and has_request_context() and isinstance(getattr(g, "lifecycle_operation", None), dict):
+        g.lifecycle_gce_accepted = True
+        g.lifecycle_gce_terminal = False
+        update_lifecycle_operation(
+            "MUTATING",
+            gce_operation=str(payload.get("selfLink", "") or payload.get("name", "")),
+        )
     if cache_key and isinstance(payload, dict):
         with COMPUTE_READ_LOCK:
             COMPUTE_STATIC_READ_CACHE[cache_key] = (time.monotonic(), payload)
@@ -5199,6 +5487,8 @@ def wait_for_zone_operation(operation: dict[str, Any], timeout_seconds: int = 90
         if data is None:
             raise ApiError(f"Operation {operation_name} was not found.", 404)
         if str(data.get("status", "")).upper() == "DONE":
+            if has_request_context():
+                g.lifecycle_gce_terminal = True
             if data.get("error"):
                 raise ApiError(str(data["error"]), 502)
             return
@@ -5788,6 +6078,8 @@ def wait_for_global_operation(operation: dict[str, Any], timeout_seconds: int = 
         if data is None:
             raise ApiError(f"Operation {operation_name} was not found.", 404)
         if str(data.get("status", "")).upper() == "DONE":
+            if has_request_context():
+                g.lifecycle_gce_terminal = True
             if data.get("error"):
                 raise ApiError(str(data["error"]), 502)
             return
@@ -5872,15 +6164,37 @@ def ensure_instance_external_access_config(instance: dict[str, Any]) -> dict[str
     return get_instance()
 
 
-def release_selected_endpoint_ephemeral_ip(instance: dict[str, Any]) -> dict[str, Any]:
-    endpoint = selected_endpoint()
+def release_endpoint_ephemeral_ip(endpoint: dict[str, Any], instance: dict[str, Any]) -> dict[str, Any]:
     static_ip = str(endpoint.get("staticIp", "") or "")
     if static_ip and not endpoint_has_manual_static_ip(endpoint):
         instance = remove_instance_external_access_config(instance)
         release_endpoint_static_address(endpoint, preserve_instance_binding=True)
-        endpoint = selected_endpoint()
+        endpoint = endpoint_by_id(str(endpoint["id"]))
     endpoint["externalIp"] = ""
-    return persist_endpoint(endpoint) and instance
+    endpoint["generation"] = int(endpoint.get("generation", 0) or 0) + 1
+    endpoint["desiredState"] = "offline"
+    endpoint["desiredIp"] = ""
+    endpoint["dnsSyncState"] = "pending"
+    endpoint["lastDnsError"] = ""
+    endpoint = persist_endpoint(endpoint)
+    sync_endpoint_duckdns(endpoint, "")
+    return instance
+
+
+def release_selected_endpoint_ephemeral_ip(instance: dict[str, Any]) -> dict[str, Any]:
+    return release_endpoint_ephemeral_ip(selected_endpoint(), instance)
+
+
+def endpoint_for_instance(instance: dict[str, Any]) -> dict[str, Any] | None:
+    identity = instance_identity(instance)
+    return next(
+        (
+            endpoint
+            for endpoint in read_endpoint_records()
+            if (str(endpoint.get("instanceName", "") or ""), str(endpoint.get("zone", "") or "")) == identity
+        ),
+        None,
+    )
 
 
 def instance_machine_type(instance: dict[str, Any]) -> str:
@@ -8578,7 +8892,7 @@ def running_managed_instances_except_selected() -> list[dict[str, Any]]:
     return [
         instance
         for instance in list_managed_compute_instances()
-        if str(instance.get("status", "")).upper() == "RUNNING" and not is_selected_instance(instance)
+        if str(instance.get("status", "")).upper() != "TERMINATED" and not is_selected_instance(instance)
     ]
 
 
@@ -8622,7 +8936,11 @@ def ensure_no_other_running_instances_or_stop(payload: dict[str, Any], command: 
             },
         )
         refreshed = compute_request("GET", instance_self_url(final_instance))
-        stopped.append(refreshed if isinstance(refreshed, dict) else final_instance)
+        stopped_instance = refreshed if isinstance(refreshed, dict) else final_instance
+        endpoint = endpoint_for_instance(stopped_instance)
+        if endpoint is not None:
+            stopped_instance = release_endpoint_ephemeral_ip(endpoint, stopped_instance)
+        stopped.append(stopped_instance)
     return stopped
 
 
@@ -8689,53 +9007,70 @@ def poll_backup_ready(timeout_seconds: int = 900, previous_timestamp: str = "") 
     raise ApiError("Timed out waiting for VM backup readiness.", 504)
 
 
-def update_duckdns(external_ip: str) -> bool:
-    endpoint_domains = selected_endpoint_domains()
-    if not external_ip or not endpoint_domains or not CONFIG["duckdns_token"]:
-        return False
-
-    updated = True
-    for domain in endpoint_domains:
-        subdomain = domain.removesuffix(".duckdns.org")
-        domain_updated = False
-        last_error = ""
-        for attempt in range(1, 5):
-            try:
-                response = requests.get(
-                    "https://www.duckdns.org/update",
-                    params={
-                        "domains": subdomain,
-                        "token": CONFIG["duckdns_token"],
-                        "ip": external_ip,
-                    },
-                    timeout=15,
-                )
-            except requests.RequestException as error:
-                last_error = str(error).replace(CONFIG["duckdns_token"], "<redacted>")
-                logging.warning(
-                    "DuckDNS update attempt %s failed for %s: %s",
-                    attempt,
-                    domain,
-                    last_error,
-                )
-                time.sleep(min(attempt * 2, 8))
-                continue
-            if response.text.strip() == "OK":
-                logging.info("DuckDNS updated for %s -> %s", domain, external_ip)
-                domain_updated = True
-                break
-            last_error = response.text.strip()
-            logging.warning(
-                "DuckDNS update attempt %s failed for %s: %s",
-                attempt,
-                domain,
-                last_error,
+def request_duckdns_state(domain: str, desired_ip: str) -> tuple[bool, str]:
+    token = str(CONFIG["duckdns_token"] or "")
+    if not token:
+        return False, "DuckDNS token is not configured."
+    subdomain = domain.removesuffix(".duckdns.org")
+    params = {"domains": subdomain, "token": token}
+    if desired_ip:
+        params["ip"] = desired_ip
+    else:
+        params["clear"] = "true"
+    last_error = ""
+    for attempt in range(1, 5):
+        try:
+            response = requests.get(
+                "https://www.duckdns.org/update",
+                params=params,
+                timeout=15,
             )
-            time.sleep(min(attempt * 2, 8))
-        if not domain_updated:
-            logging.warning("DuckDNS update failed for %s after retries: %s", domain, last_error)
-            updated = False
-    return updated
+        except requests.RequestException as error:
+            last_error = str(error).replace(token, "<redacted>")
+        else:
+            if response.text.strip() == "OK":
+                action = desired_ip or "<cleared>"
+                logging.info("DuckDNS synchronized for %s -> %s", domain, action)
+                return True, ""
+            last_error = response.text.strip().replace(token, "<redacted>")
+        logging.warning(
+            "DuckDNS synchronization attempt %s failed for %s: %s",
+            attempt,
+            domain,
+            last_error,
+        )
+        time.sleep(min(attempt * 2, 8))
+    return False, last_error[:300]
+
+
+def sync_endpoint_duckdns(endpoint: dict[str, Any], desired_ip: str) -> bool:
+    endpoint_id = str(endpoint["id"])
+    generation = int(endpoint.get("generation", 0) or 0)
+    success, error = request_duckdns_state(str(endpoint["domain"]), desired_ip)
+    current = endpoint_by_id(endpoint_id)
+    if int(current.get("generation", 0) or 0) != generation:
+        logging.warning("Discarding stale DuckDNS result for %s generation %s", endpoint_id, generation)
+        return False
+    current["dnsSyncState"] = "synced" if success else "failed"
+    current["lastDnsAttempt"] = datetime.now(timezone.utc).isoformat()
+    current["lastDnsError"] = "" if success else error
+    persist_endpoint(current)
+    return success
+
+
+def update_duckdns(external_ip: str) -> bool:
+    if not external_ip:
+        return False
+    endpoint = selected_endpoint()
+    if str(endpoint.get("desiredIp", "") or "") != external_ip or str(endpoint.get("desiredState", "")) != "online":
+        endpoint["generation"] = int(endpoint.get("generation", 0) or 0) + 1
+        endpoint["desiredState"] = "online"
+        endpoint["desiredIp"] = external_ip
+        endpoint["externalIp"] = external_ip
+        endpoint["dnsSyncState"] = "pending"
+        endpoint["lastDnsError"] = ""
+        endpoint = persist_endpoint(endpoint)
+    return sync_endpoint_duckdns(endpoint, external_ip)
 
 
 def minecraft_management_player_name(payload: dict[str, Any]) -> str:
@@ -9014,11 +9349,6 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
     current_status = str(current_instance.get("status", STATUS_NOT_FOUND)) if current_instance else STATUS_NOT_FOUND
 
     if command == "status":
-        if current_instance is not None and current_status == "TERMINATED":
-            try:
-                current_instance = release_selected_endpoint_ephemeral_ip(current_instance)
-            except ApiError as error:
-                logging.warning("Automatic endpoint IP cleanup after stop failed: %s", error)
         return build_status_payload(current_instance, user=user, command=command)
 
     active_action = active_power_action(current_instance)
@@ -9030,6 +9360,7 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
         require_no_active_power_action(current_instance, command)
 
     if command == "create":
+        ensure_no_other_running_instances_or_stop(payload, command)
         prepared = active_migration_for_endpoint(selected_endpoint_id())
         if prepared:
             raise ApiError(
@@ -9075,7 +9406,11 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
                 ),
             )
             current_instance = get_instance()
-            operation = compute_request("POST", f"{instance_url()}/start")
+            operation = compute_request(
+                "POST",
+                f"{instance_url()}/start",
+                params={"requestId": lifecycle_request_id("create-start")},
+            )
             if not isinstance(operation, dict):
                 raise ApiError("Failed to start VM instance.", 502)
             wait_for_zone_operation(operation, timeout_seconds=180)
@@ -9101,11 +9436,11 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
             scan_workflow = mark_gpu_workflow_insert_pending(scan_workflow, user)
         try:
             insert_url = instances_collection_url()
-            if scan_workflow is not None:
-                insert_url = f"{insert_url}?requestId={scan_workflow['requestId']}"
+            request_id = str(scan_workflow["requestId"]) if scan_workflow is not None else lifecycle_request_id("create")
             operation = compute_request(
                 "POST",
                 insert_url,
+                params={"requestId": request_id},
                 json=build_instance_create_request(
                     auto_stop_hours=auto_stop_hours,
                     sunshine_credentials=sunshine_credentials,
@@ -9153,6 +9488,10 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
             raise ApiError("The held GPU reservation is not prepared for Start.", 409)
         if current_instance is None:
             raise ApiError("Instance does not exist. Use Create first.", 400)
+        if current_status not in {"RUNNING", "TERMINATED"}:
+            raise ApiError(f'Instance cannot start while its Compute Engine state is "{current_status}".', 409)
+        if current_status == "TERMINATED":
+            ensure_no_other_running_instances_or_stop(payload, command)
         auto_stop_hours = parse_auto_stop_hours(payload)
         if auto_stop_hours is not None and current_status == "RUNNING":
             raise ApiError("Auto-stop can only be scheduled while starting a stopped VM.", 400)
@@ -9178,7 +9517,11 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
             if scan_workflow is not None:
                 scan_workflow = claim_gpu_workflow_for_start(scan_workflow, user)
                 scan_workflow = mark_gpu_workflow_start_pending(scan_workflow, user)
-            operation = compute_request("POST", f"{instance_url()}/start")
+            operation = compute_request(
+                "POST",
+                f"{instance_url()}/start",
+                params={"requestId": lifecycle_request_id("start")},
+            )
             if not isinstance(operation, dict):
                 raise ApiError("Failed to start VM instance.", 502)
             wait_for_zone_operation(operation, timeout_seconds=180)
@@ -9283,7 +9626,14 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
                 command=command,
                 sunshine_credentials=sunshine_credentials,
             )
-        operation = compute_request("POST", f"{instance_url()}/start")
+        if current_status != "TERMINATED":
+            raise ApiError(f'Instance cannot restart while its Compute Engine state is "{current_status}".', 409)
+        ensure_no_other_running_instances_or_stop(payload, command)
+        operation = compute_request(
+            "POST",
+            f"{instance_url()}/start",
+            params={"requestId": lifecycle_request_id("restart-start")},
+        )
         if not isinstance(operation, dict):
             raise ApiError("Failed to start VM instance.", 502)
         wait_for_zone_operation(operation, timeout_seconds=180)
@@ -9337,12 +9687,19 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
             poll_instance_status("TERMINATED", timeout_seconds=900)
         elif current_status != "TERMINATED":
             poll_instance_status("TERMINATED", timeout_seconds=900)
-        operation = compute_request("DELETE", instance_url())
+        operation = compute_request(
+            "DELETE",
+            instance_url(),
+            params={"requestId": lifecycle_request_id("delete")},
+        )
         if not isinstance(operation, dict):
             raise ApiError("Failed to delete instance.", 502)
         wait_for_zone_operation(operation, timeout_seconds=180)
         poll_instance_deleted(timeout_seconds=120)
         endpoint = selected_endpoint()
+        if not endpoint_has_manual_static_ip(endpoint):
+            endpoint = clear_endpoint_instance_binding(endpoint)
+            sync_endpoint_duckdns(endpoint, "")
         if str(endpoint.get("staticIp", "") or "") and not endpoint_has_manual_static_ip(endpoint):
             release_endpoint_static_address(endpoint)
         else:

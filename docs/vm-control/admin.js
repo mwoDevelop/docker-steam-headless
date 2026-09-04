@@ -447,11 +447,12 @@
       const manualIpReservation = String(endpoint.ipReservationMode || "").trim() === "manual";
       const zone = String(endpoint.zone || "").trim();
       const region = String(endpoint.region || "").trim();
+      const instanceState = String(endpoint.instanceState || "NOT_FOUND").toUpperCase();
       const ipDescription = staticIp
         ? `${manualIpReservation ? "Manual reserved IP" : "Automatic IP pending release on stop"} ${staticIp}`
-        : externalIp
+        : instanceState === "RUNNING" && externalIp
           ? `Ephemeral IP ${externalIp} (releases on stop)`
-          : "Ephemeral IP assigned while VM runs";
+          : "Offline - no external IP";
       const canReserve = !staticIp;
       const canChooseReservationZone = canReserve && !vm;
       const canRelease = Boolean(staticIp) && !vm;

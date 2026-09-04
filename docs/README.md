@@ -26,6 +26,8 @@ procedura operacyjna.
 
 ## Plany inżynieryjne i zapisy historyczne
 
+- [Plan usunięcia usterek z audytu 2026-09-04](./audit-remediation-plan-2026-09-04.md):
+zakres zabezpieczeń backendu, DNS, wdrożenia i testów regresyjnych.
 - [Follow-up risk remediation plan](./follow-up-risk-remediation-plan.md):
 zaległości w implementacji i kryteria akceptacji, a nie element Runbook.
 - [Scan & Create plan](./scan-and-create-plan.md): projekt szybkiego przejścia

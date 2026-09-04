@@ -5,19 +5,26 @@ panel GitHub Pages, API Cloud Run oraz maszyny Compute Engine tworzone na żąda
 Zastępuje on starszy przepływ GitHub Actions z tokenem PAT opisany w
 [Legacy GitHub Pages mode](./github-pages-vm-control.md).
 
-## Stan wdrożenia
+## Stan operacyjny
 
-Stan poniżej został zweryfikowany 2026-08-21 i należy go traktować jako
-operacyjny snapshot, a nie trwałą konfigurację:
+Architektura nie utrwala liczby instancji, dysków ani ich chwilowego stanu,
+ponieważ są to dane operacyjne zmieniane przez GUI. Bieżący stan należy
+odczytywać z panelu administratora albo przez `gcloud compute instances list`,
+`gcloud compute disks list` i `gcloud compute snapshots list` dla projektu
+`docker-414215`.
+
+Stałe elementy wdrożenia:
 
 - GitHub Pages publikuje statyczny panel z `docs/vm-control/`.
 - Cloud Run `steam-vm-control-api` działa w regionie `europe-central2`.
-- Cloud Scheduler `steam-vm-control-capacity-cleanup` jest aktywny co minutę.
-- Nie ma obecnie zarządzanej instancji GCE, dysku ani snapshotu. W konsekwencji
-  Sunshine, noVNC, Steam Headless i Minecraft nie są teraz uruchomione.
+- Cloud Scheduler `steam-vm-control-capacity-cleanup` co minutę rekoncyliuje
+  wygasłe rezerwacje GPU, blokadę operacji VM i stan endpointów DNS.
+- Secret Manager przechowuje konfigurację endpointów, użytkowników i ustawień
+  zarządzanych przez backend.
 
-Pozostałe usługi Cloud Run w tym samym projekcie, np. `auchan-*`, nie należą
-do tego rozwiązania.
+Usługi i zasoby bez prefiksu tego rozwiązania, w szczególności `auchan-*`, są
+poza jego zakresem i nie mogą być modyfikowane przez procedury wdrożeniowe ani
+porządkowe.
 
 ## Zasady projektowe
 
