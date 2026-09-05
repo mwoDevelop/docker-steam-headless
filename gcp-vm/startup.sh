@@ -254,7 +254,19 @@ exec 9>"$lock_file"
 flock -w 30 9
 
 steam_ready() {
-  [[ -x "$steam_binary_dir/steam" && -s "$steam_binary_dir/steamui.so" ]]
+  local candidate
+
+  for candidate in \
+    "$home_dir/.steam/ubuntu12_32" \
+    "$home_dir/.steam/debian-installation/ubuntu12_32" \
+    "$home_dir/.local/share/Steam/ubuntu12_32" \
+    "$home_dir/.local/share/Steam/debian-installation/ubuntu12_32"; do
+    if [[ -x "$candidate/steam" && -s "$candidate/steamui.so" ]]; then
+      steam_binary_dir="$candidate"
+      return 0
+    fi
+  done
+  return 1
 }
 
 detect_steam_version() {
@@ -264,6 +276,8 @@ detect_steam_version() {
   for candidate in \
     "$steam_dir/package/steam_client_ubuntu12.installed" \
     "$steam_dir/package/steam_client_ubuntu12.manifest" \
+    "$home_dir/.steam/debian-installation/package/steam_client_ubuntu12.installed" \
+    "$home_dir/.steam/debian-installation/package/steam_client_ubuntu12.manifest" \
     "$home_dir/.local/share/Steam/package/steam_client_ubuntu12.installed" \
     "$home_dir/.local/share/Steam/package/steam_client_ubuntu12.manifest" \
     "$steam_dir/logs/bootstrap_log.txt" \
@@ -324,7 +338,8 @@ fi
 
 if ! pgrep -u default -f '(^|/)(steam|steamwebhelper)( |$)' >/dev/null 2>&1; then
   sudo -u default env HOME="$home_dir" USER=default DISPLAY="$display_value" XAUTHORITY="$xauthority_value" \
-    sh -c 'nohup "$HOME/.steam/ubuntu12_32/steam" ${STEAM_ARGS:--silent} >>"$HOME/.cache/log/steam-bootstrap.log" 2>&1 &'
+    STEAM_NATIVE_BINARY="$steam_binary_dir/steam" \
+    sh -c 'nohup "$STEAM_NATIVE_BINARY" ${STEAM_ARGS:--silent} >>"$HOME/.cache/log/steam-bootstrap.log" 2>&1 &'
 fi
 
 # Keep the old Flatpak profile as rollback data, but remove the duplicate package.
@@ -357,7 +372,11 @@ for _ in $(seq 1 30); do
   [[ -n "$version" ]] && break
   sleep 2
 done
-account="$(sed -n 's/^[[:space:]]*"AccountName"[[:space:]]*"\([^"]*\)".*/\1/p' "$steam_dir/config/loginusers.vdf" 2>/dev/null | head -n1 || true)"
+account="$(sed -n 's/^[[:space:]]*"AccountName"[[:space:]]*"\([^"]*\)".*/\1/p' \
+  "$steam_dir/config/loginusers.vdf" \
+  "$home_dir/.steam/debian-installation/config/loginusers.vdf" \
+  "$home_dir/.local/share/Steam/config/loginusers.vdf" \
+  2>/dev/null | head -n1 || true)"
 printf 'VERSION=%s\nACCOUNT=%s\n' "$version" "$account"
 STEAM_BOOTSTRAP
 )"; then

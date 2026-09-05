@@ -72,7 +72,9 @@ class ApplicationInventoryContractTests(unittest.TestCase):
         self.assertIn('__STEAM_NOT_INSTALLED__=1', startup_script)
         self.assertIn('chmod 0755 "$consent_bin" "$consent_bin/zenity"', startup_script)
         self.assertIn('PATH="$consent_bin:$PATH"', startup_script)
-        self.assertIn('"$HOME/.steam/ubuntu12_32/steam"', startup_script)
+        self.assertIn('"$home_dir/.steam/ubuntu12_32"', startup_script)
+        self.assertIn('"$home_dir/.steam/debian-installation/ubuntu12_32"', startup_script)
+        self.assertIn('STEAM_NATIVE_BINARY="$steam_binary_dir/steam"', startup_script)
 
     def test_gui_waits_for_delayed_sunshine_version_metadata(self):
         root = os.path.dirname(os.path.dirname(__file__))
