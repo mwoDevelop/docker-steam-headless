@@ -47,9 +47,9 @@ class ApplicationInventoryContractTests(unittest.TestCase):
         self.assertIn("detect_steam_version()", startup_script)
         self.assertIn('docker exec -i --user root "$container_id"', startup_script)
         self.assertIn('env VM_STEAM_BOOTSTRAP_MODE="$bootstrap_mode" bash -s', startup_script)
-        self.assertIn(".local/share/Steam/package/steam_client_ubuntu12.installed", startup_script)
+        self.assertIn(".local/share/Steam/package/steam_client_ubuntu12.manifest", startup_script)
+        self.assertIn('"version"[[:space:]]*"([0-9]{6,})"', startup_script)
         self.assertIn("logs/bootstrap_log.txt", startup_script)
-        self.assertIn("awk '$0 !~ /^0([.]0)*$/'", startup_script)
         self.assertIn("preserving the previously published version", startup_script)
 
     def test_full_steam_bootstrap_is_create_only_and_noninteractive(self):

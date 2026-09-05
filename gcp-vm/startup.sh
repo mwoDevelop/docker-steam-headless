@@ -274,22 +274,19 @@ detect_steam_version() {
   local detected=""
 
   for candidate in \
-    "$steam_dir/package/steam_client_ubuntu12.installed" \
     "$steam_dir/package/steam_client_ubuntu12.manifest" \
-    "$home_dir/.steam/debian-installation/package/steam_client_ubuntu12.installed" \
     "$home_dir/.steam/debian-installation/package/steam_client_ubuntu12.manifest" \
-    "$home_dir/.local/share/Steam/package/steam_client_ubuntu12.installed" \
     "$home_dir/.local/share/Steam/package/steam_client_ubuntu12.manifest" \
     "$steam_dir/logs/bootstrap_log.txt" \
     "$home_dir/.local/share/Steam/logs/bootstrap_log.txt" \
     "$log_file"; do
     [[ -s "$candidate" ]] || continue
-    detected="$(grep -Eio '(client[[:space:]_-]*version|version|build[[:space:]_-]*id|build)[^0-9]*[0-9][0-9.]*' "$candidate" 2>/dev/null \
-      | grep -Eo '[0-9][0-9.]*' \
-      | awk '$0 !~ /^0([.]0)*$/' \
-      | tail -n1 || true)"
-    if [[ -z "$detected" && "$candidate" == *.installed ]]; then
-      detected="$(grep -Eo '[0-9]{6,}([.][0-9]+)*' "$candidate" 2>/dev/null | head -n1 || true)"
+    if [[ "$candidate" == *.manifest ]]; then
+      detected="$(sed -nE 's/^[[:space:]]*"version"[[:space:]]*"([0-9]{6,})".*/\1/p' "$candidate" | head -n1 || true)"
+    else
+      detected="$(grep -Eio '(client[[:space:]_-]*version|build[[:space:]_-]*id|build)[^0-9]*[0-9]{6,}' "$candidate" 2>/dev/null \
+        | grep -Eo '[0-9]{6,}' \
+        | tail -n1 || true)"
     fi
     [[ -n "$detected" ]] && printf '%s\n' "$detected" && return 0
   done
