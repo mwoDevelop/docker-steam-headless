@@ -70,6 +70,7 @@ class ApplicationInventoryContractTests(unittest.TestCase):
         self.assertIn('VM_STEAM_BOOTSTRAP_MODE="$bootstrap_mode"', startup_script)
         self.assertIn('[[ "$bootstrap_mode" != "create" ]]', startup_script)
         self.assertIn('__STEAM_NOT_INSTALLED__=1', startup_script)
+        self.assertIn('chmod 0755 "$consent_bin" "$consent_bin/zenity"', startup_script)
         self.assertIn('PATH="$consent_bin:$PATH"', startup_script)
         self.assertIn('"$HOME/.steam/ubuntu12_32/steam"', startup_script)
 

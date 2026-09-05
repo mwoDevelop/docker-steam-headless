@@ -302,7 +302,7 @@ case " $* " in
   *) exit 1 ;;
 esac
 STEAM_ZENITY
-  chmod 0755 "$consent_bin/zenity"
+  chmod 0755 "$consent_bin" "$consent_bin/zenity"
 
   if ! pgrep -u default -f '(^|/)(steam|steamwebhelper)( |$)' >/dev/null 2>&1; then
     sudo -u default env HOME="$home_dir" USER=default DISPLAY="$display_value" XAUTHORITY="$xauthority_value" \
