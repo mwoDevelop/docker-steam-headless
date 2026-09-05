@@ -45,11 +45,30 @@ class ApplicationInventoryContractTests(unittest.TestCase):
         with open(os.path.join(root, "gcp-vm", "startup.sh"), encoding="utf-8") as source:
             startup_script = source.read()
         self.assertIn("detect_steam_version()", startup_script)
-        self.assertIn('docker exec -i --user root "$container_id" bash -s', startup_script)
+        self.assertIn('docker exec -i --user root "$container_id"', startup_script)
+        self.assertIn('env VM_STEAM_BOOTSTRAP_MODE="$bootstrap_mode" bash -s', startup_script)
         self.assertIn(".local/share/Steam/package/steam_client_ubuntu12.installed", startup_script)
         self.assertIn("logs/bootstrap_log.txt", startup_script)
         self.assertIn("awk '$0 !~ /^0([.]0)*$/'", startup_script)
         self.assertIn("preserving the previously published version", startup_script)
+
+    def test_full_steam_bootstrap_is_create_only_and_noninteractive(self):
+        root = os.path.dirname(os.path.dirname(__file__))
+        with open(os.path.join(root, "gcp-vm", "startup.sh"), encoding="utf-8") as source:
+            startup_script = source.read()
+        with open(os.path.join(root, "cloud-run-vm-control", "app.py"), encoding="utf-8") as source:
+            backend = source.read()
+
+        self.assertIn('STEAM_BOOTSTRAP_MODE_METADATA_KEY = "vm-steam-bootstrap-mode"', backend)
+        self.assertIn('steam_bootstrap_mode="create"', backend)
+        self.assertIn('steam_bootstrap_mode="start"', backend)
+        self.assertIn('{"key": STEAM_BOOTSTRAP_MODE_METADATA_KEY, "value": "create"}', backend)
+        self.assertIn('set_env_value ENABLE_STEAM "false"', startup_script)
+        self.assertIn('VM_STEAM_BOOTSTRAP_MODE="$bootstrap_mode"', startup_script)
+        self.assertIn('[[ "$bootstrap_mode" != "create" ]]', startup_script)
+        self.assertIn('__STEAM_NOT_INSTALLED__=1', startup_script)
+        self.assertIn('PATH="$consent_bin:$PATH"', startup_script)
+        self.assertIn('"$HOME/.steam/ubuntu12_32/steam"', startup_script)
 
     def test_gui_waits_for_delayed_sunshine_version_metadata(self):
         root = os.path.dirname(os.path.dirname(__file__))

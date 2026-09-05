@@ -217,6 +217,7 @@ record_sunshine_version() {
 }
 
 ensure_native_steam_ready() {
+  local bootstrap_mode="${1:-start}"
   local container_id
   local output
   local version=""
@@ -228,8 +229,13 @@ ensure_native_steam_ready() {
     return 1
   fi
 
-  set_steam_status downloading "Downloading and preparing the native Steam client."
-  if ! output="$(docker exec -i --user root "$container_id" bash -s <<'STEAM_BOOTSTRAP'
+  if [[ "$bootstrap_mode" == "create" ]]; then
+    set_steam_status downloading "Downloading and preparing the native Steam client during VM creation."
+  else
+    set_steam_status starting "Checking the native Steam client installed during VM creation."
+  fi
+  if ! output="$(docker exec -i --user root "$container_id" \
+    env VM_STEAM_BOOTSTRAP_MODE="$bootstrap_mode" bash -s <<'STEAM_BOOTSTRAP'
 set -euo pipefail
 
 home_dir=/home/default
@@ -240,6 +246,7 @@ log_file="$log_dir/steam-bootstrap.log"
 lock_file="$home_dir/.cache/steam-native-bootstrap.lock"
 display_value="${DISPLAY:-:55}"
 xauthority_value="${XAUTHORITY:-$home_dir/.Xauthority}"
+bootstrap_mode="${VM_STEAM_BOOTSTRAP_MODE:-start}"
 
 mkdir -p "$log_dir" "$home_dir/.cache"
 chown -R default:default "$log_dir" "$home_dir/.cache"
@@ -274,16 +281,32 @@ detect_steam_version() {
   done
 }
 
+if ! steam_ready && [[ "$bootstrap_mode" != "create" ]]; then
+  printf '__STEAM_NOT_INSTALLED__=1\n'
+  exit 42
+fi
+
+for _ in $(seq 1 120); do
+  if sudo -u default env HOME="$home_dir" USER=default DISPLAY="$display_value" XAUTHORITY="$xauthority_value" xset q >/dev/null 2>&1; then
+    break
+  fi
+  sleep 1
+done
+
 if ! steam_ready; then
-  for _ in $(seq 1 120); do
-    if sudo -u default env HOME="$home_dir" USER=default DISPLAY="$display_value" XAUTHORITY="$xauthority_value" xset q >/dev/null 2>&1; then
-      break
-    fi
-    sleep 1
-  done
+  consent_bin="$(mktemp -d)"
+  cat >"$consent_bin/zenity" <<'STEAM_ZENITY'
+#!/bin/sh
+case " $* " in
+  *" --question "*) exit 0 ;;
+  *) exit 1 ;;
+esac
+STEAM_ZENITY
+  chmod 0755 "$consent_bin/zenity"
 
   if ! pgrep -u default -f '(^|/)(steam|steamwebhelper)( |$)' >/dev/null 2>&1; then
     sudo -u default env HOME="$home_dir" USER=default DISPLAY="$display_value" XAUTHORITY="$xauthority_value" \
+      PATH="$consent_bin:$PATH" \
       sh -c 'nohup /usr/games/steam ${STEAM_ARGS:--silent} >>"$HOME/.cache/log/steam-bootstrap.log" 2>&1 &'
   fi
 
@@ -291,6 +314,7 @@ if ! steam_ready; then
     steam_ready && break
     sleep 2
   done
+  rm -rf "$consent_bin"
 fi
 
 if ! steam_ready; then
@@ -298,8 +322,13 @@ if ! steam_ready; then
   exit 1
 fi
 
+if ! pgrep -u default -f '(^|/)(steam|steamwebhelper)( |$)' >/dev/null 2>&1; then
+  sudo -u default env HOME="$home_dir" USER=default DISPLAY="$display_value" XAUTHORITY="$xauthority_value" \
+    sh -c 'nohup "$HOME/.steam/ubuntu12_32/steam" ${STEAM_ARGS:--silent} >>"$HOME/.cache/log/steam-bootstrap.log" 2>&1 &'
+fi
+
 # Keep the old Flatpak profile as rollback data, but remove the duplicate package.
-if sudo -u default env HOME="$home_dir" flatpak --user info com.valvesoftware.Steam >/dev/null 2>&1; then
+if [[ "$bootstrap_mode" == "create" ]] && sudo -u default env HOME="$home_dir" flatpak --user info com.valvesoftware.Steam >/dev/null 2>&1; then
   sudo -u default env HOME="$home_dir" flatpak --user uninstall --noninteractive -y com.valvesoftware.Steam >/dev/null 2>&1 || true
 fi
 
@@ -332,7 +361,11 @@ account="$(sed -n 's/^[[:space:]]*"AccountName"[[:space:]]*"\([^"]*\)".*/\1/p' "
 printf 'VERSION=%s\nACCOUNT=%s\n' "$version" "$account"
 STEAM_BOOTSTRAP
 )"; then
-    set_steam_status error "Steam client download or configuration failed; remote access remains available."
+    if grep -q '^__STEAM_NOT_INSTALLED__=1$' <<<"$output"; then
+      set_steam_status error "Native Steam client is not installed. Recreate the VM to install it; start never downloads Steam."
+    else
+      set_steam_status error "Steam client download or configuration failed; remote access remains available."
+    fi
     return 1
   fi
 
@@ -1040,6 +1073,9 @@ ensure_env_key_missing NVIDIA_DRIVER_VERSION ""
 ensure_sunshine_credentials
 chmod 600 "$ENVF"
 sync_env_metadata
+# The project owns Steam startup. Disabling the image auto-start avoids the
+# interactive steam-installer/zenity prompt and duplicate bootstrap process.
+set_env_value ENABLE_STEAM "false"
 
 STEAM_HEADLESS_IMAGE_VALUE="$(awk -F= '/^STEAM_HEADLESS_IMAGE=/{print substr($0,index($0,"=")+1)}' "$ENVF" | tail -n1)"
 STEAM_HEADLESS_IMAGE_VALUE="${STEAM_HEADLESS_IMAGE_VALUE:-josh5/steam-headless:latest}"
@@ -1141,6 +1177,7 @@ install_minecraft_management_service
 
 if ! gpu_enabled; then
   set_steam_status "disabled" "Steam desktop client is disabled because the VM has no GPU desktop stack."
+  set_instance_metadata_value vm-steam-bootstrap-mode "start"
   mark_backup_ready
   log "Backup readiness marker created for CPU-only VM"
   schedule_auto_shutdown
@@ -1228,9 +1265,14 @@ if [ -f "$SUNSHINE_DIRECT_CONFIG" ]; then
     sleep 2
   done
 fi
-if ! ensure_native_steam_ready; then
+steam_bootstrap_mode="$(metadata_get vm-steam-bootstrap-mode || true)"
+if [[ "$steam_bootstrap_mode" != "create" ]]; then
+  steam_bootstrap_mode="start"
+fi
+if ! ensure_native_steam_ready "$steam_bootstrap_mode"; then
   log "Native Steam bootstrap did not complete; remote access remains available."
 fi
+set_instance_metadata_value vm-steam-bootstrap-mode "start"
 mark_backup_ready
 log "Backup readiness marker created"
 

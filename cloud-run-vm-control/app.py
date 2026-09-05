@@ -276,6 +276,7 @@ STEAM_STATUS_METADATA_KEY = "vm-steam-status"
 STEAM_STATUS_DETAIL_METADATA_KEY = "vm-steam-status-detail"
 STEAM_VERSION_METADATA_KEY = "vm-steam-version"
 STEAM_ACCOUNT_METADATA_KEY = "vm-steam-account"
+STEAM_BOOTSTRAP_MODE_METADATA_KEY = "vm-steam-bootstrap-mode"
 BACKUPS_JSON_METADATA_KEY = "vm-backups-json"
 DATA_DISK_STATUS_METADATA_KEY = "vm-data-disk-status"
 DATA_DISK_DETAIL_METADATA_KEY = "vm-data-disk-detail"
@@ -6386,9 +6387,13 @@ def start_metadata_updates(
     *,
     auto_stop_hours: int | None,
     sunshine_credentials: dict[str, str],
+    steam_bootstrap_mode: str,
     post_create_application_ids: list[str] | None = None,
     post_create_application_token: str = "",
 ) -> dict[str, str | None]:
+    steam_bootstrap_mode = str(steam_bootstrap_mode or "").strip().lower()
+    if steam_bootstrap_mode not in {"create", "start"}:
+        raise ValueError("steam_bootstrap_mode must be 'create' or 'start'")
     updates: dict[str, str | None] = {
         "startup-script": decode_config_b64("vm_startup_script_b64"),
         "shutdown-script": decode_config_b64("vm_shutdown_script_b64"),
@@ -6410,6 +6415,7 @@ def start_metadata_updates(
         POWER_ACTION_METADATA_KEY: None,
         POWER_ACTION_STATUS_METADATA_KEY: None,
         BACKUP_READY_AT_METADATA_KEY: None,
+        STEAM_BOOTSTRAP_MODE_METADATA_KEY: steam_bootstrap_mode,
         SUNSHINE_STATUS_METADATA_KEY: "starting" if selected_gpu_count() > 0 else "disabled",
         SUNSHINE_STATUS_DETAIL_METADATA_KEY: (
             "VM booting. Waiting for Sunshine Web UI."
@@ -6418,7 +6424,11 @@ def start_metadata_updates(
         ),
         STEAM_STATUS_METADATA_KEY: "starting" if selected_gpu_count() > 0 else "disabled",
         STEAM_STATUS_DETAIL_METADATA_KEY: (
-            "VM booting. Waiting for the native Steam client."
+            (
+                "VM creation is installing the full native Steam client."
+                if steam_bootstrap_mode == "create"
+                else "VM booting. Waiting for the native Steam client installed during create."
+            )
             if selected_gpu_count() > 0
             else "GPU disabled for this VM; the Steam desktop stack was not started."
         ),
@@ -7017,6 +7027,7 @@ def build_instance_metadata_items(
         {"key": "vm-control-endpoint-id", "value": selected_endpoint_id()},
         {"key": "vm-gpu-count", "value": str(selected_gpu_count())},
         {"key": "vm-gpu-type", "value": selected_gpu_type()},
+        {"key": STEAM_BOOTSTRAP_MODE_METADATA_KEY, "value": "create"},
         {
             "key": STEAM_ENV_METADATA_KEY,
             "value": build_steam_env_value(
@@ -9402,6 +9413,7 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
                 start_metadata_updates(
                     auto_stop_hours=auto_stop_hours,
                     sunshine_credentials=sunshine_credentials,
+                    steam_bootstrap_mode="create",
                     post_create_application_ids=application_ids,
                     post_create_application_token=post_create_application_token,
                 ),
@@ -9510,6 +9522,7 @@ def execute_command(command: str, user: dict[str, Any], payload: dict[str, Any] 
                 start_metadata_updates(
                     auto_stop_hours=auto_stop_hours,
                     sunshine_credentials=sunshine_credentials,
+                    steam_bootstrap_mode="start",
                 ),
             )
             current_instance = get_instance()
