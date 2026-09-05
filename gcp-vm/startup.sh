@@ -1076,6 +1076,19 @@ sync_env_metadata
 # The project owns Steam startup. Disabling the image auto-start avoids the
 # interactive steam-installer/zenity prompt and duplicate bootstrap process.
 set_env_value ENABLE_STEAM "false"
+steam_home_dir="$(awk -F= '/^HOME_DIR=/{print substr($0,index($0,"=")+1)}' "$ENVF" | tail -n1)"
+steam_home_dir="${steam_home_dir:-/opt/container-data/steam-headless/home}"
+install -d -m 0755 -o 1000 -g 1000 "$steam_home_dir/.config/autostart"
+cat >"$steam_home_dir/.config/autostart/Steam.desktop" <<'STEAM_AUTOSTART'
+[Desktop Entry]
+Type=Application
+Name=Steam
+Exec=/usr/games/steam -silent
+Hidden=true
+X-GNOME-Autostart-enabled=false
+STEAM_AUTOSTART
+chown 1000:1000 "$steam_home_dir/.config/autostart/Steam.desktop"
+chmod 0644 "$steam_home_dir/.config/autostart/Steam.desktop"
 
 STEAM_HEADLESS_IMAGE_VALUE="$(awk -F= '/^STEAM_HEADLESS_IMAGE=/{print substr($0,index($0,"=")+1)}' "$ENVF" | tail -n1)"
 STEAM_HEADLESS_IMAGE_VALUE="${STEAM_HEADLESS_IMAGE_VALUE:-josh5/steam-headless:latest}"
