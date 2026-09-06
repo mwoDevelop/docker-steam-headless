@@ -47,6 +47,22 @@ class ReservedGpuModalContractTests(unittest.TestCase):
         )[0]
         self.assertIn("heldWorkflow.endpoint && heldWorkflow.endpoint.domain", create_modal)
 
+    def test_reserved_create_defaults_all_apps_and_submits_after_safe_countdown(self):
+        workflow = self.javascript.split("async function handleHeldGpuCapacity(run, prepared) {", 1)[1].split(
+            "\n  function ", 1
+        )[0]
+        create_modal = self.javascript.split("function selectPostCreateApplications(target, options = {}) {", 1)[1].split(
+            "\n  async function dispatchCommand", 1
+        )[0]
+        self.assertIn("autoSubmit: autoCreateFirstAvailableGpuEnabled()", workflow)
+        self.assertIn('id="create-reserved-countdown"', self.html)
+        self.assertIn("checkbox.checked = gpuEnabled", create_modal)
+        self.assertIn("const autoCreateDelayMs = 30000", create_modal)
+        self.assertIn("const reservationSafetyMarginMs = 5000", create_modal)
+        self.assertIn("activeWorkflowMatches()", create_modal)
+        self.assertIn('complete(list.querySelector(\'input[type="checkbox"]:checked\') ? "create-selected" : "create-empty")', create_modal)
+        self.assertIn("window.clearInterval(timerId)", create_modal)
+
     def test_reserved_relocation_persists_auto_stop_before_migration_start(self):
         workflow = self.javascript.split("async function handleHeldGpuCapacity(run, prepared) {", 1)[1].split(
             "\n  function ", 1

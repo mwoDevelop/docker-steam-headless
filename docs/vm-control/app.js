@@ -1738,7 +1738,10 @@
     const operation = String(prepared.operation || "create");
     const choice = operation === "start"
       ? await selectReservedStart(target, prepared)
-      : await selectPostCreateApplications(target, { heldWorkflow: prepared });
+      : await selectPostCreateApplications(target, {
+          heldWorkflow: prepared,
+          autoSubmit: autoCreateFirstAvailableGpuEnabled(),
+        });
     const action = choice && choice.action ? choice.action : "pause";
     if (!["create", "start"].includes(action)) {
       setCommandStatus("Releasing the held GPU reservation before continuing...", "warning");
@@ -3943,6 +3946,7 @@
     const dialog = document.querySelector("#create-applications-dialog");
     const form = dialog && dialog.querySelector("form");
     const summary = document.querySelector("#create-applications-summary");
+    const countdown = document.querySelector("#create-reserved-countdown");
     const list = document.querySelector("#create-applications-list");
     const selectedButton = document.querySelector("#create-with-applications");
     const cancelButton = document.querySelector("#create-dialog-cancel");
@@ -3956,6 +3960,7 @@
     const gpuEnabled = Number(target && target.gpuCount || 0) > 0;
     const applicationCatalog = createApplicationCatalog();
     const heldWorkflow = options.heldWorkflow || null;
+    const autoSubmit = Boolean(heldWorkflow && options.autoSubmit);
     const reservedGpu = heldWorkflow ? reservedGpuDetails(target, heldWorkflow) : null;
     const targetLabel = [
       heldWorkflow && heldWorkflow.endpoint && heldWorkflow.endpoint.domain || selectedEndpoint() && selectedEndpoint().domain,
@@ -3980,6 +3985,10 @@
       if (button) button.hidden = !heldWorkflow;
     });
     if (cancelButton) cancelButton.hidden = Boolean(heldWorkflow);
+    if (countdown) {
+      countdown.hidden = !autoSubmit;
+      countdown.textContent = "";
+    }
     list.replaceChildren();
     if (!applicationCatalog.length) {
       const empty = document.createElement("p");
@@ -3994,6 +4003,7 @@
         checkbox.type = "checkbox";
         checkbox.value = String(application.id);
         checkbox.disabled = !gpuEnabled;
+        checkbox.checked = gpuEnabled;
         const copy = document.createElement("span");
         const title = document.createElement("strong");
         title.textContent = String(application.label);
@@ -4012,14 +4022,40 @@
     updateSelectedButton();
 
     return new Promise((resolve) => {
+      const autoCreateDelayMs = 30000;
+      const reservationSafetyMarginMs = 5000;
+      const deadline = Date.now() + autoCreateDelayMs;
+      const expiresAt = new Date(String(heldWorkflow && (heldWorkflow.expiresAt || heldWorkflow.reservation && heldWorkflow.reservation.expiresAt) || "")).getTime();
+      const workflowId = String(heldWorkflow && heldWorkflow.workflowId || "");
+      const preparationToken = String(heldWorkflow && heldWorkflow.preparationToken || "");
+      const targetSignature = [target && target.endpointId, target && target.hardwareId, target && target.zone]
+        .map((value) => String(value || ""))
+        .join("|");
+      const hasSafeTtl = autoSubmit && Number.isFinite(expiresAt) && expiresAt - deadline >= reservationSafetyMarginMs;
       let settled = false;
+      let timerId = 0;
+      const activeWorkflowMatches = () => {
+        const active = state.activeHeldGpuWorkflow || {};
+        const activeTarget = active.target || {};
+        return String(active.workflowId || "") === workflowId
+          && String(active.preparationToken || "") === preparationToken
+          && [activeTarget.endpointId, activeTarget.hardwareId, activeTarget.zone]
+            .map((value) => String(value || ""))
+            .join("|") === targetSignature;
+      };
+      const cleanup = () => {
+        if (timerId) window.clearInterval(timerId);
+        timerId = 0;
+        dialog.removeEventListener("close", onClose);
+        form.removeEventListener("submit", onSubmit);
+        document.removeEventListener("visibilitychange", renderCountdown);
+      };
       const finish = (choice) => {
         if (settled) {
           return;
         }
         settled = true;
-        dialog.removeEventListener("close", onClose);
-        form.removeEventListener("submit", onSubmit);
+        cleanup();
         if (choice === "create-selected") {
           resolve({
             action: "create",
@@ -4038,18 +4074,39 @@
         }
         resolve(null);
       };
+      const complete = (choice) => {
+        finish(choice);
+        if (dialog.open) dialog.close(choice);
+      };
+      const renderCountdown = () => {
+        if (!autoSubmit || settled || !countdown) return;
+        if (!hasSafeTtl) {
+          countdown.textContent = "Automatic Create is unavailable because the GPU reservation expires too soon. Choose an action manually.";
+          return;
+        }
+        const seconds = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+        countdown.textContent = `Creating automatically in ${seconds} seconds with the currently selected applications unless you choose another action.`;
+        if (seconds > 0) return;
+        if (!dialog.open || !activeWorkflowMatches() || Date.now() + reservationSafetyMarginMs >= expiresAt) {
+          complete("pause");
+          return;
+        }
+        complete(list.querySelector('input[type="checkbox"]:checked') ? "create-selected" : "create-empty");
+      };
       const onClose = () => {
         finish(dialog.returnValue || (heldWorkflow ? "pause" : "cancel"));
       };
       const onSubmit = (event) => {
         event.preventDefault();
         const choice = String(event.submitter && event.submitter.value || "cancel");
-        dialog.close(choice);
-        finish(choice);
+        complete(choice);
       };
       dialog.addEventListener("close", onClose);
       form.addEventListener("submit", onSubmit);
       dialog.showModal();
+      renderCountdown();
+      if (hasSafeTtl) timerId = window.setInterval(renderCountdown, 250);
+      if (autoSubmit) document.addEventListener("visibilitychange", renderCountdown);
     });
   }
 
