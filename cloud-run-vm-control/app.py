@@ -1548,6 +1548,44 @@ def runtime_image_agent_ready(instance: dict[str, Any] | None) -> bool:
     return bool(instance and metadata_value(instance, RUNTIME_IMAGE_AGENT_METADATA_KEY).strip().lower() == "ready")
 
 
+def minecraft_runtime_available(instance: dict[str, Any] | None) -> bool:
+    if instance is None:
+        return False
+    return any(
+        str(server.get("state") or "").strip().lower() != "removed"
+        for server in minecraft_servers_from_instance(instance)
+    )
+
+
+def runtime_image_capabilities(instance: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    is_running = bool(instance and str(instance.get("status", "")).upper() == "RUNNING")
+    agent_ready = runtime_image_agent_ready(instance)
+    idle = not bool(active_power_action(instance)) if instance else False
+    backup_ready = is_live_backup_ready(instance) if instance else False
+    common_ready = is_running and agent_ready and idle
+    sunshine_available = bool(instance and not is_gpu_disabled_for_instance(instance))
+    minecraft_available = minecraft_runtime_available(instance)
+    minecraft_running = bool(instance and minecraft_state(instance) == "running")
+    runtime_images = runtime_image_instance_payload(instance)
+
+    return {
+        "steam-headless": {
+            "available": sunshine_available,
+            "canPull": common_ready and sunshine_available,
+            "canApply": common_ready and sunshine_available and backup_ready,
+            "canRollback": common_ready and sunshine_available and backup_ready and bool(runtime_images["steam-headless"]["previousRef"]),
+            "reason": "" if sunshine_available else "Steam Headless and Sunshine are unavailable on CPU-only VMs.",
+        },
+        "minecraft": {
+            "available": minecraft_available,
+            "canPull": common_ready and minecraft_available,
+            "canApply": common_ready and minecraft_available and minecraft_running and backup_ready,
+            "canRollback": common_ready and minecraft_available and minecraft_running and backup_ready and bool(runtime_images["minecraft"]["previousRef"]),
+            "reason": "" if minecraft_available else "Install a Minecraft server before managing its runtime image.",
+        },
+    }
+
+
 def build_admin_runtime_images_payload(admin_user: dict[str, Any]) -> dict[str, Any]:
     endpoints: list[dict[str, Any]] = []
     for endpoint in reconcile_endpoint_instance_bindings():
@@ -1560,6 +1598,7 @@ def build_admin_runtime_images_payload(admin_user: dict[str, Any]) -> dict[str, 
                 "minecraft": build_minecraft_status(instance),
                 "runtimeImages": runtime_image_instance_payload(instance),
                 "runtimeImageAgentReady": runtime_image_agent_ready(instance),
+                "runtimeImageCapabilities": runtime_image_capabilities(instance),
             }
         )
     return {"user": admin_user, "catalog": runtime_image_catalog(), "endpoints": endpoints}
@@ -1589,6 +1628,8 @@ def execute_admin_runtime_image_action(admin_user: dict[str, Any], payload: dict
     component = runtime_image_component(payload.get("component"))
     if component == "steam-headless" and is_gpu_disabled_for_instance(instance):
         raise ApiError("Steam Headless and Sunshine image updates require a GPU-enabled VM.", 409)
+    if component == "minecraft" and not minecraft_runtime_available(instance):
+        raise ApiError("Install a Minecraft server before managing its runtime image.", 409)
     if component == "minecraft" and action in {"apply", "rollback"}:
         if minecraft_state(instance) != "running":
             raise ApiError("Minecraft container updates require a running installed Minecraft server.", 409)
@@ -4652,6 +4693,8 @@ def options_passthrough():
 
         if current_instance is None:
             raise ApiError("Instance does not exist. Create it before setting Sunshine credentials.", 400)
+        if is_gpu_disabled_for_instance(current_instance):
+            raise ApiError("Sunshine credentials are unavailable on CPU-only VMs.", 409)
         password = parse_sunshine_password(source)
         current_instance, _ = set_sunshine_password(current_instance, password)
         operation = {"state": "stored", "detail": "Password saved in VM metadata."}
@@ -4671,8 +4714,6 @@ def options_passthrough():
             current_instance = wait_for_sunshine_status("ready", timeout_seconds=240)
             update_duckdns(extract_external_ip(current_instance))
             operation = {"state": "applied", "detail": "Password applied and Sunshine is ready."}
-        elif str(current_instance.get("status", "")).upper() == "RUNNING":
-            operation = {"state": "stored", "detail": "Password saved. CPU-only VMs do not run Sunshine."}
         return jsonify(
             build_admin_sunshine_credentials_payload(
                 admin_user=admin_user,
@@ -4725,6 +4766,10 @@ def options_passthrough():
                 "status": build_status_payload(instance, user=admin_user, command="status"),
                 "applicationCatalog": APPLICATION_CATALOG,
                 "minecraftServer": minecraft_version_payload(),
+                "capabilities": {
+                    "desktopApplications": bool(instance and not is_gpu_disabled_for_instance(instance)),
+                    "minecraft": instance is not None,
+                },
             }
         )
 
@@ -6683,7 +6728,8 @@ def build_admin_sunshine_credentials_payload(
         "password": "",
     }
     password = str(credentials.get("password", "")).strip()
-    password_available = bool(password and password != "change-me")
+    sunshine_available = bool(instance and not is_gpu_disabled_for_instance(instance))
+    password_available = bool(sunshine_available and password and password != "change-me")
     response = {
         "user": admin_user,
         "endpoint": endpoint_public_payload(selected_endpoint()),
@@ -6696,7 +6742,8 @@ def build_admin_sunshine_credentials_payload(
         },
         "passwordAvailable": password_available,
         "passwordRevealed": bool(include_password and password_available),
-        "canUpdate": instance is not None,
+        "sunshineAvailable": sunshine_available,
+        "canUpdate": sunshine_available,
     }
     if operation:
         response["operation"] = operation

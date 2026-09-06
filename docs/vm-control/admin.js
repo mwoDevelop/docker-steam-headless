@@ -231,6 +231,8 @@
     elements.sunshinePasswordInput.disabled = nextBusy || !state.user || !canUpdateSunshine;
     elements.sunshinePasswordSubmit.disabled = nextBusy || !state.user || !canUpdateSunshine;
     const softwareLoaded = Boolean(state.softwarePayload) && hasVmEndpoint;
+    const softwareCapabilities = state.softwarePayload && state.softwarePayload.capabilities || {};
+    const desktopApplicationsAvailable = softwareCapabilities.desktopApplications !== false;
     [
       elements.softwareEndpoint,
       elements.softwareApplication,
@@ -242,6 +244,7 @@
     ].forEach((input) => {
       input.disabled = nextBusy || !state.user || !softwareLoaded;
     });
+    elements.softwareApplication.disabled = nextBusy || !state.user || !softwareLoaded || !desktopApplicationsAvailable;
     document.querySelectorAll("[data-software-command]").forEach((input) => {
       input.disabled = nextBusy || !state.user || !softwareLoaded || input.dataset.softwareDisabled === "true";
     });
@@ -600,7 +603,9 @@
       elements.sunshineCredentialsSummary.textContent = `${endpoint.id || "Selected endpoint"} has no VM. Create the VM before setting Sunshine credentials.`;
       elements.sunshineCredentialsSummary.dataset.tone = "warning";
     } else if (!payload.passwordAvailable) {
-      elements.sunshineCredentialsSummary.textContent = `${endpoint.id || "Selected endpoint"}: Sunshine password is not available yet. Start or recreate the VM to generate one.`;
+      elements.sunshineCredentialsSummary.textContent = payload.sunshineAvailable === false
+        ? `${endpoint.id || "Selected endpoint"}: Sunshine is unavailable on this CPU-only VM. Select a GPU-enabled VM to manage Sunshine credentials.`
+        : `${endpoint.id || "Selected endpoint"}: Sunshine password is not available yet. Start or recreate the VM to generate one.`;
       elements.sunshineCredentialsSummary.dataset.tone = "warning";
     } else {
       elements.sunshineCredentialsSummary.textContent = `${endpoint.id || "Selected endpoint"}: VM ${stateLabel}. Username: ${credentials.username || "admin"}. Password is hidden until Show is selected.${runtimeDetail}`;
@@ -614,18 +619,19 @@
     const currentRef = String(details.currentRef || "");
     const previousRef = String(details.previousRef || "");
     const currentTag = String(details.currentTag || "");
-    const isRunning = String(endpoint.instanceState || "").toUpperCase() === "RUNNING";
-    const agentReady = Boolean(endpoint.runtimeImageAgentReady);
-    const minecraftReady = componentId !== "minecraft" || String(endpoint.minecraft && endpoint.minecraft.state || "") === "running";
-    const canPull = isRunning && agentReady && candidates.some((candidate) => candidate.imageRef);
-    const canApply = canPull && minecraftReady;
-    const canRollback = isRunning && agentReady && minecraftReady && Boolean(previousRef);
+    const capabilities = endpoint.runtimeImageCapabilities && endpoint.runtimeImageCapabilities[componentId] || {};
+    const canPull = Boolean(capabilities.canPull) && candidates.some((candidate) => candidate.imageRef);
+    const canApply = Boolean(capabilities.canApply) && candidates.some((candidate) => candidate.imageRef);
+    const canRollback = Boolean(capabilities.canRollback);
     const options = candidates.map((candidate) => {
       const ref = String(candidate.imageRef || "");
       const label = `${candidate.tag || "untagged"}${candidate.updatedAt ? ` · ${candidate.updatedAt.slice(0, 10)}` : ""}`;
       return `<option value="${escapeHtml(ref)}" ${ref && ref === currentRef ? "selected" : ""} ${ref ? "" : "disabled"}>${escapeHtml(label)}</option>`;
     }).join("");
     const status = details.detail ? `<br><span>${escapeHtml(details.detail)}</span>` : "";
+    const unavailable = capabilities.available === false && capabilities.reason
+      ? `<br><span>${escapeHtml(capabilities.reason)}</span>`
+      : "";
     return `
       <div class="admin-user-row fixed">
         <div>
@@ -633,6 +639,7 @@
           <span>Current: ${escapeHtml(currentTag || currentRef || "not recorded")}</span>
           ${previousRef ? `<br><span>Rollback: ${escapeHtml(details.previousTag || previousRef)}</span>` : ""}
           ${status}
+          ${unavailable}
         </div>
         <label class="access-meta">Target
           <select data-runtime-image-select="${escapeHtml(componentId)}">${options || '<option value="">Refresh trusted versions first</option>'}</select>
@@ -1237,6 +1244,8 @@
       ? `${selectedMinecraftRecord.id} · ${selectedMinecraftRecord.serverType || "paper"} ${selectedMinecraftRecord.version || "LATEST"} · port ${selectedMinecraftRecord.gamePort || "not assigned"} · ${selectedMinecraftRecord.state || "unknown"}.`
       : "Select an installed server to manage it.";
     const allowedCommands = new Set(Array.isArray(status.allowedCommands) ? status.allowedCommands : []);
+    const capabilities = payload.capabilities || {};
+    const desktopApplicationsAvailable = capabilities.desktopApplications !== false;
     const instanceState = String(status.instanceState || status.vmState || status.status || "NOT_FOUND");
     const minecraftState = String(
       (status.minecraftStatus && (status.minecraftStatus.state || status.minecraftStatus.status))
@@ -1246,7 +1255,10 @@
     const catalogDetail = versionCatalog.lastError
       ? `Version list error: ${versionCatalog.lastError}`
       : `${minecraftVersions.length} ${activeServerType} versions available${versionCatalog.source ? ` from ${versionCatalog.source}` : ""}.`;
-    elements.softwareStatus.textContent = `${payload.endpoint && payload.endpoint.id ? payload.endpoint.id : "Selected endpoint"} · VM ${instanceState} · Applications ${installedApplications.size}/${applications.length} installed · Minecraft ${minecraftState}`;
+    const applicationSummary = desktopApplicationsAvailable
+      ? `Applications ${installedApplications.size}/${applications.length} installed`
+      : "Applications unavailable on CPU-only VM";
+    elements.softwareStatus.textContent = `${payload.endpoint && payload.endpoint.id ? payload.endpoint.id : "Selected endpoint"} · VM ${instanceState} · ${applicationSummary} · Minecraft ${minecraftState}`;
     elements.softwareStatus.dataset.tone = versionCatalog.lastError ? "warning" : (instanceState === "RUNNING" ? "success" : "neutral");
     const newServer = String(elements.softwareMinecraftNewServer.value || "").trim().toLowerCase();
     const validNewServer = /^[a-z0-9][a-z0-9-]{0,30}$/.test(newServer);
@@ -1281,6 +1293,7 @@
         || (needsExistingServer && invalidLifecycleState)
       );
     });
+    elements.softwareApplication.disabled = state.isBusy || !state.user || !desktopApplicationsAvailable;
     renderSoftwareLiveAccess(payload);
   }
 
