@@ -92,6 +92,14 @@ class GpuScanCancelContractTests(unittest.TestCase):
         self.assertIn('const operation = source ? "start" : "create"', request)
         self.assertNotIn("autoSubmitReservedGpuEnabled", request)
 
+    def test_start_source_is_stable_while_scan_changes_target_zone(self):
+        source = self.javascript.split("function selectedStartScanSource() {", 1)[1].split(
+            "\n  function eligibleSelectedStartScanSource", 1
+        )[0]
+        self.assertIn('String(hardware.id || "") === hardwareId', source)
+        self.assertNotIn("selectedZone()", source)
+        self.assertNotIn("String(instance.zone", source)
+
     def test_reserved_start_countdown_reuses_existing_start_paths(self):
         body = self.javascript.split("async function handleHeldGpuCapacity(run, prepared) {", 1)[1].split(
             "\n  function reservedGpuDetails", 1
