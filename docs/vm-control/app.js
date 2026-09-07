@@ -203,7 +203,7 @@
     pauseGpuScan: document.querySelector("#pause-gpu-scan"),
     cancelGpuScan: document.querySelector("#cancel-gpu-scan"),
     autoCreateFirstGpu: document.querySelector("#auto-create-first-gpu"),
-    startSelectedFirstGpu: document.querySelector("#start-selected-first-gpu"),
+    autoSubmitReservedGpu: document.querySelector("#auto-submit-reserved-gpu"),
     hardwareOptionsStatus: document.querySelector("#hardware-options-status"),
     hardwarePriceEstimate: document.querySelector("#hardware-price-estimate"),
     refreshInstances: document.querySelector("#refresh-instances"),
@@ -1213,7 +1213,7 @@
   }
 
   function selectedGpuScanProfiles() {
-    if (startSelectedVmScanEnabled()) {
+    if (selectedVmStartScanEnabled()) {
       const source = selectedStartScanSource();
       const sourceHardwareId = String(source && source.hardware && source.hardware.id || "");
       return eligibleGpuScanProfiles().filter((profile) => String(profile.id) === sourceHardwareId);
@@ -1344,21 +1344,20 @@
       const cpuSelected = document.querySelector("#hardware-select")?.value === "cpu";
       elements.autoCreateFirstGpu.disabled = state.isBusy || !state.user || running || cpuSelected;
     }
-    const startSource = selectedStartScanSource();
-    if (elements.startSelectedFirstGpu) {
-      const eligible = Boolean(startSource && String(startSource.status || "").toUpperCase() === "TERMINATED" && Number(startSource.hardware && startSource.hardware.gpuCount || 0) > 0);
-      elements.startSelectedFirstGpu.disabled = state.isBusy || !state.user || running || !eligible;
+    if (elements.autoSubmitReservedGpu) {
+      const cpuSelected = document.querySelector("#hardware-select")?.value === "cpu";
+      elements.autoSubmitReservedGpu.disabled = state.isBusy || !state.user || running || cpuSelected;
     }
     if (elements.gpuScanProfiles) {
       elements.gpuScanProfiles.querySelectorAll("input, [data-hardware-select]").forEach((input) => {
-        input.disabled = state.isBusy || !state.user || running || startSelectedVmScanEnabled();
+        input.disabled = state.isBusy || !state.user || running || selectedVmStartScanEnabled();
       });
     }
     if (elements.scanSelectedGpu) {
       elements.scanSelectedGpu.textContent = runningZoneCatalogScan
         ? "Scanning GPUs in Selected Zone..."
         : selectedZoneGpuScan ? "Show All GPUs in Selected Zone" : "Scan All GPUs in Selected Zone";
-      elements.scanSelectedGpu.disabled = state.isBusy || !state.user || !selectedZone() || running || startSelectedVmScanEnabled();
+      elements.scanSelectedGpu.disabled = state.isBusy || !state.user || !selectedZone() || running || selectedVmStartScanEnabled();
       elements.scanSelectedGpu.title = selectedZoneGpuScan
         ? "Restore every known GPU profile for the selected zone"
         : "Temporarily test every known GPU profile in the selected zone without retaining reservations";
@@ -1368,7 +1367,7 @@
       elements.scanAllGpuZones.textContent = runningAllGpuZoneScan
         ? "Scanning All GPUs in All Zones..."
         : globalScan ? "Show All GPUs in All Zones" : "Scan All GPUs in All Zones";
-      elements.scanAllGpuZones.disabled = state.isBusy || !state.user || running || startSelectedVmScanEnabled();
+      elements.scanAllGpuZones.disabled = state.isBusy || !state.user || running || selectedVmStartScanEnabled();
       elements.scanAllGpuZones.title = globalScan
         ? "Restore all configured GPU profiles and compatible zones"
         : "Temporarily test every configured GPU profile in every compatible zone without retaining reservations";
@@ -1562,6 +1561,10 @@
     return Boolean(elements.autoCreateFirstGpu && elements.autoCreateFirstGpu.checked);
   }
 
+  function autoSubmitReservedGpuEnabled() {
+    return Boolean(elements.autoSubmitReservedGpu && elements.autoSubmitReservedGpu.checked);
+  }
+
   function selectedStartScanSource() {
     const instances = getCreatedInstances();
     const explicitlySelected = instances.find((instance) => String(instance.name || "") === String(state.startScanSourceInstanceName || "")) || null;
@@ -1578,8 +1581,19 @@
     }) || null;
   }
 
-  function startSelectedVmScanEnabled() {
-    return Boolean(elements.startSelectedFirstGpu && elements.startSelectedFirstGpu.checked && selectedStartScanSource());
+  function eligibleSelectedStartScanSource() {
+    const source = selectedStartScanSource();
+    if (!source || String(source.status || "").toUpperCase() !== "TERMINATED") return null;
+    if (Number(source.hardware && source.hardware.gpuCount || 0) <= 0) return null;
+    const sourceEndpoint = endpointForInstance(source);
+    const selectedProfile = selectedHardwareProfile();
+    if (String(sourceEndpoint && sourceEndpoint.id || "") !== selectedEndpointId()) return null;
+    if (String(source.hardware && source.hardware.id || "") !== String(selectedProfile && selectedProfile.id || "")) return null;
+    return source;
+  }
+
+  function selectedVmStartScanEnabled() {
+    return Boolean(eligibleSelectedStartScanSource());
   }
 
   function gpuScanRequestPayload(run, target) {
@@ -1591,8 +1605,8 @@
         ? window.crypto.randomUUID()
         : `scan-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     }
-    const source = selectedStartScanSource();
-    const operation = startSelectedVmScanEnabled() ? "start" : "create";
+    const source = eligibleSelectedStartScanSource();
+    const operation = source ? "start" : "create";
     return {
       ...target,
       holdForOperation: true,
@@ -1736,11 +1750,12 @@
     await refreshGpuCapacityReservationCount();
     renderGpuAvailabilityScanProgress(run);
     const operation = String(prepared.operation || "create");
+    const autoSubmit = autoSubmitReservedGpuEnabled();
     const choice = operation === "start"
-      ? await selectReservedStart(target, prepared)
+      ? await selectReservedStart(target, prepared, { autoSubmit })
       : await selectPostCreateApplications(target, {
           heldWorkflow: prepared,
-          autoSubmit: autoCreateFirstAvailableGpuEnabled(),
+          autoSubmit,
         });
     const action = choice && choice.action ? choice.action : "pause";
     if (!["create", "start"].includes(action)) {
@@ -1880,7 +1895,7 @@
     return details;
   }
 
-  function selectReservedStart(target, prepared) {
+  function selectReservedStart(target, prepared, options = {}) {
     const dialog = document.querySelector("#start-reserved-dialog");
     const form = dialog && dialog.querySelector("form");
     const summary = document.querySelector("#start-reserved-summary");
@@ -1888,6 +1903,7 @@
     const confirm = document.querySelector("#start-reserved-confirm");
     if (!dialog || !form || !summary || !countdown || !confirm) return Promise.resolve({ action: "pause" });
     const source = prepared.source || {};
+    const autoSubmit = Boolean(options.autoSubmit);
     const relocation = String(source.zone || "") !== String(target.zone || "");
     renderReservedGpuSummary(
       summary,
@@ -1896,6 +1912,8 @@
       `${source.instanceName || "Selected VM"}. ${relocation ? `The VM will be relocated from ${zoneDisplayLabel(source.zone)} before Start.` : "The VM will start in its current zone."}`,
     );
     confirm.textContent = relocation ? "Migrate and start reserved VM" : "Start reserved VM";
+    countdown.hidden = !autoSubmit;
+    countdown.textContent = "";
     dialog.returnValue = "";
     return new Promise((resolve) => {
       const autoStartDelayMs = 30000;
@@ -1906,7 +1924,7 @@
       const preparationToken = String(prepared.preparationToken || "");
       const sourceSignature = [source.endpointId, source.instanceName, source.zone].map((value) => String(value || "")).join("|");
       const targetSignature = [target.endpointId, target.hardwareId, target.zone].map((value) => String(value || "")).join("|");
-      const hasSafeTtl = Number.isFinite(expiresAt) && expiresAt - deadline >= reservationSafetyMarginMs;
+      const hasSafeTtl = autoSubmit && Number.isFinite(expiresAt) && expiresAt - deadline >= reservationSafetyMarginMs;
       let settled = false;
       let timerId = 0;
 
@@ -1938,7 +1956,7 @@
       };
 
       const renderCountdown = () => {
-        if (settled) return;
+        if (!autoSubmit || settled) return;
         if (!hasSafeTtl) {
           countdown.textContent = "Automatic Start is unavailable because the GPU reservation expires too soon. Choose an action manually.";
           return;
@@ -1974,7 +1992,7 @@
       dialog.showModal();
       renderCountdown();
       if (hasSafeTtl) timerId = window.setInterval(renderCountdown, 250);
-      document.addEventListener("visibilitychange", renderCountdown);
+      if (autoSubmit) document.addEventListener("visibilitychange", renderCountdown);
     });
   }
 
@@ -2047,8 +2065,8 @@
       hardwareLabel: String(profile.label || profile.id || "GPU"),
       zone: String(zone),
       target: targetParamsForHardwareProfile(profile, zone),
-      operation: startSelectedVmScanEnabled() ? "start" : "create",
-      sourceEndpointId: startSelectedVmScanEnabled() ? String(endpointForInstance(selectedStartScanSource()) && endpointForInstance(selectedStartScanSource()).id || "") : "",
+      operation: selectedVmStartScanEnabled() ? "start" : "create",
+      sourceEndpointId: selectedVmStartScanEnabled() ? String(endpointForInstance(eligibleSelectedStartScanSource()) && endpointForInstance(eligibleSelectedStartScanSource()).id || "") : "",
     };
     if (!Array.isArray(run.scanCreateCandidates)) run.scanCreateCandidates = [];
     run.scanCreateCandidates.push(candidate);
@@ -3087,10 +3105,6 @@
     }
     if (!automatic) {
       state.startScanSourceInstanceName = String(instance.name || "");
-      if (elements.startSelectedFirstGpu) {
-        elements.startSelectedFirstGpu.checked = String(instance.status || "").toUpperCase() === "TERMINATED"
-          && Number(instance.hardware && instance.hardware.gpuCount || 0) > 0;
-      }
     }
     if (!state.hardwarePayload || !getHardwareProfiles().length) {
       await refreshHardwareOptions({ silent: false });
@@ -5023,19 +5037,11 @@
     });
   }
 
-  if (elements.startSelectedFirstGpu) {
-    elements.startSelectedFirstGpu.checked = true;
-    elements.startSelectedFirstGpu.addEventListener("change", () => {
-      if (elements.startSelectedFirstGpu.checked && !selectedStartScanSource()) {
-        elements.startSelectedFirstGpu.checked = false;
-        setCommandStatus("Select a TERMINATED GPU VM in Created instances first.", "warning");
-      }
-      const source = selectedStartScanSource();
-      if (elements.startSelectedFirstGpu.checked && source && source.hardware && source.hardware.id) {
-        state.gpuScanProfileIds = [String(source.hardware.id)];
-        state.gpuScanProfilesCustomized = true;
-        renderGpuScanProfileOptions();
-      }
+  if (elements.autoSubmitReservedGpu) {
+    const savedAutoSubmit = window.localStorage.getItem("vm-control-auto-submit-reserved-gpu");
+    elements.autoSubmitReservedGpu.checked = savedAutoSubmit === null ? true : savedAutoSubmit === "true";
+    elements.autoSubmitReservedGpu.addEventListener("change", () => {
+      window.localStorage.setItem("vm-control-auto-submit-reserved-gpu", String(elements.autoSubmitReservedGpu.checked));
       updateGpuAvailabilityScanButton();
     });
   }

@@ -20,7 +20,7 @@ class ReservedGpuModalContractTests(unittest.TestCase):
         create_modal = self.javascript.split("function selectPostCreateApplications(target, options = {}) {", 1)[1].split(
             "\n  function ", 1
         )[0]
-        start_modal = self.javascript.split("function selectReservedStart(target, prepared) {", 1)[1].split(
+        start_modal = self.javascript.split("function selectReservedStart(target, prepared, options = {}) {", 1)[1].split(
             "\n  function ", 1
         )[0]
         self.assertIn("renderReservedGpuSummary(", create_modal)
@@ -54,7 +54,8 @@ class ReservedGpuModalContractTests(unittest.TestCase):
         create_modal = self.javascript.split("function selectPostCreateApplications(target, options = {}) {", 1)[1].split(
             "\n  async function dispatchCommand", 1
         )[0]
-        self.assertIn("autoSubmit: autoCreateFirstAvailableGpuEnabled()", workflow)
+        self.assertIn("const autoSubmit = autoSubmitReservedGpuEnabled()", workflow)
+        self.assertIn("autoSubmit,", workflow)
         self.assertIn('id="create-reserved-countdown"', self.html)
         self.assertIn("checkbox.checked = gpuEnabled", create_modal)
         self.assertIn("const autoCreateDelayMs = 30000", create_modal)
@@ -62,6 +63,14 @@ class ReservedGpuModalContractTests(unittest.TestCase):
         self.assertIn("activeWorkflowMatches()", create_modal)
         self.assertIn('complete(list.querySelector(\'input[type="checkbox"]:checked\') ? "create-selected" : "create-empty")', create_modal)
         self.assertIn("window.clearInterval(timerId)", create_modal)
+
+    def test_auto_submit_setting_controls_both_reserved_create_and_start(self):
+        workflow = self.javascript.split("async function handleHeldGpuCapacity(run, prepared) {", 1)[1].split(
+            "\n  function reservedGpuDetails", 1
+        )[0]
+        self.assertIn("selectReservedStart(target, prepared, { autoSubmit })", workflow)
+        self.assertIn("autoSubmit,", workflow)
+        self.assertIn('const operation = String(prepared.operation || "create")', workflow)
 
     def test_reserved_relocation_persists_auto_stop_before_migration_start(self):
         workflow = self.javascript.split("async function handleHeldGpuCapacity(run, prepared) {", 1)[1].split(

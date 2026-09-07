@@ -201,10 +201,10 @@
               </span>
             </label>
             <label class="auto-create-first-gpu">
-              <input id="start-selected-first-gpu" type="checkbox" checked disabled>
+              <input id="auto-submit-reserved-gpu" type="checkbox" checked>
               <span>
-                <strong>Start selected VM using reserved GPU capacity</strong>
-                <small>Select a TERMINATED GPU VM in Created instances. Capacity found automatically or selected manually can start it locally or relocate it to the reserved zone.</small>
+                <strong>Automatically create or start after GPU reservation</strong>
+                <small>After capacity is reserved, automatically confirm Create or Start after 30 seconds. Clear this option to require manual confirmation.</small>
               </span>
             </label>
             <p class="gpu-compatibility-legend">
@@ -592,7 +592,7 @@
         </div>
       </form>
     </dialog>
-    <script src="./app.js?v=reserved-create-countdown-20260906"></script>
+    <script src="./app.js?v=reserved-auto-action-20260907"></script>
     <script src="./runtime-help.js?v=20260901"></script>
   </body>
 </html>

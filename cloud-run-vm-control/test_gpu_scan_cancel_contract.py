@@ -12,14 +12,14 @@ class GpuScanCancelContractTests(unittest.TestCase):
         cls.html = (ROOT / "docs" / "vm-control" / "admin.html").read_text(encoding="utf-8")
         cls.backend = (ROOT / "cloud-run-vm-control" / "app.py").read_text(encoding="utf-8")
 
-    def test_start_scan_label_is_not_limited_to_first_result(self):
-        self.assertIn("Start selected VM using reserved GPU capacity", self.html)
-        self.assertNotIn("Start selected VM after first available GPU", self.html)
+    def test_auto_action_label_covers_reserved_create_and_start(self):
+        self.assertIn("Automatically create or start after GPU reservation", self.html)
+        self.assertNotIn("Start selected VM using reserved GPU capacity", self.html)
 
-    def test_reserved_gpu_start_defaults_to_checked_for_an_eligible_selected_vm(self):
-        self.assertIn('id="start-selected-first-gpu" type="checkbox" checked disabled', self.html)
-        self.assertIn("elements.startSelectedFirstGpu.checked = true", self.javascript)
-        self.assertIn('String(instance.status || "").toUpperCase() === "TERMINATED"', self.javascript)
+    def test_reserved_gpu_auto_action_defaults_to_checked_and_is_persisted(self):
+        self.assertIn('id="auto-submit-reserved-gpu" type="checkbox" checked', self.html)
+        self.assertIn('window.localStorage.getItem("vm-control-auto-submit-reserved-gpu")', self.javascript)
+        self.assertIn('savedAutoSubmit === null ? true : savedAutoSubmit === "true"', self.javascript)
 
     def test_automatic_reservation_is_disabled_for_cpu(self):
         self.assertIn('const cpuSelected = document.querySelector("#hardware-select")?.value === "cpu"', self.javascript)
@@ -68,10 +68,11 @@ class GpuScanCancelContractTests(unittest.TestCase):
 
     def test_reserved_start_modal_has_safe_automatic_countdown(self):
         self.assertIn('id="start-reserved-countdown"', self.html)
-        body = self.javascript.split("function selectReservedStart(target, prepared) {", 1)[1].split(
+        body = self.javascript.split("function selectReservedStart(target, prepared, options = {}) {", 1)[1].split(
             "\n  function selectedTargetParams()", 1
         )[0]
         self.assertIn("const autoStartDelayMs = 30000", body)
+        self.assertIn("const autoSubmit = Boolean(options.autoSubmit)", body)
         self.assertIn("const reservationSafetyMarginMs = 5000", body)
         self.assertIn('dialog.returnValue = ""', body)
         self.assertIn("activeWorkflowMatches()", body)
@@ -80,6 +81,16 @@ class GpuScanCancelContractTests(unittest.TestCase):
         self.assertIn('dialog.addEventListener("cancel", onCancel)', body)
         self.assertIn('form.addEventListener("submit", onSubmit)', body)
         self.assertIn("window.clearInterval(timerId)", body)
+        self.assertIn("if (!autoSubmit || settled) return", body)
+        self.assertNotIn("const finish = (action) => {\n        if (!autoSubmit", body)
+
+    def test_start_operation_depends_on_selected_terminated_gpu_vm_not_auto_submit(self):
+        request = self.javascript.split("function gpuScanRequestPayload(run, target) {", 1)[1].split(
+            "\n  async function ", 1
+        )[0]
+        self.assertIn("const source = eligibleSelectedStartScanSource()", request)
+        self.assertIn('const operation = source ? "start" : "create"', request)
+        self.assertNotIn("autoSubmitReservedGpuEnabled", request)
 
     def test_reserved_start_countdown_reuses_existing_start_paths(self):
         body = self.javascript.split("async function handleHeldGpuCapacity(run, prepared) {", 1)[1].split(
