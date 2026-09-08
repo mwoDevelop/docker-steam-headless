@@ -736,6 +736,11 @@
     }
   }
 
+  function rememberRuntimeTarget(select) {
+    state.runtimeTargetSelections[`${elements.runtimeEndpoint.value}:${select.dataset.runtimeImageSelect}`] = select.value;
+    renderRuntimeImages();
+  }
+
   async function refreshRuntimeCatalogInBackground() {
     if (state.runtimeCatalogRefreshInFlight || !state.token || !state.user) return;
     state.runtimeCatalogRefreshInFlight = true;
@@ -1149,6 +1154,9 @@
       body: JSON.stringify({ action, endpointId, component, ...(extra || {}) }),
     });
     state.runtimeImagesPayload = payload;
+    // This response belongs to the explicit refresh just requested, even
+    // when server timestamps have lower precision than a prior client error.
+    if (action === "refresh-catalog") state.runtimeCatalogSnapshot = payload.catalog;
     if (action === "refresh-catalog" && (payload.catalog?.lastError || payload.catalog?.refreshing)) {
       setMessage(payload.catalog.lastError
         ? `Catalog refresh failed: ${payload.catalog.lastError} Previous versions are preserved.`
@@ -1763,7 +1771,7 @@
 
   elements.runtimeImagesList.addEventListener("change", (event) => {
     const select = event.target.closest("[data-runtime-image-select]");
-    if (select) state.runtimeTargetSelections[`${elements.runtimeEndpoint.value}:${select.dataset.runtimeImageSelect}`] = select.value;
+    if (select) rememberRuntimeTarget(select);
   });
 
   elements.runtimeImagesList.addEventListener("click", async (event) => {

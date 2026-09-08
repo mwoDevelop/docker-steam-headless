@@ -91,3 +91,8 @@ name=java17/java21/java25/latest/stable. Filtry lacznie pokrywaja cala regule
 dopuszczania tagow Minecraft; duplikaty sa usuwane, aliasy zachowane.
 To nie jest obciecie do pierwszych 1000 wpisow. Liczba wszystkich tagow
 upstream pochodzi z pierwszej odpowiedzi. Nie sa potrzebne nowe credentiale.
+
+Test E2E wykryl blokade przyciskow po zniknieciu wybranego Target z katalogu:
+wybor nowego obrazu musi natychmiast przeliczyc dostepnosc akcji. Dodano tez
+test, w ktorym udany reczny refresh usuwa blad klienta z dokladniejszym
+znacznikiem czasu (milisekundy klienta vs sekundy backendu).
