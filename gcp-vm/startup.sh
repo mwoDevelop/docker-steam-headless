@@ -453,13 +453,20 @@ install_persist_script() {
 }
 
 install_power_action_script() {
-  local payload
+  local payload temporary
   local target=/usr/local/bin/vm-power-action
   payload="$(metadata_get vm-power-action-script)"
   [[ -n "$payload" ]] || return 0
   install -d -m 0755 "$(dirname "$target")"
-  printf '%s\n' "$payload" > "$target"
-  chmod 0755 "$target"
+  temporary="$(mktemp "${target}.XXXXXX")"
+  printf '%s\n' "$payload" > "$temporary"
+  if ! bash -n "$temporary"; then
+    rm -f "$temporary"
+    log "Invalid power action agent payload; keeping the installed version."
+    return 1
+  fi
+  chmod 0755 "$temporary"
+  mv -f "$temporary" "$target"
 }
 
 install_power_action_service() {
@@ -483,7 +490,10 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
   systemctl daemon-reload
-  systemctl enable --now vm-power-action-daemon.service >/dev/null 2>&1 || true
+  systemctl enable vm-power-action-daemon.service >/dev/null 2>&1
+  # systemd may have started the previous script before GCE startup installed
+  # the new one. Ensure its in-memory functions match the deployed payload.
+  systemctl restart vm-power-action-daemon.service
 }
 
 install_minecraft_management_script() {

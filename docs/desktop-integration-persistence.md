@@ -40,3 +40,9 @@ Test na zywej VM wykryl plaski format helpers.rc (bez sekcji INI).
 Pomocnik zachowuje ten format i pozostale preferencje XFCE. Startup stosuje
 stary override Sunshine tylko wtedy, gdy zostal wlaczony dla aktualnego
 obrazu, zamiast sugerowac sie pozostaloscia pliku po poprzednim obrazie.
+
+Aktualizacja pliku agenta nie zmienia funkcji juz zaladowanych do procesu
+Bash. Dlatego startup restartuje usluge agenta po atomowej instalacji pliku.
+Agent sprawdza nowy payload przed kolejna akcja i przeladowuje sie, jezeli
+kod sie zmienil. Nie przerywa trwajacej operacji; odrzuca niepoprawny skladniowo
+payload bez nadpisywania dzialajacego pliku.

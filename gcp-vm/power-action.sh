@@ -1581,13 +1581,40 @@ run_post_create_applications() {
   set_power_action_status "$action" "$token" "installed" ""
 }
 
+refresh_power_action_daemon() {
+  local script_path="$1" running_hash="$2" payload candidate_hash temporary
+  payload="$(metadata_get vm-power-action-script)" || return 1
+  [[ -n "$payload" ]] || return 0
+  candidate_hash="$(printf '%s\n' "$payload" | sha256sum | awk '{print $1}')"
+  [[ "$candidate_hash" != "$running_hash" ]] || return 0
+  temporary="$(mktemp "${script_path}.XXXXXX")" || return 1
+  printf '%s\n' "$payload" > "$temporary"
+  if ! bash -n "$temporary"; then
+    rm -f "$temporary"
+    log "Refusing an invalid power action agent update."
+    return 1
+  fi
+  chmod 0755 "$temporary"
+  mv -f "$temporary" "$script_path"
+  log "Reloading updated power action agent before processing the pending request."
+  exec "$script_path" daemon
+}
+
 run_daemon() {
+  local script_path="${BASH_SOURCE[0]}" running_hash
+  running_hash="$(sha256sum "$script_path" | awk '{print $1}')"
   log "Starting power action daemon"
   mark_runtime_image_agent_ready || true
   while true; do
     local request action token
     request="$(metadata_get "$POWER_ACTION_METADATA_KEY")"
     if [[ -n "$request" && "$request" == *:* ]]; then
+      # Reload only between actions, never interrupting an in-flight operation.
+      # Updating a script file does not update functions already loaded by Bash.
+      if ! refresh_power_action_daemon "$script_path" "$running_hash"; then
+        sleep "$POLL_INTERVAL_SECONDS"
+        continue
+      fi
       action="${request%%:*}"
       token="${request#*:}"
       case "$action" in
