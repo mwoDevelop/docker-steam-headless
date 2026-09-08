@@ -96,3 +96,31 @@ Test E2E wykryl blokade przyciskow po zniknieciu wybranego Target z katalogu:
 wybor nowego obrazu musi natychmiast przeliczyc dostepnosc akcji. Dodano tez
 test, w ktorym udany reczny refresh usuwa blad klienta z dokladniejszym
 znacznikiem czasu (milisekundy klienta vs sekundy backendu).
+
+## Wynik wdrozenia i testow, 2026-09-08
+
+Status: implementacja i E2E zakonczone. Backend: steam-vm-control-api-00401-bik
+(kod 50eed4e), frontend z poprawka regresyjna c082123 opublikowany na Pages.
+
+| Sprawdzenie | Wynik |
+| --- | --- |
+| Testy backendu | PASS: 117 testow, 5 subtestow |
+| Testy logiki GUI | PASS: 10 sprawdzen i node --check |
+| Bezposrednie pobranie z Docker Hub | PASS: 3,45 s, bez zapisu do chmury |
+| Automatyczna migracja starego katalogu przez GUI | PASS: GET schemat 0, nastepnie POST w tle schemat 2; ok. 4,4 s |
+| Steam Headless Target | PASS: 4 obrazy, 5 tagow z 11 upstream; latest / debian z 2026-09-05 |
+| Minecraft Target | PASS: 207 obrazow, 212 obslugiwanych tagow z 1972 upstream; latest / java25 z 2026-09-06 |
+| Reczny refresh | PASS: zachowane oba wybrane Target |
+| Przelaczanie CPU / GPU VM | PASS: osobne wybory; akcje Sunshine na CPU zablokowane |
+| Symulacja bledu refresh w przegladarce | PASS: ostrzezenie, brak falszywego sukcesu, pozostaje 4/207 opcji |
+| Odzyskanie po bledzie | PASS: kolejny udany refresh usuwa ostrzezenie |
+| Usuniety Target i wybor zastepczy | PASS po poprawce: przyciski odblokowuja sie natychmiast |
+| Odswiezanie w tle z opozniona odpowiedzia | PASS: widoczny postep katalogu, brak globalnego loadera, pozostale taby aktywne |
+| Secret Manager po powtorzonych refresh bez zmian | PASS: najnowsza wersja pozostala 5 |
+
+Testy awarii Docker Hub i zapisu sekretu byly wykonywane na mockach backendu;
+awaria GUI i znikniecie Target byly symulowane jednorazowo w odpowiedzi fetch,
+bez zmiany rzeczywistego katalogu upstream. Po testach przywrocono normalna karte.
+Stan VM niezmieniony: mwo-vm2 RUNNING, mwo-vm1 CPU TERMINATED. Nie wywolano
+Pull/Apply/Rollback ani operacji cyklu zycia VM. Katalog nie aktualizuje sam
+obrazow juz uruchomionych kontenerow.
