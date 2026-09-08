@@ -43,6 +43,12 @@ class ChromeDefaultBrowserTests(unittest.TestCase):
         config.read(self.user_home / relative)
         return config
 
+    def read_helpers(self):
+        config = configparser.ConfigParser(interpolation=None)
+        config.optionxform = str
+        config.read_string("[ROOT]\n" + (self.user_home / ".config/xfce4/helpers.rc").read_text())
+        return config["ROOT"]
+
     def test_missing_chrome_does_not_change_existing_preferences(self):
         path = self.user_home / ".config/mimeapps.list"
         path.parent.mkdir()
@@ -61,7 +67,7 @@ class ChromeDefaultBrowserTests(unittest.TestCase):
                             "x-scheme-handler/https=xfce4-web-browser.desktop\n")
         helpers = self.user_home / ".config/xfce4/helpers.rc"
         helpers.parent.mkdir()
-        helpers.write_text("[Helpers]\nWebBrowser=custom-WebBrowser\nTerminalEmulator=xterm\n")
+        helpers.write_text("WebBrowser=custom-WebBrowser\nTerminalEmulator=xterm\n")
         self.run_helper()
         for name in ("mimeapps.list", "xfce-mimeapps.list"):
             config = self.read_ini(".config/" + name)
@@ -69,9 +75,9 @@ class ChromeDefaultBrowserTests(unittest.TestCase):
                          "text/html", "application/xhtml+xml"):
                 self.assertEqual(config["Default Applications"][mime], "com.google.Chrome.desktop")
             self.assertEqual(config["Default Applications"]["text/plain"], "editor.desktop")
-        config = self.read_ini(".config/xfce4/helpers.rc")
-        self.assertEqual(config["Helpers"]["WebBrowser"], "com.google.Chrome")
-        self.assertEqual(config["Helpers"]["TerminalEmulator"], "xterm")
+        config = self.read_helpers()
+        self.assertEqual(config["WebBrowser"], "com.google.Chrome")
+        self.assertEqual(config["TerminalEmulator"], "xterm")
         launcher = self.read_ini(".local/share/xfce4/helpers/com.google.Chrome.desktop")
         self.assertIn('"%s"', launcher["Desktop Entry"]["X-XFCE-CommandsWithParameter"])
 
@@ -90,15 +96,19 @@ class ChromeDefaultBrowserTests(unittest.TestCase):
         self.run_helper()
         self.assertEqual(self.read_ini(".config/xfce-mimeapps.list")
                          ["Default Applications"]["x-scheme-handler/https"], "com.google.Chrome.desktop")
-        self.assertEqual(self.read_ini(".config/xfce4/helpers.rc")
-                         ["Helpers"]["WebBrowser"], "com.google.Chrome")
+        self.assertEqual(self.read_helpers()["WebBrowser"], "com.google.Chrome")
 
     def test_legacy_executes_the_same_browser_configuration(self):
         self.assertEqual(self.script, self.legacy_script)
         self.install_chrome_stub()
         self.run_helper(self.legacy_script)
-        self.assertEqual(self.read_ini(".config/xfce4/helpers.rc")
-                         ["Helpers"]["WebBrowser"], "com.google.Chrome")
+        self.assertEqual(self.read_helpers()["WebBrowser"], "com.google.Chrome")
+
+    def test_stale_direct_sunshine_override_is_not_applied(self):
+        source = (ROOT / "gcp-vm/startup.sh").read_text()
+        self.assertIn("SUNSHINE_DIRECT_ENABLED=0", source)
+        self.assertIn('if [[ "$SUNSHINE_DIRECT_ENABLED" == "1" ]]; then', source)
+        self.assertNotIn('if [ -f "$SUNSHINE_DIRECT_CONFIG" ]; then', source)
 
     def test_host_preparation_persists_bind_mounts_before_container_creation(self):
         source = AGENT.read_text()

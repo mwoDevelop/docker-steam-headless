@@ -35,3 +35,8 @@ takze po uruchomieniu VM z nowym dyskiem startowym przez obecny backend.
    Xorg wykorzystuje evdev dla Keyboard passthrough, Sunshine jest Ready.
 5. Restart VM: te same ustawienia, poprawny ekran i enkodery Sunshine.
 6. Test zdarzenia klawiatury na warstwie X11 z wirtualnego urzadzenia Sunshine.
+
+Test na zywej VM wykryl plaski format helpers.rc (bez sekcji INI).
+Pomocnik zachowuje ten format i pozostale preferencje XFCE. Startup stosuje
+stary override Sunshine tylko wtedy, gdy zostal wlaczony dla aktualnego
+obrazu, zamiast sugerowac sie pozostaloscia pliku po poprzednim obrazie.

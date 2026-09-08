@@ -911,7 +911,13 @@ mimes = ("x-scheme-handler/http", "x-scheme-handler/https", "text/html", "applic
 # Desktop-specific entries take precedence over generic mimeapps.list.
 for name in ("mimeapps.list", "xfce-mimeapps.list"):
     update_ini(config / name, "Default Applications", {mime: desktop for mime in mimes})
-update_ini(config / "xfce4/helpers.rc", "Helpers", {"WebBrowser": "com.google.Chrome"})
+# XfceRc reads helpers from its ungrouped section, not an INI [Helpers] group.
+helpers = config / "xfce4/helpers.rc"
+lines = helpers.read_text().splitlines() if helpers.exists() else []
+lines = [line for line in lines
+         if line.partition("=")[0].strip() != "WebBrowser"
+         and line.strip() != "[Helpers]"]
+write_text(helpers, "WebBrowser=com.google.Chrome\n" + "\n".join(lines) + ("\n" if lines else ""))
 write_text(data / "xfce4/helpers" / desktop, """[Desktop Entry]
 NoDisplay=true
 Version=1.0

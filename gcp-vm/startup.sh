@@ -1124,7 +1124,9 @@ COMPOSE_FILES+=(-f "$COMPOSE_IMAGE_OVERRIDE")
 # after the X server is reachable avoids that loop while preserving the image's
 # desktop and noVNC services.  Keep the image's own wrapper for vWS profiles
 # and for administrator-selected non-latest image tags.
+SUNSHINE_DIRECT_ENABLED=0
 if [[ "$STEAM_HEADLESS_IMAGE_VALUE" == *":latest" && "$(metadata_get vm-gpu-type)" != *-vws ]]; then
+  SUNSHINE_DIRECT_ENABLED=1
   cat > "$SUNSHINE_DIRECT_WRAPPER" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -1281,7 +1283,7 @@ apply_sunshine_state_credentials
 docker compose "${COMPOSE_FILES[@]}" restart || true
 stabilize_vws_input_stack
 
-if [ -f "$SUNSHINE_DIRECT_CONFIG" ]; then
+if [[ "$SUNSHINE_DIRECT_ENABLED" == "1" ]]; then
   for _ in $(seq 1 60); do
     container_id="$(docker compose "${COMPOSE_FILES[@]}" ps -q | head -n 1 || true)"
     if [ -n "$container_id" ] && docker exec --user root "$container_id" supervisorctl pid >/dev/null 2>&1; then
