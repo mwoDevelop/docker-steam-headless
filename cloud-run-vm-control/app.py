@@ -536,6 +536,12 @@ RUNTIME_IMAGE_COMPONENTS: Final = {
         "fallbackTags": ["stable", "latest"],
     },
 }
+RUNTIME_IMAGE_CATALOG_SCHEMA = 2
+RUNTIME_IMAGE_CATALOG_TTL_SECONDS = 6 * 60 * 60
+RUNTIME_IMAGE_CATALOG_RETRY_SECONDS = 300
+RUNTIME_IMAGE_CATALOG_MAX_PAGES = 100
+RUNTIME_IMAGE_CATALOG_BUDGET_SECONDS = 60
+RUNTIME_IMAGE_CATALOG_LOCK = threading.Lock()
 RUNTIME_IMAGE_CATALOG_CACHE: dict[str, Any] = {
     "components": {},
     "source": "static",
@@ -1100,12 +1106,24 @@ def runtime_image_state_metadata_key(component: str, field: str) -> str:
 def runtime_image_tag_allowed(component: str, raw_tag: Any) -> bool:
     tag = str(raw_tag or "").strip()
     if component == "steam-headless":
-        return tag in set(RUNTIME_IMAGE_COMPONENTS[component]["fallbackTags"])
+        return tag in set(RUNTIME_IMAGE_COMPONENTS[component]["fallbackTags"]) or bool(
+            re.fullmatch(r"debian-(?:\d+\.\d+\.\d+|\d{8})", tag)
+        )
     return bool(
-        tag in {"latest", "stable", "java17", "java21", "java25"}
+        tag in {"latest", "stable", "java17", "java21", "java25", "stable-java17", "stable-java21", "stable-java25"}
         or re.fullmatch(r"\d{4}\.\d{1,2}\.\d{1,2}-java(?:17|21|25)", tag)
     )
 
+
+def runtime_image_alias_order(tag: str) -> tuple[int, str]:
+    return ({"latest": 0, "stable": 1, "debian": 2}.get(tag, 3), tag)
+
+
+def runtime_catalog_timestamp(value: Any) -> float:
+    try:
+        return datetime.fromisoformat(str(value or "").replace("Z", "+00:00")).timestamp()
+    except (ValueError, TypeError, OverflowError):
+        return 0.0
 
 def runtime_image_digest_ref(repository: str, raw_digest: Any) -> str:
     digest = str(raw_digest or "").strip().lower()
@@ -1116,89 +1134,113 @@ def runtime_image_digest_ref(repository: str, raw_digest: Any) -> str:
 
 def runtime_image_catalog_template() -> dict[str, Any]:
     return {
+        "schemaVersion": 0,
         "components": {
             component: {
                 "label": str(definition["label"]),
                 "repository": str(definition["repository"]),
                 "requiresGpu": bool(definition["requiresGpu"]),
                 "candidates": [
-                    {"tag": tag, "imageRef": "", "updatedAt": ""}
+                    {"tag": tag, "aliases": [tag], "imageRef": "", "updatedAt": ""}
                     for tag in definition["fallbackTags"]
                 ],
+                "complete": False,
+                "totalTags": 0,
+                "excludedTags": 0,
+                "supportedTags": 0,
             }
             for component, definition in RUNTIME_IMAGE_COMPONENTS.items()
         },
-        "source": "static",
-        "updatedAt": "",
-        "lastError": "",
+        "source": "static", "updatedAt": "", "lastCheckedAt": "",
+        "lastAttemptAt": "", "lastError": "",
     }
 
 
 def normalize_runtime_image_catalog(raw_value: Any) -> dict[str, Any]:
     result = runtime_image_catalog_template()
-    if not isinstance(raw_value, dict):
-        return result
-    raw_components = raw_value.get("components")
-    if not isinstance(raw_components, dict):
+    if not isinstance(raw_value, dict) or not isinstance(raw_value.get("components"), dict):
         return result
     for component, definition in RUNTIME_IMAGE_COMPONENTS.items():
-        raw_component = raw_components.get(component)
-        raw_candidates = raw_component.get("candidates") if isinstance(raw_component, dict) else []
-        candidates: list[dict[str, str]] = []
-        if isinstance(raw_candidates, list):
-            for raw_candidate in raw_candidates:
-                if not isinstance(raw_candidate, dict):
-                    continue
-                tag = str(raw_candidate.get("tag") or "").strip()
-                image_ref = str(raw_candidate.get("imageRef") or "").strip()
-                repository = str(definition["repository"])
-                if not runtime_image_tag_allowed(component, tag):
-                    continue
-                if not image_ref.startswith(f"{repository}@sha256:"):
-                    continue
-                if not runtime_image_digest_ref(repository, image_ref.removeprefix(f"{repository}@")):
-                    continue
-                if any(existing["imageRef"] == image_ref for existing in candidates):
-                    continue
-                candidates.append(
-                    {
-                        "tag": tag,
-                        "imageRef": image_ref,
-                        "updatedAt": str(raw_candidate.get("updatedAt") or ""),
-                    }
-                )
-        if candidates:
-            result["components"][component]["candidates"] = candidates
-    result["source"] = str(raw_value.get("source") or "cache")
-    result["updatedAt"] = str(raw_value.get("updatedAt") or "")
-    result["lastError"] = str(raw_value.get("lastError") or "")
+        raw_component = raw_value["components"].get(component)
+        if not isinstance(raw_component, dict):
+            continue
+        by_digest: dict[str, dict[str, Any]] = {}
+        raw_candidates = raw_component.get("candidates", [])
+        for item in raw_candidates if isinstance(raw_candidates, list) else []:
+            if not isinstance(item, dict):
+                continue
+            repository = str(definition["repository"])
+            image_ref = str(item.get("imageRef") or "")
+            if not image_ref.startswith(f"{repository}@sha256:") or not runtime_image_digest_ref(repository, image_ref.removeprefix(f"{repository}@")):
+                continue
+            aliases = item.get("aliases") if isinstance(item.get("aliases"), list) else []
+            aliases = sorted({str(tag).strip() for tag in [item.get("tag"), *aliases]
+                              if runtime_image_tag_allowed(component, tag)}, key=runtime_image_alias_order)
+            if not aliases:
+                continue
+            candidate = by_digest.setdefault(image_ref, {"tag": aliases[0], "aliases": [], "imageRef": image_ref, "updatedAt": ""})
+            candidate["aliases"] = sorted(set(candidate["aliases"] + aliases), key=runtime_image_alias_order)
+            candidate["tag"] = candidate["aliases"][0]
+            candidate["updatedAt"] = max(candidate["updatedAt"], str(item.get("updatedAt") or ""))
+        if by_digest:
+            result["components"][component]["candidates"] = sorted(
+                by_digest.values(), key=lambda item: (item["updatedAt"], item["tag"]), reverse=True
+            )
+        result["components"][component]["complete"] = raw_component.get("complete") is True and bool(by_digest)
+        for field in ("totalTags", "excludedTags", "supportedTags"):
+            value = raw_component.get(field)
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                result["components"][component][field] = value
+    version = raw_value.get("schemaVersion")
+    result["schemaVersion"] = version if isinstance(version, int) else 0
+    for field in ("source", "updatedAt", "lastCheckedAt", "lastAttemptAt", "lastError"):
+        result[field] = str(raw_value.get(field) or "")
     return result
 
 
-def load_persisted_runtime_image_catalog() -> None:
-    if RUNTIME_IMAGE_CATALOG_CACHE.get("loaded"):
+def runtime_image_catalog_snapshot() -> dict[str, Any]:
+    catalog = normalize_runtime_image_catalog(RUNTIME_IMAGE_CATALOG_CACHE)
+    checked = max(runtime_catalog_timestamp(catalog["lastCheckedAt"]), runtime_catalog_timestamp(catalog["updatedAt"]))
+    catalog["stale"] = (
+        catalog["schemaVersion"] != RUNTIME_IMAGE_CATALOG_SCHEMA
+        or not all(item["complete"] for item in catalog["components"].values())
+        or time.time() - checked >= RUNTIME_IMAGE_CATALOG_TTL_SECONDS
+        or bool(catalog["lastError"])
+    )
+    catalog["refreshing"] = False
+    catalog["retryAfterSeconds"] = max(0, int(RUNTIME_IMAGE_CATALOG_RETRY_SECONDS -
+        (time.time() - runtime_catalog_timestamp(catalog["lastAttemptAt"])))) if catalog["lastError"] else 0
+    return catalog
+
+
+def load_persisted_runtime_image_catalog(force: bool = False) -> None:
+    if not force and RUNTIME_IMAGE_CATALOG_CACHE.get("loaded") and time.monotonic() - RUNTIME_IMAGE_CATALOG_CACHE.get("_persistCheckedAt", 0) < 60:
         return
-    RUNTIME_IMAGE_CATALOG_CACHE["loaded"] = True
-    secret_name = str(CONFIG["runtime_images_secret_name"] or "").strip()
-    if not secret_name:
+    if not RUNTIME_IMAGE_CATALOG_LOCK.acquire(blocking=False):
         return
     try:
+        first_load = not RUNTIME_IMAGE_CATALOG_CACHE.get("loaded")
+        RUNTIME_IMAGE_CATALOG_CACHE["loaded"] = True
+        RUNTIME_IMAGE_CATALOG_CACHE["_persistCheckedAt"] = time.monotonic()
+        secret_name = str(CONFIG["runtime_images_secret_name"] or "").strip()
+        if not secret_name:
+            return
         response = compute_session().get(
-            f"{SECRET_MANAGER_BASE_URL}/{secret_path(secret_name)}/versions/latest:access",
-            timeout=30,
+            f"{SECRET_MANAGER_BASE_URL}/{secret_path(secret_name)}/versions/latest:access", timeout=10,
         )
         if response.status_code == 404:
             return
         if response.status_code >= 400:
-            raise ApiError(f"Unable to read runtime image catalog: {response.text}", 502)
+            raise ApiError(f"Unable to read runtime image catalog (HTTP {response.status_code}).", 502)
         encoded = str(((response.json() or {}).get("payload") or {}).get("data") or "")
-        payload = json.loads(base64.b64decode(encoded).decode("utf-8"))
-        catalog = normalize_runtime_image_catalog(payload)
-        RUNTIME_IMAGE_CATALOG_CACHE.update(catalog)
+        catalog = normalize_runtime_image_catalog(json.loads(base64.b64decode(encoded).decode("utf-8")))
+        if first_load or runtime_catalog_timestamp(catalog["updatedAt"]) > runtime_catalog_timestamp(RUNTIME_IMAGE_CATALOG_CACHE.get("updatedAt")):
+            RUNTIME_IMAGE_CATALOG_CACHE.update(catalog)
     except Exception as error:
         logging.warning("Unable to load persisted runtime image catalog: %s", error)
         RUNTIME_IMAGE_CATALOG_CACHE["lastError"] = str(error)
-
+    finally:
+        RUNTIME_IMAGE_CATALOG_LOCK.release()
 
 def save_persisted_runtime_image_catalog(catalog: dict[str, Any]) -> None:
     secret_name = str(CONFIG["runtime_images_secret_name"] or "").strip()
@@ -1409,97 +1451,122 @@ def execute_admin_compatibility_action(admin_user: dict[str, Any], payload: dict
     return build_admin_compatibility_payload(admin_user)
 
 
-def fetch_runtime_image_component_catalog(component: str) -> dict[str, Any]:
+def fetch_runtime_image_component_catalog(component: str, deadline: float | None = None) -> dict[str, Any]:
     definition = RUNTIME_IMAGE_COMPONENTS[component]
     repository = str(definition["repository"])
-    response = requests.get(
-        DOCKER_HUB_TAGS_URL.format(repository=repository),
-        params={"page_size": 100, "ordering": "last_updated"},
-        headers={"Accept": "application/json", "User-Agent": "docker-steam-headless-vm-control/1.0"},
-        timeout=30,
-    )
-    if response.status_code >= 400:
-        raise ApiError(f"Docker Hub returned {response.status_code} for {repository}.", 502)
-    payload = response.json()
-    raw_tags = payload.get("results") if isinstance(payload, dict) else []
-    if not isinstance(raw_tags, list):
-        raise ApiError(f"Docker Hub returned an invalid tag list for {repository}.", 502)
-    candidates: list[dict[str, str]] = []
-    for raw_tag in raw_tags:
-        if not isinstance(raw_tag, dict):
-            continue
-        tag = str(raw_tag.get("name") or "").strip()
+    deadline = deadline if deadline is not None else time.monotonic() + RUNTIME_IMAGE_CATALOG_BUDGET_SECONDS
+    tags: dict[str, dict[str, Any]] = {}
+    total_tags = 0
+    queries: list[str | None] = [None]
+    page_count = 0
+    while queries:
+        name_filter = queries.pop(0)
+        signatures: set[tuple[str, ...]] = set()
+        page = 1
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise ApiError("Docker Hub catalog refresh exceeded its time budget; previous catalog preserved.", 502)
+            page_count += 1
+            if page_count > RUNTIME_IMAGE_CATALOG_MAX_PAGES:
+                raise ApiError(f"Docker Hub catalog exceeded {RUNTIME_IMAGE_CATALOG_MAX_PAGES} pages; previous catalog preserved.", 502)
+            params = {"page_size": 100, "ordering": "last_updated", "page": page}
+            if name_filter is not None:
+                params["name"] = name_filter
+            # Never follow provider-supplied URLs or redirects.
+            response = requests.get(
+                DOCKER_HUB_TAGS_URL.format(repository=repository), params=params,
+                headers={"Accept": "application/json", "User-Agent": "docker-steam-headless-vm-control/1.0"},
+                timeout=min(10, remaining), allow_redirects=False,
+            )
+            if response.status_code != 200:
+                raise ApiError(f"Docker Hub returned {response.status_code} for {repository}; previous catalog preserved.", 502)
+            payload = response.json()
+            raw_tags = payload.get("results") if isinstance(payload, dict) else None
+            if not isinstance(raw_tags, list) or any(not isinstance(tag, dict) or not isinstance(tag.get("name"), str) for tag in raw_tags):
+                raise ApiError(f"Docker Hub returned an invalid tag list for {repository}.", 502)
+            signature = tuple(tag["name"] for tag in raw_tags)
+            if signature in signatures or (not raw_tags and payload.get("next")):
+                raise ApiError(f"Docker Hub pagination did not advance for {repository}.", 502)
+            signatures.add(signature)
+            count = payload.get("count")
+            if name_filter is None and isinstance(count, int) and not isinstance(count, bool) and count >= 0:
+                total_tags = max(total_tags, count)
+            for tag in raw_tags:
+                tags[tag["name"]] = tag
+            if component == "minecraft" and name_filter is None and total_tags > 1000:
+                # Anonymous Hub pagination cannot go past offset 1000. These
+                # exhaustive filters cover every tag accepted by our policy,
+                # including aliases, without requiring registry credentials.
+                queries.extend(["java17", "java21", "java25", "latest", "stable"])
+                break
+            if not payload.get("next"):
+                break
+            page += 1
+    candidates: list[dict[str, Any]] = []
+    for tag, raw_tag in tags.items():
         if not runtime_image_tag_allowed(component, tag):
             continue
-        digest = ""
         images = raw_tag.get("images")
-        if isinstance(images, list):
-            for image in images:
-                if not isinstance(image, dict):
-                    continue
-                if str(image.get("architecture") or "") == "amd64" and str(image.get("os") or "") == "linux":
-                    digest = str(image.get("digest") or "")
-                    break
+        digest = next((str(image.get("digest") or "") for image in images
+                       if isinstance(image, dict) and image.get("architecture") == "amd64" and image.get("os") == "linux"), "") if isinstance(images, list) else ""
         image_ref = runtime_image_digest_ref(repository, digest)
-        if not image_ref:
-            continue
-        candidates.append(
-            {
-                "tag": tag,
-                "imageRef": image_ref,
-                "updatedAt": str(raw_tag.get("last_updated") or ""),
-            }
-        )
+        if image_ref:
+            candidates.append({"tag": tag, "aliases": [tag], "imageRef": image_ref,
+                               "updatedAt": str(raw_tag.get("last_updated") or "")})
     if not candidates:
         raise ApiError(f"Docker Hub did not return a supported image version for {repository}.", 502)
-    candidates.sort(key=lambda candidate: (candidate["updatedAt"], candidate["tag"]), reverse=True)
     return {
-        "label": str(definition["label"]),
-        "repository": repository,
-        "requiresGpu": bool(definition["requiresGpu"]),
-        "candidates": candidates[:24],
+        "label": str(definition["label"]), "repository": repository,
+        "requiresGpu": bool(definition["requiresGpu"]), "candidates": candidates,
+        "complete": True, "totalTags": max(total_tags, len(tags)),
+        "supportedTags": len(candidates), "excludedTags": max(total_tags, len(tags)) - len(candidates),
     }
 
 
-def refresh_runtime_image_catalog() -> dict[str, Any]:
-    load_persisted_runtime_image_catalog()
-    previous = normalize_runtime_image_catalog(RUNTIME_IMAGE_CATALOG_CACHE)
+def refresh_runtime_image_catalog(force: bool = True) -> dict[str, Any]:
+    # Another Cloud Run worker may already have published a newer catalog.
+    load_persisted_runtime_image_catalog(force=True)
+    if not RUNTIME_IMAGE_CATALOG_LOCK.acquire(blocking=False):
+        result = runtime_image_catalog_snapshot()
+        result["refreshing"] = True
+        return result
     try:
-        components = {
-            component: fetch_runtime_image_component_catalog(component)
-            for component in RUNTIME_IMAGE_COMPONENTS
-        }
-        updated_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        catalog = {
-            "components": components,
-            "source": "docker-hub",
-            "updatedAt": updated_at,
-            "lastError": "",
-        }
-        save_persisted_runtime_image_catalog(catalog)
-        RUNTIME_IMAGE_CATALOG_CACHE.update(catalog)
-        RUNTIME_IMAGE_CATALOG_CACHE["loaded"] = True
-        return catalog
-    except Exception as error:
-        message = error.message if isinstance(error, ApiError) else str(error)
-        RUNTIME_IMAGE_CATALOG_CACHE.update(previous)
-        RUNTIME_IMAGE_CATALOG_CACHE["loaded"] = True
-        RUNTIME_IMAGE_CATALOG_CACHE["lastError"] = message
-        return normalize_runtime_image_catalog(RUNTIME_IMAGE_CATALOG_CACHE)
+        previous = runtime_image_catalog_snapshot()
+        if not force and (not previous["stale"] or previous["retryAfterSeconds"] > 0):
+            return previous
+        attempt = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        RUNTIME_IMAGE_CATALOG_CACHE["lastAttemptAt"] = attempt
+        try:
+            deadline = time.monotonic() + RUNTIME_IMAGE_CATALOG_BUDGET_SECONDS
+            components = {component: fetch_runtime_image_component_catalog(component, deadline)
+                          for component in RUNTIME_IMAGE_COMPONENTS}
+            catalog = normalize_runtime_image_catalog({
+                "schemaVersion": RUNTIME_IMAGE_CATALOG_SCHEMA, "components": components,
+                "source": "docker-hub", "updatedAt": attempt, "lastError": "",
+            })
+            if catalog["schemaVersion"] == previous["schemaVersion"] and catalog["components"] == previous["components"]:
+                # lastCheckedAt is intentionally process-local for unchanged data.
+                catalog["updatedAt"] = previous["updatedAt"]
+            else:
+                save_persisted_runtime_image_catalog(catalog)
+            catalog.update(lastCheckedAt=attempt, lastAttemptAt=attempt)
+            RUNTIME_IMAGE_CATALOG_CACHE.update(catalog)
+            RUNTIME_IMAGE_CATALOG_CACHE["loaded"] = True
+        except Exception as error:
+            message = error.message if isinstance(error, ApiError) else str(error)
+            RUNTIME_IMAGE_CATALOG_CACHE.update(previous)
+            RUNTIME_IMAGE_CATALOG_CACHE.update(lastError=message, lastAttemptAt=attempt, loaded=True)
+        return runtime_image_catalog_snapshot()
+    finally:
+        RUNTIME_IMAGE_CATALOG_LOCK.release()
 
 
 def runtime_image_catalog() -> dict[str, Any]:
+    # GET never blocks on Docker Hub. The GUI revalidates stale data in the
+    # background using POST; explicit VM actions still use immutable digests.
     load_persisted_runtime_image_catalog()
-    catalog = normalize_runtime_image_catalog(RUNTIME_IMAGE_CATALOG_CACHE)
-    has_digest = any(
-        candidate.get("imageRef")
-        for component in catalog["components"].values()
-        for candidate in component.get("candidates", [])
-    )
-    if not has_digest:
-        catalog = refresh_runtime_image_catalog()
-    return normalize_runtime_image_catalog(catalog)
-
+    return runtime_image_catalog_snapshot()
 
 def runtime_image_candidate(component: str, raw_image_ref: Any) -> dict[str, str]:
     image_ref = str(raw_image_ref or "").strip()
@@ -1607,8 +1674,10 @@ def build_admin_runtime_images_payload(admin_user: dict[str, Any]) -> dict[str, 
 def execute_admin_runtime_image_action(admin_user: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
     action = str(payload.get("action") or "").strip().lower()
     if action == "refresh-catalog":
-        refresh_runtime_image_catalog()
-        return build_admin_runtime_images_payload(admin_user)
+        catalog = refresh_runtime_image_catalog(force=not bool(payload.get("automatic", False)))
+        result = build_admin_runtime_images_payload(admin_user)
+        result["catalog"] = catalog
+        return result
     if action not in {"pull", "apply", "rollback"}:
         raise ApiError("Unsupported runtime image action.", 400)
 

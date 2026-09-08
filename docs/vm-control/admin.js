@@ -96,6 +96,10 @@
     endpointsPayload: null,
     migrationsPayload: null,
     runtimeImagesPayload: null,
+    runtimeCatalogSnapshot: null,
+    runtimeCatalogRefreshInFlight: false,
+    runtimeCatalogAutoAttemptAt: 0,
+    runtimeTargetSelections: {},
     compatibilityPayload: null,
     sunshineCredentialsPayload: null,
     sunshineEndpointId: "",
@@ -619,19 +623,30 @@
     const currentRef = String(details.currentRef || "");
     const previousRef = String(details.previousRef || "");
     const currentTag = String(details.currentTag || "");
+    const selectionKey = `${endpoint.id}:${componentId}`;
+    const hasSelection = Object.prototype.hasOwnProperty.call(state.runtimeTargetSelections, selectionKey);
+    const storedRef = state.runtimeTargetSelections[selectionKey];
+    const selectionMissing = hasSelection && !candidates.some((candidate) => candidate.imageRef === storedRef);
+    const selectedRef = hasSelection ? storedRef : currentRef;
     const capabilities = endpoint.runtimeImageCapabilities && endpoint.runtimeImageCapabilities[componentId] || {};
-    const canPull = Boolean(capabilities.canPull) && candidates.some((candidate) => candidate.imageRef);
-    const canApply = Boolean(capabilities.canApply) && candidates.some((candidate) => candidate.imageRef);
+    const canPull = Boolean(capabilities.canPull) && !selectionMissing && candidates.some((candidate) => candidate.imageRef);
+    const canApply = Boolean(capabilities.canApply) && !selectionMissing && candidates.some((candidate) => candidate.imageRef);
     const canRollback = Boolean(capabilities.canRollback);
     const options = candidates.map((candidate) => {
       const ref = String(candidate.imageRef || "");
-      const label = `${candidate.tag || "untagged"}${candidate.updatedAt ? ` · ${candidate.updatedAt.slice(0, 10)}` : ""}`;
-      return `<option value="${escapeHtml(ref)}" ${ref && ref === currentRef ? "selected" : ""} ${ref ? "" : "disabled"}>${escapeHtml(label)}</option>`;
+      const aliases = Array.isArray(candidate.aliases) && candidate.aliases.length ? candidate.aliases : [candidate.tag || "untagged"];
+      const label = `${aliases.join(" / ")}${aliases.some((tag) => tag.includes("-dev-")) ? " [development]" : ""}${candidate.updatedAt ? ` · ${candidate.updatedAt.slice(0, 10)}` : ""}`;
+      return `<option value="${escapeHtml(ref)}" ${ref && ref === selectedRef ? "selected" : ""} ${ref ? "" : "disabled"}>${escapeHtml(label)}</option>`;
     }).join("");
     const status = details.detail ? `<br><span>${escapeHtml(details.detail)}</span>` : "";
     const unavailable = capabilities.available === false && capabilities.reason
       ? `<br><span>${escapeHtml(capabilities.reason)}</span>`
       : "";
+    const repository = componentId === "steam-headless" ? "josh5/steam-headless" : "itzg/minecraft-server";
+    const scope = componentId === "steam-headless" ? "Debian-based variants only; Arch images are excluded." : "Java 17, 21 and 25 standard variants only; choose Java compatible with your server.";
+    const inventory = definition.complete
+      ? `${candidates.length} images / ${definition.supportedTags} supported tags; ${definition.excludedTags} tags excluded from ${definition.totalTags} upstream tags.`
+      : "Catalog coverage has not been verified; refresh is required.";
     return `
       <div class="admin-user-row fixed">
         <div>
@@ -640,9 +655,11 @@
           ${previousRef ? `<br><span>Rollback: ${escapeHtml(details.previousTag || previousRef)}</span>` : ""}
           ${status}
           ${unavailable}
+          <br><small>${escapeHtml(inventory)} Linux/amd64. ${escapeHtml(scope)}
+          <a href="https://hub.docker.com/r/${repository}/tags" target="_blank" rel="noopener noreferrer">Upstream tags</a></small>
         </div>
         <label class="access-meta">Target
-          <select data-runtime-image-select="${escapeHtml(componentId)}">${options || '<option value="">Refresh trusted versions first</option>'}</select>
+          <select data-runtime-image-select="${escapeHtml(componentId)}">${selectionMissing ? '<option value="" selected disabled>Previous target is no longer listed; select a version</option>' : ""}${options || '<option value="">Refresh trusted versions first</option>'}</select>
         </label>
         <button class="action start" type="button" data-runtime-action="pull" data-runtime-component="${escapeHtml(componentId)}" data-runtime-disabled="${canPull ? "false" : "true"}">Pull Only</button>
         <button class="action create" type="button" data-runtime-action="apply" data-runtime-component="${escapeHtml(componentId)}" data-runtime-disabled="${canApply ? "false" : "true"}">Apply Update</button>
@@ -657,6 +674,17 @@
       elements.runtimeEndpoint.innerHTML = "";
       elements.runtimeImagesList.innerHTML = "";
       return;
+    }
+    // Polls from an older Cloud Run worker must not undo a fresh catalog.
+    const incoming = payload.catalog || {};
+    const previous = state.runtimeCatalogSnapshot;
+    const stamp = (catalog) => Math.max(...["updatedAt", "lastCheckedAt", "lastAttemptAt"].map((field) => Date.parse(catalog[field] || "") || 0));
+    if (previous && ((previous.schemaVersion || 0) > (incoming.schemaVersion || 0)
+      || (Date.parse(previous.updatedAt) || 0) > (Date.parse(incoming.updatedAt) || 0)
+      || (previous.updatedAt === incoming.updatedAt && stamp(previous) > stamp(incoming)))) {
+      payload.catalog = previous;
+    } else {
+      state.runtimeCatalogSnapshot = incoming;
     }
     const endpoints = vmEndpoints(payload.endpoints);
     const previousSelection = String(elements.runtimeEndpoint.value || "");
@@ -679,6 +707,12 @@
     const catalogInfo = payload.catalog && payload.catalog.updatedAt
       ? `Trusted catalog: ${payload.catalog.source || "cache"} · ${payload.catalog.updatedAt}`
       : `Trusted catalog: ${payload.catalog && payload.catalog.source || "static"}`;
+    const catalog = payload.catalog || {};
+    const refreshing = state.runtimeCatalogRefreshInFlight || catalog.refreshing;
+    const catalogState = refreshing ? "Refreshing catalog in the background..." : catalog.stale ? "Catalog is outdated." : "Catalog is up to date.";
+    const warning = catalog.lastError
+      ? `<div class="admin-user-row fixed" role="status" data-runtime-catalog-warning style="border-left:3px solid #b8751c"><span>${escapeHtml(`Catalog refresh failed: ${catalog.lastError} Previous versions are preserved. Last attempt: ${catalog.lastAttemptAt || "unknown"}.`)}</span></div>`
+      : "";
     const status = endpoint.runtimeImages && endpoint.runtimeImages.status
       ? `<div class="admin-user-row fixed"><span>${escapeHtml(`Last runtime operation: ${endpoint.runtimeImages.status}${endpoint.runtimeImages.detail ? ` · ${endpoint.runtimeImages.detail}` : ""}`)}</span></div>`
       : "";
@@ -687,11 +721,39 @@
       : "";
     elements.runtimeImagesList.innerHTML = `
       <div class="admin-user-row fixed"><span>${escapeHtml(catalogInfo)}</span><span>VM: ${escapeHtml(endpoint.instanceState || "NOT_FOUND")}</span></div>
+      <div class="admin-user-row fixed" data-runtime-catalog-state><span>${escapeHtml(catalogState)} ${escapeHtml(`Last checked: ${catalog.lastCheckedAt || catalog.updatedAt || "never"}. Image tags are not Minecraft game or Sunshine application versions.`)}</span></div>
+      ${warning}
       ${agent}
       ${runtimeComponentRow(endpoint, "steam-headless", components["steam-headless"] || { label: "Steam Headless + Sunshine", candidates: [] })}
       ${runtimeComponentRow(endpoint, "minecraft", components.minecraft || { label: "Minecraft container", candidates: [] })}
       ${status}
     `;
+    elements.refreshRuntimeImages.disabled = state.isBusy || state.runtimeCatalogRefreshInFlight;
+    if (catalog.stale && !refreshing && !(catalog.retryAfterSeconds > 0)
+      && Date.now() - state.runtimeCatalogAutoAttemptAt >= 300_000) {
+      state.runtimeCatalogAutoAttemptAt = Date.now();
+      queueMicrotask(refreshRuntimeCatalogInBackground);
+    }
+  }
+
+  async function refreshRuntimeCatalogInBackground() {
+    if (state.runtimeCatalogRefreshInFlight || !state.token || !state.user) return;
+    state.runtimeCatalogRefreshInFlight = true;
+    renderRuntimeImages();
+    try {
+      state.runtimeImagesPayload = await fetchApi("/api/admin/runtime-images", {
+        method: "POST",
+        body: JSON.stringify({ action: "refresh-catalog", automatic: true, endpointId: elements.runtimeEndpoint.value }),
+      });
+    } catch (error) {
+      if (state.runtimeImagesPayload) {
+        state.runtimeImagesPayload.catalog = { ...state.runtimeImagesPayload.catalog,
+          lastError: error.message, lastAttemptAt: new Date().toISOString(), stale: true, retryAfterSeconds: 300 };
+      }
+    } finally {
+      state.runtimeCatalogRefreshInFlight = false;
+      renderRuntimeImages();
+    }
   }
 
   function renderCompatibility() {
@@ -1087,6 +1149,13 @@
       body: JSON.stringify({ action, endpointId, component, ...(extra || {}) }),
     });
     state.runtimeImagesPayload = payload;
+    if (action === "refresh-catalog" && (payload.catalog?.lastError || payload.catalog?.refreshing)) {
+      setMessage(payload.catalog.lastError
+        ? `Catalog refresh failed: ${payload.catalog.lastError} Previous versions are preserved.`
+        : "Another catalog refresh is in progress. Current versions are preserved.", "warning");
+      renderRuntimeImages();
+      return;
+    }
     const operation = payload.operation || {};
     const label = action === "refresh-catalog"
       ? "Trusted image versions refreshed."
@@ -1690,6 +1759,11 @@
     } finally {
       setBusy(false);
     }
+  });
+
+  elements.runtimeImagesList.addEventListener("change", (event) => {
+    const select = event.target.closest("[data-runtime-image-select]");
+    if (select) state.runtimeTargetSelections[`${elements.runtimeEndpoint.value}:${select.dataset.runtimeImageSelect}`] = select.value;
   });
 
   elements.runtimeImagesList.addEventListener("click", async (event) => {
