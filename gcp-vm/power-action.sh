@@ -861,6 +861,121 @@ sync_steam_env_from_metadata() {
   log "Synced ${ENVF} from instance metadata."
 }
 
+render_chrome_default_browser() {
+  cat <<'VM_CHROME_DEFAULT'
+#!/usr/bin/env bash
+set -euo pipefail
+# Runs as the desktop user, after upstream desktop initialization.
+export XDG_DATA_DIRS="$HOME/.local/share/flatpak/exports/share:/var/lib/flatpak/exports/share:/usr/local/share:/usr/share"
+python3 - <<'PY_BROWSER'
+import configparser
+import os
+from pathlib import Path
+import tempfile
+
+user_home = Path.home()
+data = Path(os.environ.get("XDG_DATA_HOME") or user_home / ".local/share")
+config = Path(os.environ.get("XDG_CONFIG_HOME") or user_home / ".config")
+desktop = "com.google.Chrome.desktop"
+if not (data / "flatpak/exports/share/applications" / desktop).is_file():
+    print("Chrome is not installed; browser preferences unchanged.")
+    raise SystemExit(0)
+
+def write_text(path, text):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=".vm-browser-", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w") as stream:
+            stream.write(text)
+        os.chmod(temporary, 0o644)
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+def update_ini(path, section, settings):
+    value = configparser.ConfigParser(interpolation=None, strict=False)
+    value.optionxform = str
+    if path.exists():
+        value.read(path)
+    if not value.has_section(section):
+        value.add_section(section)
+    for key, content in settings.items():
+        value.set(section, key, content)
+    import io
+    buffer = io.StringIO()
+    value.write(buffer, space_around_delimiters=False)
+    write_text(path, buffer.getvalue())
+
+mimes = ("x-scheme-handler/http", "x-scheme-handler/https", "text/html", "application/xhtml+xml")
+# Desktop-specific entries take precedence over generic mimeapps.list.
+for name in ("mimeapps.list", "xfce-mimeapps.list"):
+    update_ini(config / name, "Default Applications", {mime: desktop for mime in mimes})
+update_ini(config / "xfce4/helpers.rc", "Helpers", {"WebBrowser": "com.google.Chrome"})
+write_text(data / "xfce4/helpers" / desktop, """[Desktop Entry]
+NoDisplay=true
+Version=1.0
+Type=X-XFCE-Helper
+X-XFCE-Category=WebBrowser
+Name=Google Chrome
+Icon=com.google.Chrome
+X-XFCE-Commands=/usr/bin/flatpak run com.google.Chrome//stable --no-first-run --password-store=basic
+X-XFCE-CommandsWithParameter=/usr/bin/flatpak run com.google.Chrome//stable --no-first-run --password-store=basic "%s"
+""")
+print("Chrome configured as the default browser (MIME and XFCE).")
+PY_BROWSER
+VM_CHROME_DEFAULT
+}
+
+prepare_desktop_integration() {
+  local integration_dir="$COMPOSE_DIR/desktop-integration"
+  install -d -m 0755 "$integration_dir"
+  cat > "$integration_dir/99-sunshine-keyboard.conf" <<'KEYBOARD'
+Section "InputClass"
+    Identifier "Sunshine virtual keyboard"
+    MatchProduct "Keyboard passthrough"
+    MatchDevicePath "/dev/input/event*"
+    Driver "evdev"
+    Option "Ignore" "false"
+    Option "CoreKeyboard" "true"
+EndSection
+KEYBOARD
+  render_chrome_default_browser > "$integration_dir/vm-chrome-default"
+  chmod 0755 "$integration_dir/vm-chrome-default"
+  cat > "$integration_dir/vm-chrome-default.desktop" <<'AUTOSTART'
+[Desktop Entry]
+Type=Application
+Name=VM browser preferences
+Exec=/usr/local/bin/vm-chrome-default
+NoDisplay=true
+Terminal=false
+AUTOSTART
+  cat > "$COMPOSE_DIR/docker-compose.desktop-integration.override.yml" <<EOF
+services:
+  steam-headless:
+    volumes:
+      - $integration_dir/99-sunshine-keyboard.conf:/etc/X11/xorg.conf.d/99-sunshine-keyboard.conf:ro
+      - $integration_dir/vm-chrome-default:/usr/local/bin/vm-chrome-default:ro
+      - $integration_dir/vm-chrome-default.desktop:/etc/xdg/autostart/vm-chrome-default.desktop:ro
+EOF
+}
+
+reconcile_desktop_integration() {
+  local container_id
+  # Wait until upstream has finished its Firefox setup and started XFCE.
+  for _ in $(seq 1 150); do
+    container_id="$(docker ps -q --filter name=steam-headless | head -n1)"
+    if [[ -n "$container_id" ]] && docker exec "$container_id" test -f /tmp/.started-desktop; then
+      docker exec "$container_id" test -r /etc/X11/xorg.conf.d/99-sunshine-keyboard.conf || return 1
+      docker exec --user default --env HOME=/home/default "$container_id" /usr/local/bin/vm-chrome-default
+      return $?
+    fi
+    sleep 2
+  done
+  log "Desktop did not become ready for browser preference reconciliation."
+  return 1
+}
+
 docker_compose_files() {
   local files=(-f "$COMPOSE_GCE")
   if [[ -f "$COMPOSE_OVERRIDE" ]]; then
@@ -868,6 +983,9 @@ docker_compose_files() {
   fi
   if [[ -f "$COMPOSE_IMAGE_OVERRIDE" ]]; then
     files+=(-f "$COMPOSE_IMAGE_OVERRIDE")
+  fi
+  if [[ -f "$COMPOSE_DIR/docker-compose.desktop-integration.override.yml" ]]; then
+    files+=(-f "$COMPOSE_DIR/docker-compose.desktop-integration.override.yml")
   fi
   printf '%s\n' "${files[@]}"
 }
@@ -889,6 +1007,7 @@ apply_sunshine_state_credentials() {
 
 recreate_steam_headless_stack() {
   local files=()
+  prepare_desktop_integration || return 1
   mapfile -t files < <(docker_compose_files)
   if [[ ! -f "$COMPOSE_GCE" ]]; then
     log "Compose file ${COMPOSE_GCE} is missing."
@@ -905,7 +1024,7 @@ update_steam_runtime_image() {
   fi
   set_steam_image_ref "$target_ref"
   write_steam_image_override "$target_ref"
-  if recreate_steam_headless_stack && apply_sunshine_state_credentials && wait_for_local_sunshine_ready; then
+  if recreate_steam_headless_stack && apply_sunshine_state_credentials && wait_for_local_sunshine_ready && reconcile_desktop_integration; then
     return 0
   fi
   log "Steam Headless image update failed; restoring previous image."
@@ -914,6 +1033,7 @@ update_steam_runtime_image() {
   recreate_steam_headless_stack || true
   apply_sunshine_state_credentials || true
   wait_for_local_sunshine_ready || true
+  reconcile_desktop_integration || true
   return 1
 }
 
@@ -1172,7 +1292,7 @@ run_application_action() {
   set_power_action_status "$visible_action" "$token" "running"
   set_sunshine_status "starting" "Updating application ${app_id}."
 
-  if ! docker exec -i "$container_id" bash -s -- "$action" "$app_id" <<'PAYLOAD'
+  if ! docker exec -i --env VM_CHROME_DEFAULT_SCRIPT="$(render_chrome_default_browser)" "$container_id" bash -s -- "$action" "$app_id" <<'PAYLOAD'
 set -euo pipefail
 
 action="$1"
@@ -1237,6 +1357,32 @@ install_flatpak_application() {
   return 1
 }
 
+configure_chrome_default_browser() {
+  # Keep the helper and autostart entry on the persistent user home too.
+  sudo -u default env HOME=/home/default VM_CHROME_DEFAULT_SCRIPT="$VM_CHROME_DEFAULT_SCRIPT" bash -s <<'CONFIGURE_BROWSER'
+set -euo pipefail
+mkdir -p "$HOME/.local/bin" "$HOME/.config/autostart"
+printf '%s\n' "$VM_CHROME_DEFAULT_SCRIPT" > "$HOME/.local/bin/vm-chrome-default"
+chmod 0755 "$HOME/.local/bin/vm-chrome-default"
+cat > "$HOME/.config/autostart/vm-chrome-default.desktop" <<'AUTOSTART'
+[Desktop Entry]
+Type=Application
+Name=VM browser preferences
+Exec=/bin/bash /home/default/.local/bin/vm-chrome-default
+NoDisplay=true
+Terminal=false
+AUTOSTART
+"$HOME/.local/bin/vm-chrome-default"
+for mime in x-scheme-handler/http x-scheme-handler/https text/html application/xhtml+xml; do
+  actual="$(XDG_DATA_DIRS="$HOME/.local/share/flatpak/exports/share:/var/lib/flatpak/exports/share:/usr/local/share:/usr/share" xdg-mime query default "$mime")"
+  [[ "$actual" == "com.google.Chrome.desktop" ]] || {
+    echo "Failed to configure Chrome for $mime." >&2
+    exit 1
+  }
+done
+CONFIGURE_BROWSER
+}
+
 install_prism() {
   install -d -m 0755 -o default -g default /home/default /home/default/.local /home/default/.var /home/default/.config
   if ! command -v flatpak >/dev/null 2>&1; then
@@ -1281,6 +1427,7 @@ install_chrome() {
   sudo -u default env HOME=/home/default flatpak --user remote-add --if-not-exists flathub \
     https://flathub.org/repo/flathub.flatpakrepo || true
   install_flatpak_application com.google.Chrome
+  configure_chrome_default_browser
   update_sunshine_apps install "Google Chrome" "/usr/bin/flatpak run com.google.Chrome//stable --no-first-run --password-store=basic"
 }
 
@@ -1490,8 +1637,17 @@ case "${1:-}" in
   auto-stop)
     auto_stop
     ;;
+  prepare-desktop-integration)
+    prepare_desktop_integration
+    ;;
+  reconcile-desktop-integration)
+    reconcile_desktop_integration
+    ;;
+  render-chrome-default-browser)
+    render_chrome_default_browser
+    ;;
   *)
-    echo "Usage: $0 {daemon|reconcile-minecraft|auto-stop}" >&2
+    echo "Usage: $0 {daemon|reconcile-minecraft|auto-stop|prepare-desktop-integration|reconcile-desktop-integration|render-chrome-default-browser}" >&2
     exit 1
     ;;
 esac

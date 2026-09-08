@@ -1041,37 +1041,6 @@ stabilize_vws_input_stack() {
   return 0
 }
 
-install_sunshine_keyboard_input_class() {
-  local container_id
-
-  # Some udev versions classify Sunshine's virtual keyboard as a joystick.
-  # Match the device by its stable product name so Xorg attaches it even when
-  # ID_INPUT_KEYBOARD is missing or incorrect.
-  for _ in $(seq 1 60); do
-    container_id="$(docker compose "${COMPOSE_FILES[@]}" ps -q | head -n 1 || true)"
-    if [[ -n "$container_id" ]] && docker exec --user root "$container_id" test -d /etc/X11/xorg.conf.d; then
-      docker exec --user root "$container_id" bash -lc 'cat > /etc/X11/xorg.conf.d/99-sunshine-keyboard.conf <<'"'"'EOF'"'"'
-Section "InputClass"
-    Identifier "Sunshine virtual keyboard"
-    MatchProduct "Keyboard passthrough"
-    MatchDevicePath "/dev/input/event*"
-    Driver "evdev"
-    Option "CoreKeyboard" "true"
-EndSection
-EOF
-
-if grep -qs "Keyboard passthrough" /sys/class/input/*/device/name; then
-  supervisorctl restart xorg >/dev/null 2>&1 || true
-fi'
-      log "Installed the Sunshine virtual keyboard Xorg input rule."
-      return 0
-    fi
-    sleep 2
-  done
-
-  log "Could not install the Sunshine virtual keyboard Xorg input rule."
-  return 0
-}
 
 ENVF=/opt/container-services/steam-headless/.env
 ENV_METADATA="$(metadata_get_with_retry steam-headless-env 20)"
@@ -1251,9 +1220,10 @@ if ! gpu_enabled; then
   exit 0
 fi
 
+/usr/local/bin/vm-power-action prepare-desktop-integration
+COMPOSE_FILES+=(-f /opt/container-services/steam-headless/docker-compose.desktop-integration.override.yml)
 docker compose "${COMPOSE_FILES[@]}" up -d --force-recreate
 set_steam_status "starting" "Steam container started; waiting for the desktop session."
-install_sunshine_keyboard_input_class
 stabilize_vws_input_stack
 
 for _ in $(seq 1 60); do
@@ -1335,6 +1305,7 @@ if ! ensure_native_steam_ready "$steam_bootstrap_mode"; then
   log "Native Steam bootstrap did not complete; remote access remains available."
 fi
 set_instance_metadata_value vm-steam-bootstrap-mode "start"
+/usr/local/bin/vm-power-action reconcile-desktop-integration
 mark_backup_ready
 log "Backup readiness marker created"
 
