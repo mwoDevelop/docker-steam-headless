@@ -267,6 +267,7 @@
     scrolledInitialHash: "",
     passiveStatusTimer: null,
     passiveStatusRefreshRunning: false,
+    passiveRunningAction: "",
   };
 
   function broadcastActionStatus(type, command) {
@@ -274,6 +275,7 @@
     actionStatusChannel.postMessage({
       type,
       command: String(command || ""),
+      endpointId: selectedEndpointId(),
       targetKey: selectedTargetKey(),
       at: Date.now(),
     });
@@ -299,8 +301,25 @@
       active = Boolean(payload && isTransitionalStatus(payload));
       if (active && !state.activeCommand) {
         const action = String(payload.powerAction && payload.powerAction.action || "VM action");
+        state.passiveRunningAction = action;
         setCommandStatus(statusBannerMessage(`${action} is still running`, payload), "warning");
         renderOperationProgress(action, payload);
+      } else if (!active && !state.activeCommand) {
+        const wasTracking = Boolean(
+          state.passiveRunningAction
+          || state.operationProgressCommand
+          || (elements.commandStatus && (
+            elements.commandStatus.textContent.includes("still running")
+            || elements.commandStatus.textContent.includes("still updating")
+          ))
+        );
+        if (wasTracking) {
+          state.passiveRunningAction = "";
+          clearOperationProgress();
+          if (payload) {
+            setCommandStatus(statusBannerMessage("VM status loaded", payload), statusMessageTone(payload));
+          }
+        }
       }
     } catch (error) {
       console.warn("Passive VM status refresh failed.", error);
@@ -310,12 +329,28 @@
     }
   }
 
+  function handleActionStatusNotification(data) {
+    if (!data) return;
+    const incomingEndpointId = String(data.endpointId || "");
+    const currentEndpointId = selectedEndpointId();
+    if (incomingEndpointId && currentEndpointId && incomingEndpointId !== currentEndpointId) {
+      return;
+    }
+    if (data.targetKey && !incomingEndpointId && data.targetKey !== selectedTargetKey()) {
+      return;
+    }
+    schedulePassiveStatusRefresh(250);
+  }
+
   if (actionStatusChannel) {
     actionStatusChannel.addEventListener("message", (event) => {
-      if (!event.data || event.data.targetKey !== selectedTargetKey()) return;
-      schedulePassiveStatusRefresh(250);
+      handleActionStatusNotification(event.data);
     });
   }
+
+  window.addEventListener("vm-control:action-status", (event) => {
+    handleActionStatusNotification(event.detail);
+  });
 
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") {
@@ -790,6 +825,9 @@
   }
 
   function statusMessageTone(data) {
+    if (!data) return "neutral";
+    const powerActionPhase = String(data.powerAction && data.powerAction.phase || "").trim().toLowerCase();
+    if (powerActionPhase === "failed") return "warning";
     return isTransitionalStatus(data) ? "warning" : "success";
   }
 
@@ -5111,6 +5149,24 @@
       try {
         setBusy(true);
         await connectBackend({ silent: true });
+        if (!state.activeCommand && state.lastStatus) {
+          if (isTransitionalStatus(state.lastStatus)) {
+            const action = String(state.lastStatus.powerAction && state.lastStatus.powerAction.action || "VM action");
+            state.passiveRunningAction = action;
+            setCommandStatus(statusBannerMessage(`${action} is still running`, state.lastStatus), "warning");
+            renderOperationProgress(action, state.lastStatus);
+          } else {
+            state.passiveRunningAction = "";
+            clearOperationProgress();
+            if (elements.commandStatus && (
+              elements.commandStatus.textContent.includes("still running")
+              || elements.commandStatus.textContent.includes("still updating")
+              || elements.commandStatus.textContent === "Command status will appear here."
+            )) {
+              setCommandStatus(statusBannerMessage("VM status loaded", state.lastStatus), statusMessageTone(state.lastStatus));
+            }
+          }
+        }
       } catch (error) {
         handleError(error);
       } finally {
@@ -5121,7 +5177,12 @@
     window.addEventListener("vm-control:session-changed", () => { void syncEmbeddedSession(true); });
     window.addEventListener("vm-control:tab-activated", (event) => {
       if (event.detail && event.detail.tab === "vm-control") {
-        void syncEmbeddedSession(true);
+        const token = window.sessionStorage.getItem(storageKeys.sessionToken) || "";
+        if (!state.user || state.token !== token) {
+          void syncEmbeddedSession(true);
+        } else if (!state.isBusy && !state.isPageLoading) {
+          schedulePassiveStatusRefresh(50);
+        }
       }
     });
   }

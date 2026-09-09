@@ -13,6 +13,23 @@
   const sessionSyncChannel = typeof BroadcastChannel === "function"
     ? new BroadcastChannel("vm-control-session-sync")
     : null;
+  const actionStatusChannel = typeof BroadcastChannel === "function"
+    ? new BroadcastChannel("vm-control-action-status")
+    : null;
+
+  function broadcastActionStatus(type, command, endpointId) {
+    const payload = {
+      type,
+      command: String(command || ""),
+      endpointId: String(endpointId || elements.runtimeEndpoint?.value || elements.softwareEndpoint?.value || ""),
+      at: Date.now(),
+    };
+    if (actionStatusChannel) {
+      actionStatusChannel.postMessage(payload);
+    }
+    window.dispatchEvent(new CustomEvent("vm-control:action-status", { detail: payload }));
+  }
+
   const ADMIN_REFRESH_INTERVAL_MS = 15_000;
 
   const elements = {
@@ -1136,12 +1153,27 @@
   }
 
   async function updateMigration(action, extra) {
-    const payload = await fetchApi("/api/admin/migrations", {
-      method: "POST",
-      body: JSON.stringify({ action, ...(extra || {}) }),
-    });
+    const endpointId = String(state.migrationSourceEndpointId || elements.migrationSourceEndpoint?.value || "");
+    if (typeof broadcastActionStatus === "function") {
+      broadcastActionStatus("started", `migration-${action}`, endpointId);
+    }
+    let payload;
+    try {
+      payload = await fetchApi("/api/admin/migrations", {
+        method: "POST",
+        body: JSON.stringify({ action, ...(extra || {}) }),
+      });
+    } catch (error) {
+      if (typeof broadcastActionStatus === "function") {
+        broadcastActionStatus("failed", `migration-${action}`, endpointId);
+      }
+      throw error;
+    }
     state.migrationsPayload = payload;
     state.endpointsPayload = { user: payload.user, endpoints: payload.endpoints || [] };
+    if (typeof broadcastActionStatus === "function") {
+      broadcastActionStatus("settled", `migration-${action}`, endpointId);
+    }
     setMessage({ prepare: "Migration target prepared.", start: "Prepared migration VM started.", delete: "Prepared migration target deleted." }[action] || "Migration updated.", "success");
     renderMigrations();
     renderEndpoints();
@@ -1149,11 +1181,25 @@
 
   async function updateRuntimeImages(action, component, extra) {
     const endpointId = String(elements.runtimeEndpoint.value || "");
-    const payload = await fetchApi("/api/admin/runtime-images", {
-      method: "POST",
-      body: JSON.stringify({ action, endpointId, component, ...(extra || {}) }),
-    });
+    if (action !== "refresh-catalog" && typeof broadcastActionStatus === "function") {
+      broadcastActionStatus("started", `runtime-${action}`, endpointId);
+    }
+    let payload;
+    try {
+      payload = await fetchApi("/api/admin/runtime-images", {
+        method: "POST",
+        body: JSON.stringify({ action, endpointId, component, ...(extra || {}) }),
+      });
+    } catch (error) {
+      if (action !== "refresh-catalog" && typeof broadcastActionStatus === "function") {
+        broadcastActionStatus("failed", `runtime-${action}`, endpointId);
+      }
+      throw error;
+    }
     state.runtimeImagesPayload = payload;
+    if (action !== "refresh-catalog" && typeof broadcastActionStatus === "function") {
+      broadcastActionStatus("settled", `runtime-${action}`, endpointId);
+    }
     // This response belongs to the explicit refresh just requested, even
     // when server timestamps have lower precision than a prior client error.
     if (action === "refresh-catalog") state.runtimeCatalogSnapshot = payload.catalog;
@@ -1452,19 +1498,33 @@
     const minecraftServerId = command === "install-minecraft"
       ? String(elements.softwareMinecraftNewServer.value || "")
       : String(elements.softwareMinecraftServer.value || "");
-    const payload = await fetchApi("/api/admin/software", {
-      method: "POST",
-      body: JSON.stringify({
-        endpointId,
-        command,
-        applicationId: String(elements.softwareApplication.value || ""),
-        minecraftVersion: String(elements.softwareMinecraftVersion.value || ""),
-        minecraftServerType: String(elements.softwareMinecraftServerType.value || "paper"),
-        minecraftServerId: minecraftServerId.trim().toLowerCase(),
-      }),
-    });
+    if (command !== "refresh-minecraft-versions" && typeof broadcastActionStatus === "function") {
+      broadcastActionStatus("started", command, endpointId);
+    }
+    let payload;
+    try {
+      payload = await fetchApi("/api/admin/software", {
+        method: "POST",
+        body: JSON.stringify({
+          endpointId,
+          command,
+          applicationId: String(elements.softwareApplication.value || ""),
+          minecraftVersion: String(elements.softwareMinecraftVersion.value || ""),
+          minecraftServerType: String(elements.softwareMinecraftServerType.value || "paper"),
+          minecraftServerId: minecraftServerId.trim().toLowerCase(),
+        }),
+      });
+    } catch (error) {
+      if (command !== "refresh-minecraft-versions" && typeof broadcastActionStatus === "function") {
+        broadcastActionStatus("failed", command, endpointId);
+      }
+      throw error;
+    }
     state.softwarePayload = payload;
     state.softwareEndpointId = endpointId;
+    if (command !== "refresh-minecraft-versions" && typeof broadcastActionStatus === "function") {
+      broadcastActionStatus("settled", command, endpointId);
+    }
     if (command === "install-minecraft") {
       elements.softwareMinecraftNewServer.value = "";
       state.softwareMinecraftSelection = minecraftServerId.trim().toLowerCase();
