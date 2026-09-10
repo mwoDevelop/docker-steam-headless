@@ -95,3 +95,13 @@ minimum 0.7772976756095886, powyzej wymaganego 0.10. Review tylko do odczytu.
 - Przegladarka CDP dostepna; logowanie Google wymagalo potwierdzenia przez
   uzytkownika i zostalo zakonczone. Windows Moonlight jest zainstalowany;
   jego faktyczne polaczenie pozostaje do sprawdzenia.
+
+## Wyniki realizacji (2026-09-10)
+
+Poprawki zostaly wdrozone i przetestowane lokalnie oraz przez przegladarke.
+Rzeczywisty start/stop CPU i synchronizacja kart: PASS. Testy aktualizacji
+Sunshine oraz Moonlight wymagajace GPU pozostaja do wykonania z powodu braku
+zasobow L4 w strefie istniejacej VM. Obie VM po testach sa TERMINATED.
+
+Szczegoly i granice potwierdzonego zakresu:
+[Wyniki E2E z 2026-09-10](action-status-sync-e2e-results-20260910.md).
