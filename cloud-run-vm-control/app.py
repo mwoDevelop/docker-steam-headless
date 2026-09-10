@@ -7418,6 +7418,17 @@ def build_sunshine_status(instance: dict[str, Any] | None) -> dict[str, str]:
             "version": version,
         }
 
+    # VM lifecycle metadata describes the whole machine, not availability of
+    # this service. CPU-only machines never start Sunshine, including during
+    # startup, backup, restart and runtime operations.
+    if is_gpu_disabled_for_instance(instance):
+        return {
+            "state": "disabled",
+            "label": "Disabled",
+            "detail": "GPU disabled for this VM; Sunshine stack was not started.",
+            "version": version,
+        }
+
     state = metadata_value(instance, SUNSHINE_STATUS_METADATA_KEY).strip().lower() or "starting"
     detail = metadata_value(instance, SUNSHINE_STATUS_DETAIL_METADATA_KEY).strip()
     phase, power_action, _ = parse_power_action_status(
@@ -7494,25 +7505,6 @@ def build_sunshine_status(instance: dict[str, Any] | None) -> dict[str, str]:
             "state": "error",
             "label": "Incompatible GPU",
             "detail": f"{gpu_type} is confirmed incompatible with the Steam Headless and Sunshine streaming stack.",
-            "version": version,
-        }
-    if is_gpu_disabled_for_instance(instance):
-        if state != "disabled":
-            gpu_disabled_pending_labels = {
-                "starting": "Starting",
-                "stopping": "Stopping",
-                "error": "Error",
-            }
-            return {
-                "state": state or "starting",
-                "label": gpu_disabled_pending_labels.get(state, state.title() if state else "Starting"),
-                "detail": detail or "VM startup in progress.",
-                "version": version,
-            }
-        return {
-            "state": "disabled",
-            "label": "Disabled",
-            "detail": "GPU disabled for this VM; Sunshine stack was not started.",
             "version": version,
         }
     if is_sunshine_started(instance, state, detail):
