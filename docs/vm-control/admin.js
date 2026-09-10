@@ -21,7 +21,8 @@
     const payload = {
       type,
       command: String(command || ""),
-      endpointId: String(endpointId || elements.runtimeEndpoint?.value || elements.softwareEndpoint?.value || ""),
+      // Empty means all affected views; never borrow another panel's selection.
+      endpointId: String(endpointId || ""),
       at: Date.now(),
     };
     if (actionStatusChannel) {
@@ -31,6 +32,21 @@
   }
 
   const ADMIN_REFRESH_INTERVAL_MS = 15_000;
+  let actionRefreshTimer = null;
+
+  function handleAdminActionStatusNotification(data) {
+    if (!data || !["started", "settled", "failed"].includes(data.type)) return;
+    if (actionRefreshTimer) window.clearTimeout(actionRefreshTimer);
+    actionRefreshTimer = window.setTimeout(() => {
+      actionRefreshTimer = null;
+      void refreshAdminDataInBackground();
+    }, 250);
+  }
+
+  if (actionStatusChannel) {
+    actionStatusChannel.addEventListener("message", (event) => handleAdminActionStatusNotification(event.data));
+  }
+  window.addEventListener("vm-control:action-status", (event) => handleAdminActionStatusNotification(event.detail));
 
   const elements = {
     backendUrl: document.querySelector("#backend-url"),
@@ -1142,18 +1158,27 @@
   }
 
   async function updateEndpoint(action, endpointId, extra) {
-    const payload = await fetchApi("/api/admin/endpoints", {
+    broadcastActionStatus("started", `endpoint-${action}`, endpointId);
+    let payload;
+    try {
+      payload = await fetchApi("/api/admin/endpoints", {
       method: "POST",
       body: JSON.stringify({ action, endpointId, ...(extra || {}) }),
-    });
+      });
+    } catch (error) {
+      broadcastActionStatus("failed", `endpoint-${action}`, endpointId);
+      throw error;
+    }
     state.endpointsPayload = payload;
+    broadcastActionStatus("settled", `endpoint-${action}`, endpointId);
     const actionLabel = action === "add" ? "Added" : action === "remove" ? "Removed" : action === "reserve-ip" ? "Reserved IP for" : "Released IP for";
     setMessage(`${actionLabel} ${endpointId}.`, "success");
     renderEndpoints();
   }
 
   async function updateMigration(action, extra) {
-    const endpointId = String(state.migrationSourceEndpointId || elements.migrationSourceEndpoint?.value || "");
+    // Move/copy can affect both source and target: each view reloads its own state.
+    const endpointId = "";
     if (typeof broadcastActionStatus === "function") {
       broadcastActionStatus("started", `migration-${action}`, endpointId);
     }
@@ -1253,11 +1278,19 @@
 
   async function updateSunshinePassword(password) {
     const endpointId = String(state.sunshineEndpointId || elements.sunshineEndpoint.value || "");
-    const payload = await fetchApi("/api/admin/sunshine-credentials", {
+    broadcastActionStatus("started", "update-sunshine-password", endpointId);
+    let payload;
+    try {
+      payload = await fetchApi("/api/admin/sunshine-credentials", {
       method: "POST",
       body: JSON.stringify({ endpointId, sunshinePassword: password }),
-    });
+      });
+    } catch (error) {
+      broadcastActionStatus("failed", "update-sunshine-password", endpointId);
+      throw error;
+    }
     state.sunshineCredentialsPayload = payload;
+    broadcastActionStatus("settled", "update-sunshine-password", endpointId);
     state.sunshinePasswordVisible = false;
     renderSunshineCredentials();
     setMessage(`Sunshine password updated for ${endpointId}.`, "success");

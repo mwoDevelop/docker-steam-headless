@@ -268,17 +268,19 @@
     passiveStatusTimer: null,
     passiveStatusRefreshRunning: false,
     passiveRunningAction: "",
+    passiveRefreshUntil: 0,
   };
 
   function broadcastActionStatus(type, command) {
-    if (!actionStatusChannel) return;
-    actionStatusChannel.postMessage({
+    const payload = {
       type,
       command: String(command || ""),
       endpointId: selectedEndpointId(),
       targetKey: selectedTargetKey(),
       at: Date.now(),
-    });
+    };
+    if (actionStatusChannel) actionStatusChannel.postMessage(payload);
+    window.dispatchEvent(new CustomEvent("vm-control:action-status", { detail: payload }));
   }
 
   function schedulePassiveStatusRefresh(delayMs) {
@@ -291,13 +293,18 @@
   async function runPassiveStatusRefresh() {
     state.passiveStatusTimer = null;
     if (!state.user || state.isBusy || state.isPageLoading || document.visibilityState !== "visible" || state.passiveStatusRefreshRunning) {
-      schedulePassiveStatusRefresh(PASSIVE_STATUS_IDLE_INTERVAL_MS);
+      schedulePassiveStatusRefresh(state.user && document.visibilityState === "visible" && Date.now() < state.passiveRefreshUntil
+        ? PASSIVE_STATUS_ACTIVE_INTERVAL_MS : PASSIVE_STATUS_IDLE_INTERVAL_MS);
       return;
     }
     state.passiveStatusRefreshRunning = true;
-    let active = false;
+    const endpointId = selectedEndpointId();
+    const targetKey = selectedTargetKey();
+    let active = Boolean(state.passiveRunningAction);
     try {
       const payload = await refreshStatus({ silent: true, forceRender: true, refreshInstances: false });
+      // A skipped read or a response for a previous selection is not completion.
+      if (!payload || endpointId !== selectedEndpointId() || targetKey !== selectedTargetKey()) return;
       active = Boolean(payload && isTransitionalStatus(payload));
       if (active && !state.activeCommand) {
         const action = String(payload.powerAction && payload.powerAction.action || "VM action");
@@ -325,7 +332,8 @@
       console.warn("Passive VM status refresh failed.", error);
     } finally {
       state.passiveStatusRefreshRunning = false;
-      schedulePassiveStatusRefresh(active ? PASSIVE_STATUS_ACTIVE_INTERVAL_MS : PASSIVE_STATUS_IDLE_INTERVAL_MS);
+      schedulePassiveStatusRefresh(active || Date.now() < state.passiveRefreshUntil
+        ? PASSIVE_STATUS_ACTIVE_INTERVAL_MS : PASSIVE_STATUS_IDLE_INTERVAL_MS);
     }
   }
 
@@ -339,6 +347,8 @@
     if (data.targetKey && !incomingEndpointId && data.targetKey !== selectedTargetKey()) {
       return;
     }
+    // Events are hints, never state. GCE may still report the previous phase.
+    state.passiveRefreshUntil = Date.now() + 15_000;
     schedulePassiveStatusRefresh(250);
   }
 
@@ -5321,6 +5331,10 @@
     elements.endpointSelect.addEventListener("change", async () => {
       const loadingToken = setPageLoading("Loading selected public endpoint...");
       state.selectedEndpointId = String(elements.endpointSelect.value || "").trim();
+      state.passiveRunningAction = "";
+      state.passiveRefreshUntil = 0;
+      clearOperationProgress();
+      setCommandStatus("Loading selected VM status...", "neutral");
       state.endpointSelectionLocked = true;
       resetGpuAvailabilityScan();
       resetGpuCapacityProbeButton();
@@ -5331,7 +5345,7 @@
         renderTargetSummary();
         if (state.user) {
           await refreshPriceEstimate({ silent: false });
-          await refreshStatus({ silent: true });
+          await refreshStatus({ silent: false });
           await refreshInstances({ silent: true });
         }
       } catch (error) {

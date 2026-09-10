@@ -84,6 +84,8 @@ const helperCode = `
 const refreshSnippet = cut(appSource, '  async function runPassiveStatusRefresh() {', '  function handleActionStatusNotification(');
 const testContext = vm.createContext({
   document: { visibilityState: 'visible' },
+  selectedEndpointId: () => 'mwo-vm2',
+  selectedTargetKey: () => 'mwo-vm2/l4/europe-west3-a',
   schedulePassiveStatusRefresh: () => {},
   console: { warn: () => {} },
   PASSIVE_STATUS_IDLE_INTERVAL_MS: 10000,
